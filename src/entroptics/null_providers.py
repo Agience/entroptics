@@ -1,22 +1,22 @@
 """
-null_providers.py -- the NOISE FLOOR as a caller-suppliable, LOCAL null provider.
+null_providers.py -- the noise floor as a caller-suppliable, local null provider.
 
-A *null provider* is a callback ``FloorContext -> float``: given ONE screen it returns
+A *null provider* is a callback ``FloorContext -> float``: given one screen it returns
 that screen's noise floor (a scalar in the units of its spectrum).  It is evaluated
-LOCALLY, on EVERY screen -- so under a per-plane / per-window / streaming read it is
-recomputed on each local screen, never once globally (a single global floor self-
-contaminates: a loud region inflates the estimate and buries a quiet-region signal).
+locally, on every screen -- so under a per-plane / per-window / streaming read it is
+recomputed on each local screen, never once globally, because a single global floor
+self-contaminates: a loud region inflates the estimate and buries a quiet-region signal.
 
-Noise is a SUBSTRATE- and REGION-specific variable; no library can enumerate every
-profile.  So EVERY noise-vs-signal cutoff the library makes -- ``K_signal`` (screen),
+Noise is a substrate- and region-specific variable; no library can enumerate every
+profile.  So every noise-vs-signal cutoff the library makes -- ``K_signal`` (projection),
 ``resolved_modes`` (correlation), and the resolved dimension of every downstream read --
 routes through the provider: the caller is involved in every cutoff, by construction.
 
-The false-alarm level (alpha, ``far``) travels WITH the null, not beside it: the cutoff is
-ONE decision, so the provider owns both the threshold and the alpha it is drawn at
+The false-alarm level (alpha, ``far``) travels with the null, not beside it: the cutoff is
+one decision, so the provider owns both the threshold and the alpha it is drawn at
 (``ctx.far`` is the read's target; a provider may honour it or pin its own).  Because a
 provider is stateful and updated per frame in the dynamical, with the whole local/global
-optics history at hand, it can SHARPEN alpha as a run progresses -- toward 99.999% and
+optics history at hand, it can sharpen alpha as a run progresses -- toward 99.999% and
 beyond -- and adapt, even predictively, to a drifting noise level in any local or global
 region.  The derived edge serves an arbitrary, arbitrarily-sharp alpha (the TW1 quantile is
 inverted from the survival function, no table); a sampled provider sharpens alpha
@@ -24,48 +24,48 @@ empirically as its long-term surrogate sample grows.
 
 So the read parameter is not a strategy name; it is a provider callback, and the library only
 
-  1. ships a LIMITED set of DERIVED (closed-form) default providers here -- ``mp`` (default)
+  1. ships a limited set of derived (closed-form) default providers here -- ``mp`` (default)
      and ``robust`` -- each a pure function of the local screen, nothing fitted; and
   2. offers the plumbing to build a sampled null (``top_spectrum_value``,
      ``shuffle_in_time``, ``floor_from_null_sampler``).
 
-The library does NOT calibrate the caller's null for them.  A confined-vacuum reference,
+The library does not calibrate the caller's null for them.  A confined-vacuum reference,
 a phase-randomised surrogate, a physics null -- the caller writes it with the plumbing
 (or from scratch) and passes it in; the library never needs to know what the null is.
 
-The library ships FOUR null methods; ``mp`` is the DEFAULT (self-contained, no knob), and the
+The library ships four null methods; ``mp`` is the default (self-contained, no knob), and the
 caller plugs any method -- or its own callback -- via ``null=``:
 
-  (1) ANALYTIC EDGE -- i.i.d. noise, no reference (the DEFAULT):
+  (1) analytic edge -- i.i.d. noise, no reference (the default):
       mp                                 finite-size Johnstone / Tracy-Widom edge; the noise
-                                         LEVEL is estimated from the data, so nothing is supplied.
-  (2) ROBUST FENCE -- heavy-tailed spectrum, no reference:
+                                         level is estimated from the data, so nothing is supplied.
+  (2) robust fence -- heavy-tailed spectrum, no reference:
       robust                             Tukey upper fence ``Q3 + 1.5*(Q3 - Q1)`` of the spectrum
                                          (a heuristic outlier fence, not a calibrated null).
-  (3) EMPIRICAL REFERENCE -- calibrate on a SIGNAL-FREE window (closed-form Gaussian):
+  (3) empirical reference -- calibrate on a signal-free window (closed-form Gaussian):
       reference_null(top_values)         O(1) floor ``center + z(far)*scale`` from a quiet
-                                         window; sharpens ANALYTICALLY to any far (no draws).
+                                         window; sharpens analytically to any far (no draws).
       ReferenceNull(..., forgetting=)    the stateful (Welford) form; ``forgetting<1`` fades old
                                          samples (~1/(1-forgetting) effective) to track drift.
-      self_calibrating_null(noise, ...)  a ``reference_null`` calibrated LOCALLY on a region's
-                                         OWN off-pulse noise -- self-contained, region-dynamic.
-  (4) SAMPLED / DISTRIBUTION-FREE -- no model, resample the data:
+      self_calibrating_null(noise, ...)  a ``reference_null`` calibrated locally on a region's
+                                         own off-pulse noise -- self-contained, region-dynamic.
+  (4) sampled / distribution-free -- no model, resample the data:
       permutation()                      the (1-far) quantile of a per-channel time-shuffle
                                          surrogate -- the correct floor for non-Gaussian data.
-      floor_from_null_sampler(surrogate) turn ANY surrogate into a provider (block bootstrap,
+      floor_from_null_sampler(surrogate) turn any surrogate into a provider (block bootstrap,
                                          phase randomisation, a physics null, ...).
       shuffle_in_time, top_spectrum_value   the example surrogate + the scoring building block.
 
-A DIFFERENT provider per cut point.  Each cut point (``KINDS``: ``"screen"`` = K_signal,
+A different provider per cut point.  Each cut point (``KINDS``: ``"projection"`` = K_signal,
 ``"spectral"`` = single-screen resolved_modes, ``"bulk"`` = the pooled SpectralAccumulator)
-is a separate decision and can take its OWN provider: pass ``null=by_kind(screen=P,
+is a separate decision and can take its own provider: pass ``null=by_kind(projection=P,
 spectral=Q, bulk=R)`` (or the same ``{kind: provider}`` dict) to any read or to
 ``Aperture(null=...)``, where it routes the screen and spectral floors apart; an unset cut
 point falls back to the default.
 
-A provider may be a plain function OR a STATEFUL object with ``__call__(ctx) -> float``
+A provider may be a plain function or a stateful object with ``__call__(ctx) -> float``
 and an optional ``update(frame)``: the streaming aperture calls ``update`` per frame, so
-a provider can maintain an ONLINE local null that tracks a non-stationary stream -- it
+a provider can maintain an online local null that tracks a non-stationary stream -- it
 runs in the dynamical, alongside the DMD operator.
 
 Numpy-only; backend-agnostic where marked; a resampling provider is deterministic per the
@@ -82,29 +82,29 @@ import numpy as np
 
 from . import environment as _env
 
-# The distinct CUT POINTS a provider can be keyed to (``ctx.kind``).  Each is a separate
-# noise-vs-signal decision, so each can take its OWN provider (see ``by_kind`` / a mapping):
-#   "screen"   -- the screen singular-value floor (K_signal)          [screen.noise_floor]
-#   "spectral" -- the single-screen correlation-eigenvalue floor       [reads.spectral_optics]
-#   "bulk"     -- the pooled ENSEMBLE correlation floor                 [reads.SpectralAccumulator]
-# Extensible: a new cut point adds a new kind here and a new key.
-KINDS = ("screen", "spectral", "bulk")
+# The distinct cut points a provider can be keyed to (``ctx.kind``).  Each is a separate
+# noise-vs-signal decision, so each can take its own provider (see ``by_kind`` / a mapping):
+#   "projection" -- the screen singular-value floor (K_signal)        [projection.noise_floor]
+#   "spectral"   -- the single-screen correlation-eigenvalue floor     [reads.spectral_optics]
+#   "bulk"       -- the pooled ensemble correlation floor              [reads.SpectralAccumulator]
+# A new cut point adds a new kind here and a new key.
+KINDS = ("projection", "spectral", "bulk")
 
 
 # ══════════════════════════════════════════════════════════════════════════════
 # Tracy-Widom_1 (GOE / real matrices): universal edge quantiles + survival function
 # ══════════════════════════════════════════════════════════════════════════════
 
-# TW1 UPPER quantiles: P(TW1 <= q) = 1 - far.  UNIVERSAL constants of the TW1
+# TW1 upper quantiles: P(TW1 <= q) = 1 - far.  Universal constants of the TW1
 # distribution (Bejan 2005; Chiani 2014), fixed once for a target false-alarm rate.
-# This is the ONLY number in the "mp" provider, and it is DERIVED, not calibrated.
+# This is the only number in the "mp" provider, and it is derived, not calibrated.
 _TW1_UPPER_Q: dict[float, float] = {0.10: 0.4501, 0.05: 0.9793, 0.025: 1.3675, 0.01: 2.0234}
 
 
 def tw1_quantile(far: float) -> float:
     """The TW1 upper quantile ``q`` with ``P(TW1 <= q) = 1 - far``.  Exact tabulated values
-    for the standard levels; for ANY OTHER ``far`` it is obtained by inverting the Chiani
-    survival function ``tw1_sf`` -- so a caller SHARPENING ``far`` toward 1e-5 and beyond
+    for the standard levels; for any other ``far`` it is obtained by inverting the Chiani
+    survival function ``tw1_sf`` -- so a caller sharpening ``far`` toward 1e-5 and beyond
     (a 99.999% threshold) still gets a derived edge, no table lookup required."""
     if far in _TW1_UPPER_Q:
         return _TW1_UPPER_Q[far]
@@ -113,7 +113,7 @@ def tw1_quantile(far: float) -> float:
     return _tw1_quantile_invert(far)
 
 
-# TW1 SURVIVAL FUNCTION via Chiani (2014)'s Gamma approximation, moment-matched to
+# TW1 survival function via Chiani (2014)'s Gamma approximation, moment-matched to
 # TW1's mean/variance/skewness (max CDF error ~7e-3).  The TW1 CDF has no closed form;
 # this lets the per-mode significance read report p_k = P(TW1 > g_k) with no scipy
 # dependency and deterministically.  Reports evidence, never sets a floor.
@@ -169,7 +169,7 @@ def tw1_sf(g: float) -> float:
 
 def _tw1_quantile_invert(far: float) -> float:
     """Invert the (monotone-decreasing) survival function: the ``q`` with ``tw1_sf(q) = far``,
-    by bisection.  Lets the derived edge serve an ARBITRARY, arbitrarily-sharp ``far``."""
+    by bisection.  Lets the derived edge serve an arbitrary, arbitrarily-sharp ``far``."""
     lo, hi = -10.0, 60.0
     for _ in range(200):
         mid = 0.5 * (lo + hi)
@@ -187,27 +187,51 @@ def _tw1_quantile_invert(far: float) -> float:
 def johnstone(N: int, F: int) -> tuple[float, float]:
     """Johnstone (2001) centering ``mu`` and scaling ``sigma`` for the largest
     eigenvalue (top singular value squared) of an N x F Gaussian matrix, so that
-    ``(lambda_max - mu)/sigma -> Tracy-Widom_1``.  The DERIVED finite-size edge (no fitted
+    ``(lambda_max - mu)/sigma -> Tracy-Widom_1``.  The derived finite-size edge (no fitted
     coefficient).  Called with (N, F) for the screen, (T, N) for the correlation floor."""
     nn = math.sqrt(max(N - 1, 1)); ff = math.sqrt(max(F, 1))
     a = nn + ff
     return a * a, a * (1.0 / nn + 1.0 / ff) ** (1.0 / 3.0)
 
 
-def noise_sigma2(xp, screen, N: int, F: int) -> float:
-    """The de-biased robust per-cell noise variance the ``mp`` / ``bulk`` providers build
-    on: the median row energy over F, the chi^2 median ``c_F``, and the centring dof
-    ``(N-1)/N``.  Shared with the per-mode significance so they agree.  De-biases the two
-    finite-size biases the Johnstone edge would otherwise amplify:
+def debias_denominator(N: int, F: float) -> float:
+    """The de-biasing denominator ``F * c_F * dof`` that turns a median row energy into the
+    per-cell noise variance ``sigma^2``.  Split out so every screen-floor call site (per-frame
+    ``noise_sigma2`` / ``mp``, the numpy batch ``projection._mp_floor_batch``, and the batched
+    resolved read) shares one definition and cannot drift:
 
-      c_F        -- the sample median of ||row||^2 estimates the DISTRIBUTION median of a
+      c_F        -- the sample median of ||row||^2 estimates the distribution median of a
                     chi^2_F (= F*c_F), not the mean F (Wilson-Hilferty, a small-F bias);
       (N-1)/N    -- the per-channel median centring deflates the row energy; the mean-
                     centring dof is applied as a conservative correction (slightly over-
-                    corrects at small N, raising the floor in the safe direction)."""
-    c_F = (1.0 - 2.0 / (9.0 * max(F, 1))) ** 3
-    dof = max(N - 1, 1) / N
-    return float(_env.median1d(xp, _env.sum_ax(xp, xp.abs(screen) ** 2, 1))) / (F * c_F * dof) + 1e-30
+                    corrects at small N, raising the floor in the safe direction).
+
+    ``F`` is real-valued, not integer: ``proximity`` reads an EFFECTIVE width whose whole claim
+    is that it has no discrete steps, and truncating it here would put one back.  Bit-identical
+    to the integer form at every integer width, so no caller moves."""
+    Ff = float(F)
+    c_F = (1.0 - 2.0 / (9.0 * max(Ff, 1e-30))) ** 3
+    dof = max(int(N) - 1, 1) / int(N)
+    return Ff * c_F * dof
+
+
+def screen_floor_sq(sigma2, N: int, F: int, far: float):
+    """The screen noise floor squared (in variance / eigenvalue units): ``sigma^2 * (mu +
+    q*sigma_J)`` with the finite-size Johnstone centring/scaling and the TW1 quantile at ``far``.
+    ``sigma2`` may be a scalar (one screen) or an array (per-frame over a batch); the return has
+    its shape.  Take ``sqrt`` for the singular-value floor.  One definition shared by the
+    per-frame ``mp`` provider, the numpy batch floor, and the batched resolved read."""
+    mu, sig_J = johnstone(int(N), int(F))
+    q = tw1_quantile(far)
+    return sigma2 * (mu + q * sig_J)
+
+
+def noise_sigma2(xp, screen, N: int, F: int) -> float:
+    """The de-biased robust per-cell noise variance the ``mp`` / ``bulk`` providers build
+    on: the median row energy over F divided by :func:`debias_denominator` (the chi^2 median
+    ``c_F`` and the centring dof ``(N-1)/N``).  Shared with the per-mode significance so they
+    agree."""
+    return float(_env.median1d(xp, _env.sum_ax(xp, xp.abs(screen) ** 2, 1))) / debias_denominator(N, F) + 1e-30
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -216,17 +240,17 @@ def noise_sigma2(xp, screen, N: int, F: int) -> float:
 
 @dataclass(frozen=True)
 class FloorContext:
-    """Everything a null provider may need for ONE screen, so a provider is a pure
+    """Everything a null provider may need for one screen, so a provider is a pure
     ``FloorContext -> float`` returning a scalar in the units of ``spectrum``.
 
-    ``kind`` is the CUT POINT (see ``KINDS``); it fixes the units and how a surrogate is
+    ``kind`` is the cut point (see ``KINDS``); it fixes the units and how a surrogate is
     scored, and it is the key a per-cut-point mapping / ``by_kind`` dispatches on:
-      "screen"   -- ``spectrum`` are singular values; ``data`` is the (N, F) screen; a
-                    surrogate is scored by its top SINGULAR value.
-      "spectral" -- ``spectrum`` are eigenvalues of a unit-diagonal correlation matrix;
+      "projection" -- ``spectrum`` are singular values; ``data`` is the (N, F) screen; a
+                    surrogate is scored by its top singular value.
+      "spectral"   -- ``spectrum`` are eigenvalues of a unit-diagonal correlation matrix;
                     ``data`` is the (T, N) centred samples; a surrogate is scored by the top
                     eigenvalue of its correlation matrix (one screen).
-      "bulk"     -- as "spectral" but the pooled ENSEMBLE floor (``SpectralAccumulator``):
+      "bulk"       -- as "spectral" but the pooled ensemble floor (``SpectralAccumulator``):
                     same correlation units, a separate key so it takes its own provider.
     ``data`` may be ``None`` when only a pooled covariance is available (``bulk`` via a
     ``SpectralAccumulator``): then only the closed-form providers (``mp`` / ``robust`` /
@@ -234,14 +258,14 @@ class FloorContext:
     spectrum: np.ndarray | None            # descending singular values (screen) or corr eigenvalues
     data:     np.ndarray | None            # the matrix behind the spectrum, or None (covariance-only)
     shape:    tuple                        # (N, F) screen; (T, N) correlation ("spectral"/"bulk")
-    far:      float                        # false-alarm level -- the provider OWNS the cutoff (below)
-    kind:     str                          # one of KINDS: "screen" | "spectral" | "bulk"
+    far:      float                        # false-alarm level -- the provider owns the cutoff (below)
+    kind:     str                          # one of KINDS: "projection" | "spectral" | "bulk"
     rng:      "np.random.Generator"        # seeded generator for any resampling (determinism)
 
-    # ``far`` is the false-alarm level (alpha) delivered WITH the null, because the
+    # ``far`` is the false-alarm level (alpha) delivered with the null, because the
     # noise-vs-signal cutoff is one decision, not two: the provider owns it.  ``ctx.far``
     # is the read's target; a provider may honour it, pin its own, or -- being stateful and
-    # updated per frame in the dynamical -- SHARPEN it as its long-term local/global sample
+    # updated per frame in the dynamical -- sharpen it as its long-term local/global sample
     # grows (toward 99.999%+), even predictively as the noise level drifts.
 
 
@@ -250,19 +274,18 @@ class FloorContext:
 
 
 # ══════════════════════════════════════════════════════════════════════════════
-# The DERIVED default providers (closed-form; pure functions of the local screen)
+# The derived default providers (closed-form; pure functions of the local screen)
 # ══════════════════════════════════════════════════════════════════════════════
 
 def mp(ctx: FloorContext) -> float:
-    """DEFAULT provider: the finite-size Johnstone / Tracy-Widom edge.  Screen:
+    """The default provider: the finite-size Johnstone / Tracy-Widom edge.  Projection:
     ``sqrt(sigma^2 * (mu + q*sigma_J))`` with the de-biased per-cell variance.  Correlation
     floor: ``(mu + q*sigma_J)/T`` in correlation units.  Parameter-free; only ``far``."""
     q = tw1_quantile(ctx.far)
-    if ctx.kind == "screen":
+    if ctx.kind == "projection":
         N, F = int(ctx.shape[0]), int(ctx.shape[1])
         xp = _env.ns(ctx.data)
-        mu, sig_J = johnstone(N, F)
-        return math.sqrt(noise_sigma2(xp, ctx.data, N, F) * (mu + q * sig_J))
+        return math.sqrt(screen_floor_sq(noise_sigma2(xp, ctx.data, N, F), N, F, ctx.far))
     T, N = int(ctx.shape[0]), int(ctx.shape[1])
     mu, sig_J = johnstone(T, N)
     return (mu + q * sig_J) / T
@@ -286,44 +309,76 @@ DEFAULT: Callable[[FloorContext], float] = mp   # the library's derived default 
 # ══════════════════════════════════════════════════════════════════════════════
 
 def top_spectrum_value(X: np.ndarray, kind: str) -> float:
-    """Score a surrogate ``X`` in the SAME units the floor thresholds: the top singular
-    value (``kind="screen"``) or the top unit-diagonal correlation eigenvalue (any other
+    """Score a surrogate ``X`` in the same units the floor thresholds: the top singular
+    value (``kind="projection"``) or the top unit-diagonal correlation eigenvalue (any other
     kind -- ``"spectral"`` / ``"bulk"``).  The building block for a sampled null provider.
-    Numpy (the occasional calibrated read)."""
+    Numpy (the occasional calibrated read).
+
+    The correlation branch is read off the column-scaled frame, not an ``FxF`` matrix.  Scaling
+    column ``j`` by ``1/d_j`` gives ``Y`` with ``Y^H Y == R`` exactly, so ``R``'s top eigenvalue is
+    ``sigma_max(Y)**2`` -- and ``sigma_max`` comes off the ``TxF`` frame directly, without ever
+    forming the ``FxF`` covariance to eigendecompose for one eigenvalue.  Agrees with the direct
+    eigendecomposition to round-off (not a different quantity), and needs no shape assumption --
+    checked at ``T<F`` and ``T>F`` (64x256, 300x256, 64x16, 400x64) -- because it never forms the
+    Gram either way.
+
+    This stays pure numpy: ``scipy.linalg.eigh(subset_by_index=...)`` also returns just the top
+    eigenvalue, bit-identically, but scipy is an optional extra here (``pyproject``: core is
+    ``numpy>=2.0`` alone), and this is a hot path -- a core read should not take on an optional
+    dependency for it.
+    """
     X = np.asarray(X)
-    if kind == "screen":
+    if kind not in KINDS:
+        # Named, not defaulted: the two branches score DIFFERENT quantities, so a kind that is
+        # not a cut point must raise, never fall through to the correlation branch and
+        # calibrate a reference on the wrong statistic.  ("screen" was this kind before 0.2.1.)
+        raise ValueError(f"top_spectrum_value: unknown kind {kind!r}; expected one of {KINDS}. "
+                         f"The cut point formerly called 'screen' is now 'projection'.")
+    if kind == "projection":
         return float(np.linalg.svd(X, compute_uv=False)[0])
-    Cov = X.conj().T @ X
-    d = np.sqrt(np.clip(np.real(np.diag(Cov)), 1e-30, None))
-    R = Cov / np.outer(d, d)
-    return float(np.linalg.eigvalsh(R)[-1])
+    # d_j is column j's 2-norm -- i.e. sqrt(Cov_jj) -- so the covariance never has to be formed.
+    d = np.sqrt(np.clip(np.real(np.sum(X.conj() * X, axis=0)), 1e-30, None))
+    return float(np.linalg.svd(X / d, compute_uv=False)[0] ** 2)
 
 
 def shuffle_in_time(X: np.ndarray, rng) -> np.ndarray:
     """An example surrogate: shuffle each column independently along the ordered axis
     (rows), destroying ordered and cross-channel structure while preserving every channel's
-    own marginal.  The surrogate behind ``permutation``."""
-    Xs = np.empty_like(X)
-    n = int(X.shape[0])
-    for j in range(int(X.shape[1])):
-        Xs[:, j] = X[rng.permutation(n), j]
-    return Xs
+    own marginal.  The surrogate behind ``permutation``.
+
+    One ``argsort`` draws all ``F`` independent permutations at once: independent uniforms per
+    (row, column), and an ``argsort`` down each column is that column's random permutation --
+    i.i.d. uniforms sorted give a uniform random permutation, so this is exact, not an
+    approximation.  Column marginals are exactly preserved, since a permutation moves values but
+    never alters them.
+
+    It consumes the generator differently from a per-channel loop, so a fixed seed does not
+    reproduce a per-channel loop's draw.  That is a difference of sample, not of distribution: a
+    sampled null is an estimate, and two valid estimators of the same null disagree at
+    O(sd/sqrt(draws)).  A floor is never pinned to a literal value across such a change --
+    ``draws`` is what bounds its resolution (see ``floor_from_null_sampler``).
+    """
+    X = np.asarray(X)
+    n, F = int(X.shape[0]), int(X.shape[1])
+    # Independent uniforms per (row, column); argsort down each column is that column's permutation.
+    idx = np.argsort(rng.random((n, F)), axis=0)
+    return np.take_along_axis(X, idx, axis=0)
 
 
 def floor_from_null_sampler(surrogate: Callable[[np.ndarray, "np.random.Generator"], np.ndarray],
                             *, draws: int = 200, far: float | None = None,
                             ) -> Callable[[FloorContext], float]:
-    """Turn ANY surrogate into a null provider: ``floor = (1 - far)`` quantile of the top
+    """Turn any surrogate into a null provider: ``floor = (1 - far)`` quantile of the top
     spectrum value over ``draws`` draws of ``surrogate(data, rng)``.  The library owns the
     quantile; the caller owns the null mechanism -- shuffle, block bootstrap, phase
     randomisation, a draw from a signal-free reference, a physics surrogate.  The returned
     provider is a local, per-screen callback like any other.
 
-    ``far`` couples the false-alarm level INTO the provider: ``None`` uses the caller's
+    ``far`` couples the false-alarm level into the provider: ``None`` uses the caller's
     ``ctx.far`` (the read's target), a value pins the provider's own level -- and since it
     is empirical, ``draws`` bounds how sharp it can be (resolving a level ``far`` needs
     ``draws >> 1/far``).  A stateful provider that accumulates surrogates over a run can
-    therefore SHARPEN its level as its long-term sample grows."""
+    therefore sharpen its level as its long-term sample grows."""
     def _provider(ctx: FloorContext) -> float:
         if ctx.data is None:
             raise ValueError("a sampled null provider needs the raw samples; not available "
@@ -339,7 +394,7 @@ def floor_from_null_sampler(surrogate: Callable[[np.ndarray, "np.random.Generato
 
 
 def permutation(*, draws: int = 200, far: float | None = None) -> Callable[[FloorContext], float]:
-    """ONE built-in example of a caller-style sampled null:
+    """One built-in example of a caller-style sampled null:
     ``floor_from_null_sampler(shuffle_in_time, draws=draws, far=far)`` -- the distribution-
     free permutation floor (destroys cross-channel structure, keeps each marginal).
     Deterministic per the seed carried in the ``FloorContext``.  ``far=None`` uses the
@@ -385,16 +440,16 @@ def _norm_isf(p: float) -> float:
 
 
 def reference_null(reference_top_values, *, far: float | None = None) -> Callable[[FloorContext], float]:
-    """A DETERMINISTIC O(1) null calibrated on a SIGNAL-FREE reference: the floor is
+    """A deterministic O(1) null calibrated on a signal-free reference: the floor is
     ``center + z(far)*scale`` with ``center, scale`` the mean and std of the reference's
     top-mode values (``top_spectrum_value`` of each signal-free realisation) and ``z(far)``
     the standard-normal inverse survival function.  This is the "prewhiten from a signal-free
-    window" null of [E] Def 8.2 in CLOSED FORM: no stored samples, no resampling, and it
-    sharpens ANALYTICALLY to any ``far`` (the normal quantile inverts to 1e-5 and beyond --
+    window" null of [E] Def 8.2 in closed form: no stored samples, no resampling, and it
+    sharpens analytically to any ``far`` (the normal quantile inverts to 1e-5 and beyond --
     no ``draws >> 1/far`` requirement, unlike a sampled ``permutation`` floor).  It generalises
-    ``mp``: the same closed-form edge, its noise model calibrated on YOUR reference instead of
-    an i.i.d.-Gaussian bulk -- the correct floor when you have a quiet window / vacuum ensemble.
-    ``far=None`` uses ``ctx.far``; a value pins the level."""
+    ``mp``: the same closed-form edge, its noise model calibrated on the caller's reference
+    instead of an i.i.d.-Gaussian bulk -- the correct floor when you have a quiet window / vacuum
+    ensemble.  ``far=None`` uses ``ctx.far``; a value pins the level."""
     sv = np.asarray(reference_top_values, dtype=float).ravel()
     center = float(sv.mean()); scale = float(sv.std() + 1e-30)
     def _provider(ctx: FloorContext) -> float:
@@ -409,11 +464,11 @@ class ReferenceNull:
     running mean/variance of a signal-free reference's top-mode values by Welford's method
     (O(1) per sample, O(1) memory) and floors at ``mean + z(far)*std``, sharpening analytically
     to any ``far``.  Feed reference top-values with ``push(*values)`` from a separate
-    CALIBRATION stream -- NOT the signal (it has no ``update`` hook, so the streaming aperture
-    will not calibrate it on the data it is thresholding).  ``far=None`` uses ``ctx.far``.
+    calibration stream, not the signal: it has no ``update`` hook, so the streaming aperture
+    does not calibrate it on the data it is thresholding.  ``far=None`` uses ``ctx.far``.
 
-    ``forgetting`` (in (0, 1], default 1.0 = perfect memory) gives the reference a FADING memory:
-    each push decays the accumulated weight by ``forgetting`` first, so the null tracks the LOCAL,
+    ``forgetting`` (in (0, 1], default 1.0 = perfect memory) gives the reference a fading memory:
+    each push decays the accumulated weight by ``forgetting`` first, so the null tracks the local,
     drifting noise as an aperture sweeps across regions (the effective sample is ~1/(1-forgetting)
     recent values).  ``forgetting < 1`` is the region-dynamic mode -- calibrate off nearby signal-
     free (low-coherence) patches and the far ones fade out."""
@@ -458,21 +513,21 @@ class ReferenceNull:
         return self.center + _norm_isf(ctx.far if self._far is None else self._far) * self.scale
 
 
-def self_calibrating_null(noise, kind: str = "screen", *, block_rows: int,
+def self_calibrating_null(noise, kind: str = "projection", *, block_rows: int,
                           stride: int | None = None, far: float | None = None):
-    """A :func:`reference_null` calibrated LOCALLY on a region's OWN signal-free noise -- the self-
-    contained, region-dynamic form.  ``noise`` is a signal-free window from the SAME region as the
-    screen being thresholded (e.g. the OFF-PULSE rows of an aperture patch: the burst is localized on
+    """A :func:`reference_null` calibrated locally on a region's own signal-free noise -- the self-
+    contained, region-dynamic form.  ``noise`` is a signal-free window from the same region as the
+    screen being thresholded (e.g. the off-pulse rows of an aperture patch: the burst is localized on
     the ordered axis, so its complement carries the region's real RFI / bandpass with no signal).
 
     The window is cut into blocks of ``block_rows`` rows (the row count the signal screen has -- for
     the no-fold aperture, equal to its N), each scored by ``top_spectrum_value`` in the floor's own
     units; reference_null is calibrated on those top-mode values.  Machine-precision (closed-form
     Gaussian from the real local noise, no i.i.d. assumption) and region-dynamic (rebuild per sweep
-    position).  Because the calibration slice is SIGNAL-FREE and separate from the screen, this does
-    not self-contaminate (the guarantee ``ReferenceNull`` withholds by refusing an ``update`` hook).
+    position).  The calibration slice is signal-free and separate from the screen, so this does
+    not self-contaminate -- the same guarantee ``ReferenceNull`` gives by carrying no ``update`` hook.
 
-    Needs >= 2 blocks (>= ~6 for a stable scale).  NOTE: the blocks are scored RAW -- valid when the
+    Needs >= 2 blocks (>= ~6 for a stable scale).  The blocks are scored raw -- valid when the
     screen is not folded (the aperture's full-resolution regime, screen == window); fold the noise
     the same way first if the screen folds."""
     X = np.asarray(_env.to_numpy(noise))
@@ -489,9 +544,9 @@ def self_calibrating_null(noise, kind: str = "screen", *, block_rows: int,
 # ══════════════════════════════════════════════════════════════════════════════
 
 def by_kind(**providers) -> Callable[[FloorContext], float]:
-    """Compose per-cut-point providers into ONE provider that dispatches on ``ctx.kind``:
-    ``by_kind(screen=P, spectral=Q, bulk=R)`` sends the screen floor (``K_signal``), the
-    single-screen correlation floor (``resolved_modes``), and the pooled ENSEMBLE floor
+    """Compose per-cut-point providers into one provider that dispatches on ``ctx.kind``:
+    ``by_kind(projection=P, spectral=Q, bulk=R)`` sends the screen floor (``K_signal``), the
+    single-screen correlation floor (``resolved_modes``), and the pooled ensemble floor
     (``SpectralAccumulator``) to P, Q, R respectively.  A cut point left unset falls back to
     the derived default (``mp``).  Keys must be in :data:`KINDS`.
 
@@ -526,7 +581,7 @@ def _select_provider(null, kind: str):
 
 
 def apply_floor(null=None, *, spectrum, data, shape, far: float, kind: str, seed: int = 0) -> float:
-    """Evaluate the null provider for cut point ``kind`` on ONE screen and return its scalar
+    """Evaluate the null provider for cut point ``kind`` on one screen and return its scalar
     floor.  ``null`` is a provider callback (``FloorContext -> float``), a ``{kind: provider}``
     mapping (a different provider per cut point), or ``None`` for the derived default
     (:data:`DEFAULT` = ``mp``).  A fresh generator seeded by ``seed`` is placed on the context

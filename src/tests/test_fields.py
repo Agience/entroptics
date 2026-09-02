@@ -1,6 +1,7 @@
 """N-D field reduction: the geometry-preserving slab reader and the two reductions.
-The load-bearing test is that keeping the plane intact is NOT the same as a naive
-flatten, the distinction that prevents the sign-flip a consumer hit."""
+The load-bearing property is that keeping the plane intact is not the same as a naive
+flatten: collapsing a plane's axes into one feature axis can change the sign of the
+result, so callers that need the geometry preserved must use the slab reader."""
 import numpy as np
 import pytest
 
@@ -25,7 +26,7 @@ def test_slab_count_over_multiple_axes():
 
 def test_over_planes_matches_manual_mean_and_differs_from_flatten():
     """Keeping each plane intact (over_planes) is the geometry-preserving reduction and
-    is NOT equal to flattening all non-ordered axes into one feature axis."""
+    is not equal to flattening all non-ordered axes into one feature axis."""
     rng = np.random.default_rng(2)
     planes = [np.outer(rng.standard_normal(8), rng.standard_normal(8)) for _ in range(6)]
     field = np.stack(planes, axis=0)                # (6, 8, 8), each plane rank-1

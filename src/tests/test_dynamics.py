@@ -4,7 +4,7 @@ import numpy as np
 import pytest
 
 from entroptics import aperture as A
-from entroptics.dynamics import Dynamics, dynamics
+from entroptics.dynamics import Dynamics, dynamics, carry_over_gaps
 from conftest import build_W
 
 
@@ -92,7 +92,7 @@ def test_seed_warmstart_accumulators():
 
 
 def test_aperture_splice_optics_reproduces_full():
-    """Splicing two BATCH halves rebuilds the window -> optics == full-signal optics."""
+    """Splicing two batch halves rebuilds the window -> optics == full-signal optics."""
     W = build_W(7)
     whole = A.Aperture(W[:40]).splice(A.Aperture(W[40:]))
     o_splice, o_full = whole.optics(), A.Aperture(W).optics()
@@ -123,7 +123,7 @@ def test_reconstruct_decay_shape_and_normalisation():
     assert c[0] == pytest.approx(1.0, abs=1e-9)     # normalised so C(0) = 1
 
 
-# ── the scalar-sequence MOMENT PENCIL (hankel_spectrum) + generic jackknife ───────────────
+# ── the scalar-sequence moment pencil (hankel_spectrum) + generic jackknife ───────────────
 def test_hankel_spectrum_recovers_known_transfer_modes():
     """The moment pencil on a finite exponential sum C(tau)=sum_k w_k lam_k^tau recovers the lam_k
     exactly (Prony is exact with enough moments) -- the scalar-series analogue of
@@ -142,8 +142,8 @@ def test_hankel_spectrum_recovers_known_transfer_modes():
 
 
 def test_hankel_spectrum_matches_handrolled_pencil():
-    """Bit-for-bit agreement with the hand-rolled reflection-positive pencil the mass-gap scripts
-    used, so relocating the read into the viewer changes no published number."""
+    """Bit-for-bit agreement with the hand-rolled reflection-positive pencil used by the mass-gap
+    scripts, so results here reproduce the same published numbers."""
     rng = np.random.default_rng(3)
     lam = np.array([0.6, 0.33, 0.15]); w = np.array([0.5, 0.3, 0.2])
     c = np.array([float(np.sum(w * lam ** t)) for t in range(12)]) + 1e-4 * rng.standard_normal(12)
@@ -179,3 +179,137 @@ def test_jackknife_binned_matches_massgap_convention():
     th = np.array([read(X[np.setdiff1d(np.arange(N), g)]) for g in groups])
     ref = np.sqrt((G - 1) / G * np.sum((th - th.mean()) ** 2))
     assert abs(se - ref) < 1e-12
+
+
+def test_multistep_predict_exact_and_backward_compatible():
+    """predict(steps=h) / rollout are the spectral forecast x_h = sum_k phi_k mu_k^h b_k -- exact
+    vs A^h on a linear system, stable at large h, and the default steps=1 gives the full A @ x
+    update."""
+    import numpy as np
+    from entroptics.dynamics import dynamics
+    rng = np.random.default_rng(0); F = 6
+    Q, _ = np.linalg.qr(rng.standard_normal((F, F)))
+    A = Q @ np.diag([0.95, 0.9, 0.8, 0.7, 0.5, 0.3]) @ Q.T
+    x0 = rng.standard_normal(F); traj = [x0]
+    for _ in range(60):
+        traj.append(A @ traj[-1])
+    dyn = dynamics(np.array(traj)); xs = np.array(traj)[20]
+    for h in (1, 5, 25, 50):
+        pred = np.asarray(dyn.predict(xs, steps=h))
+        assert np.max(np.abs(pred - np.linalg.matrix_power(A, h) @ xs)) < 1e-9   # exact, no A^h blowup
+    roll = np.asarray(dyn.rollout(xs, 8))
+    assert roll.shape == (8, F)
+    assert np.allclose(np.asarray(dyn.predict(xs)), np.asarray(dyn.predict(xs, steps=1)))   # steps defaults to 1
+
+
+def test_koopman_lift_resolves_nonlinear():
+    """A nonlinear oscillator resolves no operator raw but is linear in delay coordinates."""
+    import numpy as np
+    from entroptics import Aperture, koopman_lift, delay_embed
+    t = np.linspace(0, 40, 400)
+    traj = np.stack([np.sin(t) + 0.3 * np.sin(3 * t), np.cos(t)], 1)
+    assert delay_embed(traj, 5).shape == (396, 10)
+    raw = Aperture(traj, window=None).dynamics()          # one path to a fitted operator
+    assert raw.resolved() < koopman_lift(traj, d=12).resolved()   # lift resolves modes
+
+
+# ── missing cells: an operator is read off PAIRS, so a state with a hole is not a state ──
+
+def _planted_system(T=2000, F=12, seed=1, noise=0.1):
+    """A linear system with two known slow modes, kept excited by process noise."""
+    g = np.random.default_rng(seed)
+    mag, th = np.array([0.985, 0.960]), np.array([0.30, 0.11])
+    A = np.zeros((F, F))
+    for i, (m, a) in enumerate(zip(mag, th)):
+        A[2*i:2*i+2, 2*i:2*i+2] = m * np.array([[np.cos(a), -np.sin(a)], [np.sin(a), np.cos(a)]])
+    A[4:, 4:] = np.diag(g.uniform(0.2, 0.5, F - 4))
+    x, tr = g.standard_normal(F), []
+    for _ in range(T):
+        x = A @ x + noise * g.standard_normal(F)
+        tr.append(x.copy())
+    return np.array(tr), float(np.sort(-np.log(mag))[0])
+
+
+def _slowest(W):
+    return float(np.sort(np.asarray(A.Aperture(W, window=None).rates().alpha))[0])
+
+
+def test_dropout_does_not_bias_the_decay_rates():
+    """Zeroing a missing cell makes the transition INTO it look like decay toward zero, so every
+    rate reads faster than it is -- the read rose from 0.0195 to 0.4597 (23x) as dropout went from
+    0 to 35%, always in the same direction.  The gaps are carried by the record's own operator
+    instead, so the read stops depending on how much was dropped."""
+    W0, _ = _planted_system()
+    rng = np.random.default_rng(0)
+    ref = _slowest(W0)
+    for q in (0.05, 0.20, 0.35, 0.50):
+        W = W0.copy()
+        W[rng.random(W.shape) < q] = np.nan
+        assert _slowest(W) == pytest.approx(ref, rel=0.10), f"dropout {q:.0%} moved the rate"
+
+
+def test_carrying_the_gaps_invents_no_operator():
+    """The control that keeps it honest: a record with no dynamics must not acquire any.  White
+    noise has no persistent mode, and must still have none after half of it is dropped."""
+    rng = np.random.default_rng(3)
+    N = rng.standard_normal((1500, 12))
+    clean = np.sort(np.asarray(A.Aperture(N, window=None).rates().alpha))[0]
+    for q in (0.20, 0.50):
+        X = N.copy()
+        X[rng.random(X.shape) < q] = np.nan
+        slow = np.sort(np.asarray(A.Aperture(X, window=None).rates().alpha))[0]
+        assert np.exp(-slow) < 0.5, "a persistent mode appeared in noise"
+        assert slow > 0.5 * clean
+
+
+def test_a_record_without_gaps_is_returned_unchanged():
+    """The fill is reached only by records that need it: no gaps, no work and no copy."""
+    W = np.random.default_rng(4).standard_normal((50, 8))
+    assert carry_over_gaps(W) is W
+
+
+def test_single_frame_streaming_is_not_biased_by_dropout():
+    """A block can be completed from its own record; one frame cannot, so the operator STANDING
+    NOW predicts the hole.  Zeroing it read the slowest rate 0.0150 at no dropout and 0.68 at
+    half -- a factor of 45 -- because a zero next-state is decay toward zero."""
+    W0, _ = _planted_system(T=4000)
+    ref = None
+    for q in (0.0, 0.05, 0.20, 0.35):
+        W = W0.copy()
+        if q:
+            W[np.random.default_rng(7).random(W.shape) < q] = np.nan
+        d = Dynamics(W.shape[1])
+        for row in W:
+            d.update(row)
+        slow = float(np.sort(np.asarray(d.rates().alpha))[0])
+        if ref is None:
+            ref = slow
+        else:
+            assert slow == pytest.approx(ref, rel=0.15), f"dropout {q:.0%} moved the rate"
+
+
+def test_the_carried_inverse_matches_a_fresh_solve():
+    """`Pxx^+` is carried through each frame's rank-1 update instead of resolved, so the predictor
+    costs what the accumulators cost and is never stale.  It has to stay the same inverse."""
+    rng = np.random.default_rng(5)
+    F = 10
+    W = rng.standard_normal((600, F))
+    d = Dynamics(F)
+    for row in W:
+        d.update(row)
+    assert d.Pinv is not None
+    fresh = np.linalg.pinv(np.asarray(d.Pxx), hermitian=True)
+    assert np.allclose(np.asarray(d.Pinv), fresh, rtol=1e-6, atol=1e-10)
+
+
+def test_block_ingest_drops_the_carried_inverse():
+    """A block moves the accumulators wholesale, so an inverse carried through single frames no
+    longer belongs to them and must be reseeded."""
+    rng = np.random.default_rng(6)
+    F = 8
+    d = Dynamics(F)
+    for row in rng.standard_normal((3 * F, F)):
+        d.update(row)
+    assert d.Pinv is not None
+    d.update_block(rng.standard_normal((20, F)))
+    assert d.Pinv is None

@@ -3,7 +3,7 @@ import numpy as np
 import pytest
 
 from entroptics import aperture as A
-from entroptics.screen import Screen
+from entroptics.projection import Projection
 from entroptics.entropy import normalize
 from entroptics import tensor as TZ
 from conftest import build_W, build_Wc
@@ -51,7 +51,7 @@ def test_complex_tensor_roundtrip(Wc):
 
 
 def test_normalize_masks_are_nan_not_zero():
-    """Masked cells must be MISSING (NaN), never zero-filled (a zero drags the fold)."""
+    """Masked cells must be missing (NaN), never zero-filled (a zero drags the fold)."""
     W = build_W(7)
     mask = np.zeros(W.shape, bool)
     mask[10:14, 5:9] = True

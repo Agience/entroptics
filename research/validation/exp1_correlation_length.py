@@ -2,10 +2,10 @@
 Experiment 1 -- Correlation length <-> diffraction limit.
 
 Ground truth: F independent AR(1) channels with lag-1 coefficient phi = e^{-1/rho}
-have population autocorrelation C(tau) = exp(-tau/rho), i.e. a KNOWN exponential
-correlation length rho.  We read the diffraction limit off the signal's own decay
-via entroptics.diffraction_limit(decay(W)) and check that the entropy-width a_delta
-and the reciprocal integral length 1/xi are monotone in 1/rho and track it.
+have population autocorrelation C(tau) = exp(-tau/rho), i.e. a known exponential
+correlation length rho.  The diffraction limit is read off the signal's own decay
+via Aperture(W).correlation_length; the entropy-width a_delta and the
+reciprocal integral length 1/xi are monotone in 1/rho and track it.
 
 Deterministic (fixed seeds).  Re-runnable: `python exp1_correlation_length.py`.
 """
@@ -15,7 +15,7 @@ import _bootstrap  # noqa: F401 -- run against local src/, not any installed ent
 
 import numpy as np
 
-from entroptics.reads import decay, diffraction_limit
+from entroptics import Aperture
 
 import common as C
 
@@ -30,10 +30,11 @@ def run() -> dict:
     for i, rho in enumerate(RHOS):
         phi = C.phi_for_rho(rho)
         W = C.ar1(T, F, phi, seed=SEED + i)
-        dl = diffraction_limit(decay(W))
-        rho_arr.append(rho); ad_arr.append(dl.a_delta); xi_arr.append(dl.xi)
+        ap = Aperture(W, window=None)
+        a_delta, xi = ap.a_delta, ap.correlation_length
+        rho_arr.append(rho); ad_arr.append(a_delta); xi_arr.append(xi)
         rows.append([rho, round(phi, 4), round(1.0 / rho, 4),
-                     round(dl.a_delta, 5), round(dl.xi, 3), round(1.0 / dl.xi, 5)])
+                     round(a_delta, 5), round(xi, 3), round(1.0 / xi, 5)])
 
     rho_arr = np.array(rho_arr, float)
     ad_arr = np.array(ad_arr, float)

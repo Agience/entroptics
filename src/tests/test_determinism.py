@@ -1,10 +1,10 @@
-"""The reads are DETERMINISTIC: no RNG anywhere in the optics/screen path, so
+"""The reads are deterministic: no RNG anywhere in the optics/screen path, so
 repeated calls are bit-identical (this is what makes the golden a valid contract
 and the coherence a reproducible z-score)."""
 import numpy as np
 
 from entroptics import aperture as A
-from entroptics.screen import Screen, coherence
+from entroptics.projection import Projection, coherence
 from conftest import build_W
 
 
@@ -16,7 +16,7 @@ def test_optics_is_repeatable(W):
 
 
 def test_coherence_is_repeatable(W):
-    sc = Screen(W)
+    sc = Projection(W)
     assert coherence(sc.screen) == coherence(sc.screen)
 
 
@@ -30,12 +30,12 @@ def test_coherence_takes_no_rng():
 
 def test_screen_read_takes_no_rng():
     import inspect
-    from entroptics.screen import read
+    from entroptics.projection import read
     params = set(inspect.signature(read).parameters)
     assert "rng" not in params and "n_shuffles" not in params
 
 
 def test_repeated_screen_reads_identical(W):
-    r1 = Screen(W).read()
-    r2 = Screen(W).read()
+    r1 = Projection(W).read()
+    r2 = Projection(W).read()
     assert r1 == r2

@@ -1,16 +1,16 @@
 """
-miller_madow_check.py -- does the paper's noise-guard band beta_T equal the TRUE
+miller_madow_check.py -- does the paper's noise-guard band beta_T equal the true
 first-order entropy deficit of the power-marginal estimator under Gaussian noise?
 
-Setup (Definition 2.2).  Under iid COMPLEX Gaussian noise W (shape (T, F)) the power
+Setup (Definition 2.2).  Under iid complex Gaussian noise W (shape (T, F)) the power
 marginal is p^T_t proportional to sum_f |W_tf|^2.  The plug-in entropy H_T sits below
 its maximum log2(T) by a finite-sample deficit.  The paper snaps to "no fold" when
 H_T >= log2(T) - beta_T with band
 
         beta_T = (T - 1) / (2 F ln 2).
 
-We measure the deficit  D = log2(T) - E[H_T]  by Monte Carlo over many seeds and
-shapes and compare it to beta_T.
+The deficit  D = log2(T) - E[H_T]  is measured by Monte Carlo over many seeds and
+shapes and compared to beta_T.
 
 Theory.  With W_tf ~ CN(0,1), each |W_tf|^2 ~ Exp(1) and g_t = sum_f |W_tf|^2 ~
 Gamma(F,1); the normalized marginal p is Dirichlet(F,...,F) (T components), whose mean
@@ -18,29 +18,28 @@ entropy is exactly
 
         E[H_T] = ( psi(TF + 1) - psi(F + 1) ) / ln 2   (bits),
 
-so the EXACT deficit is D = log2(T) - E[H_T], with first-order expansion
+so the exact deficit is D = log2(T) - E[H_T], with first-order expansion
 
         D ~ (T - 1) / (2 * T * F * ln 2)  =  beta_T / T.
 
-i.e. the MEAN deficit uses the total cell count T*F as the effective sample size, and
-beta_T = (T-1)/(2F ln2) is T times that mean.  beta_T is therefore NOT the mean deficit
--- it is a deliberately conservative GUARD.  The margin is necessary: the guard snaps to
-no-fold when H_T >= log2(T) - beta_T, so a band set to the MEAN deficit would let ~half of
+The mean deficit uses the total cell count T*F as the effective sample size, and
+beta_T = (T-1)/(2F ln2) is T times that mean: beta_T is a deliberately conservative
+guard, not the mean deficit itself. The margin is necessary because the guard snaps to
+no-fold when H_T >= log2(T) - beta_T: a band set to the mean deficit would let about half of
 noise realizations fold (their deficit exceeds the mean), and any fold of noise -- even a
 fractional delta ~ 1.002 -- blends adjacent cells and manufactures spurious coherence.
 Empirically, the mean-sized band (beta_T / T) drives the coherence null P(z>2) from its
 target 0.023 to 1.0 and the K_signal false-alarm rate to ~100%; beta_T keeps noise from
-folding and the null calibrated.  So beta_T is correct as a guard; it is not, and should
-not be presented as, the point estimate of the deficit.
+folding and the null calibrated.
 
-THE CAP.  This conservatism has a failure mode: the inner band grows without bound in the
-aspect ratio and EXCEEDS the maximum entropy log2(len) for extreme shapes (feature band
+The cap.  This conservatism has one failure mode: the inner band grows without bound in the
+aspect ratio and exceeds the maximum entropy log2(len) for extreme shapes (feature band
 beta_F > log2(F) when F >~ 2 T ln F), where the guard fires unconditionally and disables the
-fold vacuously -- a fully redundant marginal could not fold.  The construction therefore
-CAPS the band at (1/2) log2(len): min(beta, (1/2) log2 len).  The cap leaves the conservative
+fold vacuously -- a fully redundant marginal could not fold. The construction therefore
+caps the band at (1/2) log2(len): min(beta, (1/2) log2 len). The cap leaves the conservative
 inner band untouched wherever it is already below (1/2) log2 len (all tall/square shapes, so
 noise still never folds there), and makes the guard operative at every shape -- it always
-folds once power concentrates below sqrt(len) effective cells.  The table below flags where
+folds once power concentrates below sqrt(len) effective cells. The table below flags where
 the inner band is vacuous and reports the capped band.
 
 Deterministic (fixed seeds).  Re-runnable: `python miller_madow_check.py`.
@@ -55,7 +54,7 @@ from scipy.special import digamma
 from entroptics.entropy import shannon_bits
 
 SHAPES = [(16, 8), (32, 16), (64, 16), (64, 64), (128, 32), (256, 64), (512, 32),
-          (512, 4), (256, 8)]      # last two: tall-thin -> inner band VACUOUS, cap engages
+          (512, 4), (256, 8)]      # last two: tall-thin -> inner band vacuous, cap engages
 N_SEEDS = 4000
 LN2 = np.log(2.0)
 
@@ -96,15 +95,16 @@ def run() -> dict:
         f"disable the fold vacuously, which the cap min(inner, (1/2)log2 len) removes without "
         f"touching the inner band on tall/square shapes.")
     concl = ("The inner band is a deliberately conservative uniform-null guard: it exceeds the "
-             "MEAN marginal deficit by the factor T so structureless noise essentially never "
+             "mean marginal deficit by the factor T, so structureless noise essentially never "
              "folds (a band set to the mean deficit folds ~half of noise realizations and, "
              "because any fold blends adjacent cells, drives the coherence null P(z>2) "
-             "0.023 -> 1.0 and the K_signal FAR -> ~100%), so it must NOT be divided by T.  Its "
+             "from 0.023 to 1.0 and the K_signal false-alarm rate to ~100%, which is why the "
+             "band is set above the mean). Its "
              "one defect -- exceeding log2(len) for extreme aspect ratios (the 'inner vacuous?' "
-             "column), disabling the fold vacuously -- is fixed by CAPPING at (1/2) log2(len): "
+             "column), disabling the fold vacuously -- is fixed by capping at (1/2) log2(len): "
              "the 'banded' column is the guard actually used (Definition 2.2), unchanged from "
              "the inner band on every non-vacuous shape and operative (folds below sqrt(len) "
-             "effective cells) on the rest.  In the construction only the FEATURE axis folds, "
+             "effective cells) on the rest. In the construction only the feature axis folds, "
              "so the operative guard is the symmetric beta_F capped the same way; the ordered "
              "axis is kept at native resolution, so its band never engages.")
 

@@ -1,4 +1,13 @@
-import Mathlib
+import Mathlib.Data.Real.Basic
+import Mathlib.GroupTheory.GroupAction.MultipleTransitivity
+import Mathlib.GroupTheory.Perm.Fin
+import Mathlib.Algebra.BigOperators.Group.Finset.Basic
+import Mathlib.Data.Fintype.Perm
+import Mathlib.Tactic.FieldSimp
+import Mathlib.Tactic.Linarith
+import Mathlib.Tactic.Ring
+import Mathlib.Tactic.Positivity
+import Mathlib.Tactic.GCongr
 
 /-!
 # The ordered-axis coherence null (PAPER Sec 5)

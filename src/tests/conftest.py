@@ -3,6 +3,26 @@
 Puts ``src/`` on the import path so ``import entroptics`` resolves without an
 editable install, and provides reproducible signal factories.
 """
+# ── the BLAS thread pin, again — because the package pin cannot reach a test suite ───────────────
+#
+# `entroptics/__init__.py` pins OpenBLAS to one thread, and that is worth nothing here. Of the 23
+# test files in this suite that import numpy, all 23 import it before they import entroptics —
+# including this conftest, which imports numpy below. OpenBLAS sizes its pool when the library
+# loads, so by the time any `import entroptics` runs the pool is already 8 wide and the package
+# pin is inert.
+#
+# A run that depends on whoever remembered to export the variable is unreliable in a way testing
+# cannot catch: the defect hangs as often as it faults, so an unpinned run and a pinned run can both
+# come back green.
+#
+# conftest.py is imported by pytest before the test modules in its directory, so this is the first
+# opportunity in-process. `setdefault`, for the same reason as in the package: an operator who set a
+# value keeps it.
+import os as _os
+
+_os.environ.setdefault("OPENBLAS_NUM_THREADS", "1")
+del _os
+
 import sys
 from pathlib import Path
 

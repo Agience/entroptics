@@ -1,7 +1,7 @@
 """Regenerate the golden optics contract (tests/golden/optics.json).
 
 The golden pins the full ``Aperture(W).optics()`` dict plus the screen read for a
-couple of fixed seeds, so any unintended numeric drift is caught.  Regenerate ONLY
+couple of fixed seeds, so any unintended numeric drift is caught.  Regenerate only
 when a change to the reads is intended and reviewed:
 
     python tests/golden/_generate.py
@@ -25,7 +25,7 @@ def main():
     out = {}
     for seed in (7, 3):
         ap = A.Aperture(build_W(seed))
-        sc = ap.screen()
+        sc = ap.projection()
         out[str(seed)] = {
             "optics": ap.optics(),
             "screen": {

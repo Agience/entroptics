@@ -1,13 +1,13 @@
 """
 Experiment 2 -- Exact DMD recovery (Theorem 9.2) + graceful noise degradation.
 
-Ground truth: a KNOWN linear operator A (block-diagonal scaled rotations) with
+Ground truth: a known linear operator A (block-diagonal scaled rotations) with
 eigenvalues mu_k = r_k e^{+-i theta_k}, so alpha_k = -ln|mu_k| = -ln r_k and
-beta_k = arg mu_k = +-theta_k are known exactly.  We build the noise-free trajectory
-x_{t+1}=A x_t, run entroptics.Aperture(W).rates(), and compare the recovered
-(alpha_k, beta_k) to ground truth -- Theorem 9.2 predicts exact recovery.  Then we
-add iid Gaussian observation noise at several SNRs and report error(SNR): exact at
-zero noise, quantified graceful degradation thereafter.
+beta_k = arg mu_k = +-theta_k are known exactly.  The noise-free trajectory
+x_{t+1}=A x_t is built, Aperture(W).rates() is run, and the recovered
+(alpha_k, beta_k) is compared to ground truth -- Theorem 9.2 predicts exact recovery.
+iid Gaussian observation noise is then added at several SNRs and error(SNR) is
+reported: exact at zero noise, quantified graceful degradation thereafter.
 
 Deterministic (fixed seeds).  Re-runnable: `python exp2_dmd_recovery.py`.
 """

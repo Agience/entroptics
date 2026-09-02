@@ -5,13 +5,13 @@ The standard screen construction (normalize -> project -> SVD) averages delta_T
 consecutive ordered steps into one row, recovering feature shapes but losing the
 within-window fine structure.  ``tensor_embed`` works at native resolution by
 embedding consecutive feature vectors into a 3-way tensor and taking its
-Higher-Order SVD -- exposing HOW the feature spectrum evolves within a window,
+Higher-Order SVD -- exposing how the feature spectrum evolves within a window,
 not just what it is on average.
 
-Standalone, backend-agnostic (numpy on CPU, torch on its device -- ONE code path):
+Standalone, backend-agnostic (numpy on CPU, torch on its device -- one code path):
 general linear algebra (randomised range-finding + Tucker/HOSVD), nothing
 domain-specific.  Reachable from the front door as ``Aperture.tensor()`` /
-``Screen.tensor()``.
+``Projection.tensor()``.
 
   tensor_read(W[, mask], d)     -- whiten a raw (T, F) waterfall, then HOSVD it.
   tensor_embed(data, d)         -- HOSVD of the delay-embedded (already-normalized) tensor.
@@ -46,7 +46,7 @@ def _truncated_left_svd(M, k: int, oversample: int = 10):
     a full SVD when k_eff >= max(min(M.shape)//2, 16) (no asymptotic advantage
     there, and the deterministic SVD is more stable).  Real- and complex-safe,
     backend-agnostic.  Omega is seeded (numpy) and injected into M's backend, so
-    the result is deterministic on numpy AND torch."""
+    the result is deterministic on numpy and torch."""
     xp = _env.ns(M)
     m, n = int(M.shape[0]), int(M.shape[1])
     is_c = _iscomplex(M)
@@ -82,7 +82,7 @@ def tensor_embed(data, d: int = TENSOR_EMBED_D, rank: tuple | None = None) -> di
     then decompose by unfolding along each mode:
 
         U_time  (T' x r_t)     -- when each pattern fires
-        U_lag   (d  x r_d)     -- HOW the feature spectrum evolves within a window
+        U_lag   (d  x r_d)     -- how the feature spectrum evolves within a window
         U_freq  (F_eff x r_f)  -- feature shapes
         core    (r_t x r_d x r_f) -- coupling strengths
 
@@ -199,7 +199,7 @@ def tensor_read(W, mask=None, d: int | None = None, *, rank: tuple | None = None
     """Convenience front door: whiten a raw (T, F) waterfall to native resolution
     (entropy.normalize) and return its delay-embedded Tucker (HOSVD).  Masked /
     non-finite cells are filled with 0 after whitening.  Backend-agnostic; this is
-    what ``Aperture.tensor()`` / ``Screen.tensor()`` call."""
+    what ``Aperture.tensor()`` / ``Projection.tensor()`` call."""
     from .entropy import normalize
     data = normalize(W, mask)
     xp = _env.ns(data)

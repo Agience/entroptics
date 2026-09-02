@@ -4,7 +4,7 @@ common.py -- shared, deterministic helpers for the entroptics validation harness
 Everything here is seeded (numpy Generator) so every experiment is bit-reproducible.
 No entroptics internals are imported; only the public front door is used by the
 experiment scripts.  Ground-truth signal generators live here so the reads can be
-checked against KNOWN planted structure.
+checked against known planted structure.
 """
 from __future__ import annotations
 
@@ -24,7 +24,7 @@ def ar1(T: int, F: int, phi: float, seed: int) -> np.ndarray:
     """F independent real AR(1) channels of length T with lag-1 coefficient ``phi``
     and unit stationary variance.  The population autocorrelation is exactly
     C(tau) = phi**tau = exp(-tau / rho) with correlation length rho = -1/ln(phi),
-    so this plants a KNOWN exponential correlation length."""
+    so this plants a known exponential correlation length."""
     g = rng(seed)
     e = g.standard_normal((T, F))
     x = np.empty((T, F))
@@ -76,10 +76,10 @@ def planted_lowrank(T: int, F: int, K: int, snr: float, seed: int,
 
     Each planted mode is a random (orthonormal) temporal pattern u_k (length T) times
     a random (orthonormal) feature pattern v_k (length F).  Every mode is given the
-    SAME singular value s = snr * edge, where edge = sqrt(median row power)*(1+sqrt(N/F))
+    same singular value s = snr * edge, where edge = sqrt(median row power)*(1+sqrt(T/F))
     is the Marchenko-Pastur / Bai-Yin bulk singular-value edge of the iid background;
-    so ``snr`` is the planted mode strength in units of the noise floor and K modes
-    should be resolved once snr > 1.  Deterministic given the seed."""
+    so ``snr`` is the planted mode strength in units of the noise floor, and K modes
+    become resolvable once snr > 1.  Deterministic given the seed."""
     g = rng(seed)
     if complex_bg:
         bg = (g.standard_normal((T, F)) + 1j * g.standard_normal((T, F))) / np.sqrt(2.0)
@@ -100,7 +100,7 @@ def planted_lowrank(T: int, F: int, K: int, snr: float, seed: int,
 
 
 def regime_switch(T: int, F: int, phis, seed: int) -> np.ndarray:
-    """A NONSTATIONARY AR(1) whose lag-1 coefficient switches through ``phis`` in
+    """A nonstationary AR(1) whose lag-1 coefficient switches through ``phis`` in
     equal-length segments along the ordered axis (a piecewise-stationary record of
     the same size as a stationary one).  The correlation length jumps at each seam."""
     g = rng(seed)
@@ -115,7 +115,7 @@ def regime_switch(T: int, F: int, phis, seed: int) -> np.ndarray:
 
 
 def ordered_smooth(T: int, F: int, n_modes: int, seed: int) -> np.ndarray:
-    """A smoothly ORDERED signal: a few low-frequency temporal modes (so adjacent
+    """A smoothly ordered signal: a few low-frequency temporal modes (so adjacent
     rows are alike) with random feature loadings, plus light noise.  Row t is a
     continuous function of t, so lag-1 rows are correlated (high coherence)."""
     g = rng(seed)
@@ -130,10 +130,10 @@ def ordered_smooth(T: int, F: int, n_modes: int, seed: int) -> np.ndarray:
 
 
 def band_limited(T: int, F: int, n_active: int, seed: int) -> np.ndarray:
-    """A feature-BANDLIMITED signal: only a contiguous BAND of ``n_active`` of the F
+    """A feature-band-limited signal: only a contiguous band of ``n_active`` of the F
     feature channels carries signal power (the rest is a tiny broadband noise floor).
     The active band is independent Gaussian per channel, so the feature aperture has a
-    KNOWN width n_active -- both the power marginal (n_F ~ n_active) and the feature
+    known width n_active -- both the power marginal (n_F ~ n_active) and the feature
     correlation fill (phi_F ~ n_active/F) read the bandwidth directly."""
     g = rng(seed)
     W = 0.02 * g.standard_normal((T, F))

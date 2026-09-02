@@ -4,7 +4,7 @@ Six panels, empirical:
   1 injected burst        2 + noise               3 recovery
   4 recovery vs dropout   5 + noise + dropout     6 recovery of surviving channels
 
-The PASS/FAIL guarantees live in src/tests/test_extract.py; this only draws them.
+The pass/fail guarantees live in src/tests/test_extract.py; this only draws them.
 
     python calibration.py   ->  ./calibration.png
 """
@@ -26,6 +26,7 @@ from entroptics import Aperture
 
 SNR = 12                   # injected peak signal-to-noise of the "capture"
 DROP = 0.32               # fraction of channels randomly dropped in panels 5/6
+N_SEEDS = 10              # draws per dropout fraction in panel 4
 
 
 def make_burst(T=64, F=256, peak=1.0):
@@ -43,8 +44,15 @@ def corr(a, b):
 
 
 def dropout_recovery(B, frac, snr, seed):
-    """extract on a noisy burst with ``frac`` of its channels zeroed; return the recovery over the
-    SURVIVING channels, the recovered image (dropped -> NaN) and the drop mask."""
+    """extract on a noisy burst with ``frac`` of its channels DROPPED; return the recovery over the
+    surviving channels, the recovered image (dropped -> NaN) and the drop mask.
+
+    The channels are dropped, not zeroed.  A mask is not a zero: zeroing hands the read a column
+    of zero variance where nothing was observed, and the FRB path (``frb_panel._entroptics``)
+    drops the dead channels before the front door.  Figure 1 calibrates the path Figure 2 runs.
+
+    Returns NaN for the recovery when the read resolves nothing.  That is a different outcome
+    from a poor recovery and the caller must not average the two together."""
     F = B.shape[1]
     rng = np.random.default_rng(seed)
     W = B + rng.standard_normal(B.shape) * (1.0 / snr)
@@ -52,14 +60,13 @@ def dropout_recovery(B, frac, snr, seed):
     n = int(round(frac * F))
     if n:
         drop[rng.choice(F, n, replace=False)] = True
-    Wz = W.copy(); Wz[:, drop] = 0.0
-    rec, _ = Aperture(Wz, window=None).extract()
     surv = ~drop
-    if rec.shape != B.shape:            # read collapsed under heavy dropout -> nothing resolved
-        rec = np.zeros_like(B)
-    rec_disp = rec.copy(); rec_disp[:, drop] = np.nan
+    rec_surv, _ = Aperture(W[:, surv], window=None).extract()
+    rec = np.full_like(B, np.nan)
+    if rec_surv.shape == (B.shape[0], int(surv.sum())):
+        rec[:, surv] = rec_surv
     W_disp = W.copy(); W_disp[:, drop] = np.nan
-    return corr(rec[:, surv], B[:, surv]), rec_disp, W_disp, drop
+    return corr(rec[:, surv], B[:, surv]), rec, W_disp, drop
 
 
 def main():
@@ -72,17 +79,21 @@ def main():
     p3 = corr(rec3, B) * 100
 
     # panels 5/6: noise + channel dropout
-    p6, rec6_disp, W5_disp, drop = dropout_recovery(B, DROP, SNR, seed=0)
+    p6, rec6_disp, W5_disp, drop = dropout_recovery(B, DROP, SNR, seed=0)   # rec is NaN off-mask
     p6 *= 100; pdrop = drop.mean() * 100
 
-    # panel 4: recovery of surviving channels vs dropout fraction (a collapsed read -> 0% recovery)
+    # panel 4: two separate series over dropout fraction.  A read that resolves nothing is a
+    # FAILURE TO PRODUCE, not a 0% recovery -- averaging the two together plots the success rate
+    # and calls it fidelity.
     fracs = np.arange(0.0, 0.85, 0.03)
-    curve = []
+    succ, cond = [], []
     for fr in fracs:
-        vals = [dropout_recovery(B, fr, SNR, seed=100 + s)[0] for s in range(10)]
-        vals = [0.0 if not np.isfinite(v) else v for v in vals]
-        curve.append(np.mean(vals) * 100)
-    fx = fracs * 100; cy = np.array(curve)
+        vals = [dropout_recovery(B, fr, SNR, seed=100 + s)[0] for s in range(N_SEEDS)]
+        ok = [v for v in vals if np.isfinite(v)]
+        succ.append(100.0 * len(ok) / len(vals))
+        cond.append(np.mean(ok) * 100 if ok else np.nan)
+    fx = fracs * 100
+    sy = np.array(succ); cy = np.array(cond)
 
     # committed data behind the figure: the recovery-vs-dropout curve and the two scalar recoveries
     dat = Path(__file__).resolve().parent / "calibration.csv"
@@ -91,9 +102,9 @@ def main():
         w.writerow(["# entroptics extract() calibration (synthetic burst)"])
         w.writerow([f"# SNR={SNR}", f"noise_only_recovery_pct={p3:.2f}",
                     f"dropout_recovery_pct={p6:.2f}", f"drop_fraction_pct={pdrop:.1f}"])
-        w.writerow(["channels_dropped_pct", "recovery_pct"])
-        for x, y in zip(fx, cy):
-            w.writerow([f"{x:.1f}", f"{y:.2f}"])
+        w.writerow(["channels_dropped_pct", "resolved_pct", "recovery_pct_when_resolved"])
+        for x, sv, y in zip(fx, sy, cy):
+            w.writerow([f"{x:.1f}", f"{sv:.1f}", "" if not np.isfinite(y) else f"{y:.2f}"])
     print(f"wrote {dat}")
 
     fig = plt.figure(figsize=(12.5, 6.7))
@@ -112,11 +123,13 @@ def main():
     wf(fig.add_subplot(gs[0, 2]), rec3, f"recovery\n{p3:.1f}%")
 
     axc = fig.add_subplot(gs[1, 0])
-    axc.plot(fx, cy, "o-", color="#1f7a3d", ms=4)
+    axc.plot(fx, cy, "o-", color="#1f7a3d", ms=4, label="recovery, when resolved")
+    axc.plot(fx, sy, "s--", color="#8a4b9c", ms=3.5, lw=1.2, label=f"resolved at all ({N_SEEDS} draws)")
     axc.axvline(pdrop, ls=":", color="0.5", lw=1)
-    axc.set_xlabel("channels dropped (%)", fontsize=9); axc.set_ylabel("recovery (%)", fontsize=9)
+    axc.set_xlabel("channels dropped (%)", fontsize=9); axc.set_ylabel("percent", fontsize=9)
     axc.set_ylim(0, 103); axc.set_xlim(0, 85)
     axc.set_title("recovery vs channels dropped", fontsize=10); axc.grid(alpha=0.3)
+    axc.legend(fontsize=7.2, loc="lower left", framealpha=0.9)
     axc.tick_params(labelsize=8)
 
     wf(fig.add_subplot(gs[1, 1]), W5_disp, f"+ noise (S/N {SNR}) + {pdrop:.0f}% random channel dropout")

@@ -1,13 +1,13 @@
 """
 Experiment 4 -- Coherence detects order and is null-calibrated.
 
-(a) ORDER DETECTION.  A smoothly ordered signal (a few low-frequency temporal modes,
-    so adjacent rows are alike) vs the SAME rows randomly permuted.  Screen(W).coherence
-    is a deterministic z-score against the exact row-permutation null; it should be
+(a) Order detection.  A smoothly ordered signal (a few low-frequency temporal modes,
+    so adjacent rows are alike) vs the same rows randomly permuted.  Projection(W).coherence
+    is a deterministic z-score against the exact row-permutation null, reading
     large for the ordered signal and ~0 for the permuted one.
 
-(b) NULL CALIBRATION.  Pure iid Gaussian noise across many shapes/seeds: the z-score
-    should have mean ~ 0 and, since both its null mean AND null variance are exact
+(b) Null calibration.  Pure iid Gaussian noise across many shapes/seeds: the z-score
+    has mean ~ 0 and, since both its null mean and null variance are exact
     (Def 5.3, the Cliff-Ord/Mantel second moment), an empirical std ~ 1.  The one-sided
     P(z>2) sits near 0.023; the small residual is the permutation distribution's own
     tail skew at small N (the standardisation is exact, the tail shape is not normal).
@@ -20,7 +20,7 @@ import _bootstrap  # noqa: F401 -- run against local src/, not any installed ent
 
 import numpy as np
 
-from entroptics import Screen
+from entroptics import Projection
 
 import common as C
 
@@ -39,10 +39,10 @@ def run() -> dict:
     z_ord, z_perm = [], []
     for s in range(N_PAIRS):
         W = C.ordered_smooth(*ORD_SHAPE, n_modes=N_MODES, seed=404 + s)
-        z_ord.append(Screen(W).coherence)
+        z_ord.append(Projection(W).coherence)
         g = C.rng(50000 + s)
         Wp = W[g.permutation(W.shape[0])]
-        z_perm.append(Screen(Wp).coherence)
+        z_perm.append(Projection(Wp).coherence)
     z_ord = np.array(z_ord); z_perm = np.array(z_perm)
 
     # ── (b) iid null calibration ──
@@ -50,7 +50,7 @@ def run() -> dict:
     k = 0
     for (T, F) in NULL_SHAPES:
         for _ in range(N_NULL):
-            zs.append(Screen(C.rng(70000 + k).standard_normal((T, F))).coherence)
+            zs.append(Projection(C.rng(70000 + k).standard_normal((T, F))).coherence)
             k += 1
     zs = np.array(zs)
     p_gt2 = float(np.mean(zs > 2.0))

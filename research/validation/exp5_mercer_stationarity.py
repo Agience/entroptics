@@ -1,13 +1,13 @@
 """
 Experiment 5 -- Mercer ratio rho as a stationarity diagnostic (Prop 4.7 as a tool).
 
-Ground truth: a STATIONARY record (one AR(1) coefficient throughout) and a
-NONSTATIONARY record of the SAME size (a regime switch: the AR(1) coefficient jumps
-partway through, changing the correlation length).  We slide a sub-window along the
-ordered axis and read mercer_certificate(sub-window).ratio at each position.  Prop 4.7
+Ground truth: a stationary record (one AR(1) coefficient throughout) and a
+nonstationary record of the same size (a regime switch: the AR(1) coefficient jumps
+partway through, changing the correlation length).  A sub-window slides along the
+ordered axis, reading Aperture(sub-window).mercer.ratio at each position.  Prop 4.7
 says rho is O(1) and constant for a stationary process; a drift/jump flags
-nonstationarity.  We quantify with the coefficient of variation (CV = std/mean) of
-rho across windows -- low for stationary, high for the regime switch.
+nonstationarity.  The coefficient of variation (CV = std/mean) of rho across windows
+quantifies the separation -- low for stationary, high for the regime switch.
 
 Deterministic (fixed seeds).  Re-runnable: `python exp5_mercer_stationarity.py`.
 """
@@ -17,7 +17,7 @@ import _bootstrap  # noqa: F401 -- run against local src/, not any installed ent
 
 import numpy as np
 
-from entroptics.reads import mercer_certificate
+from entroptics import Aperture
 
 import common as C
 
@@ -34,7 +34,7 @@ def _rho_track(W):
     rhos, centers = [], []
     for start in range(0, T - WIN + 1, STEP):
         sub = W[start:start + WIN]
-        r = mercer_certificate(sub).ratio
+        r = Aperture(sub, window=None).mercer.ratio
         if np.isfinite(r):
             rhos.append(float(r)); centers.append(start + WIN // 2)
     return np.array(centers), np.array(rhos)
@@ -76,7 +76,7 @@ def run() -> dict:
         title="5. Mercer ratio rho as a stationarity diagnostic",
         setup=(f"Stationary AR(1) phi={PHI_STATIONARY} vs a regime switch phi {PHI_SWITCH}, "
                f"both (T,F)=({T},{F}); {N_SEEDS} seeds each.  Slide a window of {WIN} (step "
-               f"{STEP}); read mercer_certificate(window).ratio at each position; report the "
+               f"{STEP}); read Aperture(window).mercer.ratio at each position; report the "
                f"seed-averaged CV(rho)."),
         table=table,
         metrics=dict(cv_stationary=cv_s, cv_nonstationary=cv_n, cv_ratio=ratio,

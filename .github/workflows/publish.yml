@@ -2,7 +2,9 @@ name: Release
 
 # Cut a release by pushing a version tag (the tag, minus "v", must match
 # `version` in pyproject.toml):
-#     git tag v0.2.0 && git push origin v0.2.0
+#     git tag v0.2.1 && git push origin v0.2.1
+# Re-pushing or MOVING an existing tag will not re-create its release: the version is
+# published once. A failed publish can still be retried by re-running the workflow.
 # One job builds, creates the GitHub Release, and publishes to PyPI via
 # Trusted Publishing (OIDC) — no token stored. Tests are NOT re-run here:
 # CI (ci.yml) gates every commit on main, and the tag points at a tested one.
@@ -20,8 +22,8 @@ jobs:
     runs-on: ubuntu-latest
     environment: pypi         # must match the PyPI publisher's Environment name
     steps:
-      - uses: actions/checkout@v4
-      - uses: actions/setup-python@v5
+      - uses: actions/checkout@v7
+      - uses: actions/setup-python@v7
         with:
           python-version: "3.12"
           cache: pip
@@ -37,12 +39,33 @@ jobs:
           python -m pip install --upgrade build twine
           python -m build
           python -m twine check dist/*
-      - name: Create GitHub Release
+      # A tag can be MOVED -- a history rewrite force-pushes every tag, and each one fires this
+      # workflow again. Without this, an old version is rebuilt and its release re-uploaded, and
+      # anything subscribed to releases (the Zenodo webhook) treats that as a new event.
+      - name: Is this version already released?
+        id: existing
         if: startsWith(github.ref, 'refs/tags/v')
-        uses: softprops/action-gh-release@v2
+        env:
+          GH_TOKEN: ${{ github.token }}
+        run: |
+          if gh release view "$GITHUB_REF_NAME" --json tagName >/dev/null 2>&1; then
+            echo "already=true" >> "$GITHUB_OUTPUT"
+            echo "::notice::$GITHUB_REF_NAME is already released; not re-creating it"
+          else
+            echo "already=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      - name: Create GitHub Release
+        if: startsWith(github.ref, 'refs/tags/v') && steps.existing.outputs.already == 'false'
+        uses: softprops/action-gh-release@v3
         with:
           generate_release_notes: true
           files: dist/*
+      # `skip-existing` so a re-fired workflow cannot republish a version that is already on
+      # PyPI -- a moved tag looks exactly like a new one to `on: push: tags`. A retry after a
+      # FAILED publish is unaffected: there is nothing on PyPI to skip.
       - name: Publish to PyPI
         if: startsWith(github.ref, 'refs/tags/v')
         uses: pypa/gh-action-pypi-publish@release/v1
+        with:
+          skip-existing: true

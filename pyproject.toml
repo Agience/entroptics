@@ -4,13 +4,13 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "entroptics"
-version = "0.1.5"
+version = "0.2.1"
 description = "The universe, in focus."
 readme = "README.md"
 requires-python = ">=3.10"
 license = { file = "LICENSE.md" }
 authors = [{ name = "Ikailo John Sessford", email = "john@ikailo.com" }]
-keywords = ["entropy", "optics", "aperture"]
+keywords = ["entroptics", "entropy", "optics", "aperture", "signal processing"]
 classifiers = [
     "Programming Language :: Python :: 3",
     "Programming Language :: Python :: 3.10",
@@ -26,12 +26,16 @@ dependencies = ["numpy>=2.0"]   # numpy.linalg.svdvals is a 2.0 API
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
 scipy = ["scipy>=1.10"]
-test = ["pytest>=8", "scipy>=1.10"]              # torch-free: fast CI, torch parity tests auto-skip
-dev = ["pytest>=8", "scipy>=1.10", "torch>=2.0"]
+# threadpoolctl measures the BLAS pin as an effect (pool size), not as a string; test_blas_thread_pin
+# fails without it, so it is declared.
+test = ["pytest>=8", "scipy>=1.10", "threadpoolctl>=3"]   # torch-free: fast CI, torch parity tests auto-skip
+# research/figures/*.py only; the library core needs neither
+figures = ["matplotlib>=3.7", "h5py>=3.8"]
+dev = ["pytest>=8", "scipy>=1.10", "threadpoolctl>=3", "torch>=2.0"]
 
 [project.urls]
-Repository = "https://github.com/Agience/agience-entroptics"
-Issues = "https://github.com/Agience/agience-entroptics/issues"
+Repository = "https://github.com/Agience/entroptics"
+Issues = "https://github.com/Agience/entroptics/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }

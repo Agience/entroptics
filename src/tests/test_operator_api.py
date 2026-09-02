@@ -69,7 +69,7 @@ def test_resolved_power_in_optics_dict(W):
     assert A.Aperture(W).resolved_power == o["resolved_power"]
 
 
-# ── scale_profile (structure vs observation window, in CELLS) ─────────────────
+# ── scale_profile (structure vs observation window, in cells) ─────────────────
 
 def test_scale_profile_shapes(W):
     sp = scale_profile(W)
@@ -128,14 +128,13 @@ def test_robust_null_provider_is_deterministic(W):
 
 def test_non_callable_null_raises(W):
     with pytest.raises(TypeError):
-        spectral_optics(W, null="bogus")        # the floor is a provider callback, not a name
+        spectral_optics(W, null="bogus")        # null is a callable provider; a string raises
 
 
 def test_operator_forgetting_and_resolved_reads():
-    # stage-(a) foundation: the streaming operator produces the forgetting margin (the
-    # aperture-forgetting axiom read) and a resolved K_signal from Pxx -- both O(F^3) once,
-    # no O(T^2) batch op.  Noise forgets and resolves ~nothing; a coherent mode has a
-    # near-unit margin and resolves.
+    # The streaming operator produces the forgetting margin (the aperture-forgetting axiom
+    # read) and a resolved K_signal from Pxx -- both O(F^3) once, no O(T^2) batch op.  Noise
+    # forgets and resolves ~nothing; a coherent mode has a near-unit margin and resolves.
     import math
     from entroptics.dynamics import Dynamics
     r = np.random.default_rng(0); F = 30
@@ -171,8 +170,8 @@ def test_update_block_matches_per_frame_loop():
 
 
 def test_aperture_window_is_adaptive_minimum_not_a_clock():
-    # streaming-only + ADAPTIVE forgetting: `window` is a MINIMUM.  Pure noise (no active
-    # signal) forgets to it; a persistent coherent signal is NEVER truncated; the operator
+    # streaming-only + adaptive forgetting: `window` is a minimum.  Pure noise (no active
+    # signal) forgets to it; a persistent coherent signal is never truncated; the operator
     # accumulates all frames regardless.
     import math
     from entroptics import Aperture
@@ -192,9 +191,9 @@ def test_aperture_window_is_adaptive_minimum_not_a_clock():
 
 
 def test_operator_resolves_coherent_signal_under_heavy_rfi():
-    # sparse is NOT incoherent: a coherent mode buried under heavy RFI (masked NaN cells +
-    # dead channels) is still resolved -- missing data contributes nothing to the operator,
-    # the valid cells carry the signal.  Noise+RFI stays incoherent (no false signal).
+    # a coherent mode buried under heavy RFI (masked NaN cells + dead channels) is still
+    # resolved -- missing data contributes nothing to the operator, the valid cells carry
+    # the signal.  Noise+RFI stays incoherent (no false signal).
     import math
     from entroptics.dynamics import Dynamics
     r = np.random.default_rng(1); T, F = 400, 30
@@ -211,7 +210,7 @@ def test_operator_resolves_coherent_signal_under_heavy_rfi():
 
 
 def test_aperture_prefers_reference_null_when_given():
-    # the library PREFERS the reference-calibrated null when a signal-free reference is given
+    # the library prefers the reference-calibrated null when a signal-free reference is given
     # (else the derived mp default); an explicit null= overrides both.
     import math
     from entroptics import Aperture, null_providers as nulls
@@ -291,8 +290,8 @@ def test_dominant_decay_rate_recovers_known_rate_and_is_deterministic():
 
 
 def test_connected_decay_rate_reads_the_fluctuation_and_is_deterministic():
-    """The dominant (slowest) mode's rate -log|mu_1| on the CONNECTED (mean-subtracted) spectrum.
-    For a large PERSISTENT (constant) mode plus a decaying fluctuation, the raw dominant mode is
+    """The dominant (slowest) mode's rate -log|mu_1| on the connected (mean-subtracted) spectrum.
+    For a large persistent (constant) mode plus a decaying fluctuation, the raw dominant mode is
     the persistent one (rate ~0) and the connected read is the fluctuation's decay rate.
     Deterministic (operator eigenvalues)."""
     alpha, T = 0.30, 60

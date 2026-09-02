@@ -1,14 +1,35 @@
 {
   "title": "Entroptics",
-  "description": "Read any 2-D signal as a finite optical aperture whose resolution is fixed by the signal's own entropy.",
+  "description": "Read a 2-D signal as a finite optical aperture whose resolution is fixed by the signal's own entropy. Parameter-free and domain-agnostic: no constant is fitted to data or calibrated to a substrate. Includes the paper, the Lean 4 / Mathlib certification of the governing lemmas, and the reproducible validation suite.",
   "upload_type": "software",
   "license": "Apache-2.0",
   "creators": [
-    { "name": "Sessford, Ikailo John", "affiliation": "Ikailo" }
+    {
+      "name": "Sessford, Ikailo John",
+      "affiliation": "Ikailo Inc."
+    }
   ],
-  "keywords": ["entropy", "optics", "aperture", "signal processing", "formal verification"],
+  "keywords": [
+    "entroptics",
+    "entropy",
+    "optics",
+    "aperture",
+    "signal processing",
+    "diffraction limit",
+    "singular value decomposition",
+    "random matrix theory"
+  ],
   "related_identifiers": [
-    { "identifier": "https://github.com/Agience/agience-entroptics", "relation": "isSupplementTo", "scheme": "url" },
-    { "identifier": "https://agience.ai", "relation": "isSupplementTo", "scheme": "url" }
-  ]
+    {
+      "identifier": "https://github.com/Agience/entroptics",
+      "relation": "isSupplementTo",
+      "scheme": "url"
+    },
+    {
+      "identifier": "10.5281/zenodo.21273400",
+      "relation": "isVersionOf",
+      "scheme": "doi"
+    }
+  ],
+  "version": "0.2.1"
 }

@@ -1,4 +1,11 @@
-import Mathlib
+import Mathlib.Data.Real.Basic
+import Mathlib.Data.Matrix.Basic
+import Mathlib.Analysis.InnerProductSpace.PiL2
+import Mathlib.Tactic.FieldSimp
+import Mathlib.Tactic.Linarith
+import Mathlib.Tactic.Ring
+import Mathlib.Tactic.Positivity
+import Mathlib.Tactic.GCongr
 
 /-!
 # Concentration: axial versus directional (PAPER Sec 7)

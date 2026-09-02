@@ -1,6 +1,6 @@
 """Golden / contract tests: pin the full optics read so nothing drifts silently.
 
-Regenerate the golden with ``python src/tests/golden/_generate.py`` ONLY when a change
+Regenerate the golden with ``python src/tests/golden/_generate.py`` only when a change
 to the reads is intended and reviewed.
 """
 import json
@@ -33,7 +33,7 @@ def test_optics_golden(seed):
 
 @pytest.mark.parametrize("seed", [7, 3])
 def test_screen_golden(seed):
-    sc = A.Aperture(build_W(seed)).screen()
+    sc = A.Aperture(build_W(seed)).projection()
     exp = GOLDEN[str(seed)]["screen"]
     assert sc.K_signal == exp["K_signal"]
     assert sc.coherence == pytest.approx(exp["coherence"], rel=1e-8, abs=1e-10)

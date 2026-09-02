@@ -1,21 +1,21 @@
 """
 fields.py -- N-D field handling: the geometry-preserving reduction to the 2-D screen.
 
-``Aperture`` and ``Screen`` are strictly 2-D -- the screen IS a two-axis aperture.
+``Aperture`` and ``Projection`` are strictly 2-D -- the screen is a two-axis aperture.
 A higher-dimensional field (a video T x H x W, a volume, a multichannel series, any
 tensor field) must be reduced to 2-D before it can be read.  The naive reduction --
-flatten every non-ordered axis into one feature axis -- DESTROYS the within-plane
+flatten every non-ordered axis into one feature axis -- destroys the within-plane
 correlation and can silently invert a read.  This module is the bridge: it keeps each
 screen plane intact -- use it in place of a bare ``reshape``.
 
-Two reductions, and WHICH ONE is correct depends on the read:
+Two reductions, and which one is correct depends on the read:
 
-  * ``over_planes`` / ``slabs`` -- KEEP each plane intact, iterate the other axes and
-    aggregate.  The correct reduction for FEATURE / plane reads (``phi_F``,
+  * ``over_planes`` / ``slabs`` -- keep each plane intact, iterate the other axes and
+    aggregate.  The correct reduction for feature / plane reads (``phi_F``,
     ``spectral_optics``, ``concentration``): each plane is its own screen.
-  * ``pool`` -- FLATTEN all non-ordered axes into the feature axis, so every off-axis
+  * ``pool`` -- flatten all non-ordered axes into the feature axis, so every off-axis
     site becomes a sample of the same ordered-axis process.  The correct reduction for
-    ORDERED reads (``phi_T``, ``decay``, ``rates``): the sites are samples of one decay.
+    ordered reads (``phi_T``, ``decay``, ``rates``): the sites are samples of one decay.
 
 Getting these backwards changes the answer, so the choice lives here (documented).  Backend-agnostic (numpy or torch).
 """
@@ -32,7 +32,7 @@ _REDUCERS = {"mean": np.mean, "median": np.median, "max": np.max,
 
 def slabs(field, plane_axes):
     """Yield each 2-D ``(plane_axes[0], plane_axes[1])`` slice of an N-D ``field``,
-    iterating over ALL other axes -- geometry-preserving (each plane stays intact).
+    iterating over all other axes -- geometry-preserving (each plane stays intact).
     ``plane_axes`` are the two axes that form the screen plane.  Backend-agnostic:
     each yielded plane is in ``field``'s backend (numpy or torch)."""
     xp = _env.ns(field)
@@ -53,7 +53,7 @@ def slabs(field, plane_axes):
 
 def over_planes(field, plane_axes, read=None, reduce: str = "mean") -> float:
     """Apply a scalar 2-D ``read`` to each plane of ``field`` (default ``phi``) and
-    AGGREGATE over the slabs.  ``reduce`` in {mean, median, max, min, sum}.  The
+    aggregate over the slabs.  ``reduce`` in {mean, median, max, min, sum}.  The
     geometry-preserving reduction for feature / plane reads: each plane is read as its
     own screen, so within-plane correlation is preserved.  Returns a Python float
     (nan if the field has no planes)."""
@@ -67,10 +67,10 @@ def over_planes(field, plane_axes, read=None, reduce: str = "mean") -> float:
 
 
 def pool(field, ordered_axis: int):
-    """Flatten all NON-ordered axes of an N-D ``field`` into the feature axis: return a
+    """Flatten all non-ordered axes of an N-D ``field`` into the feature axis: return a
     2-D ``(L_ordered, F')`` array whose rows are the ordered index and whose columns
-    pool every off-axis site as a SAMPLE of the same ordered-axis process.  The correct
-    reduction for ORDERED reads (``phi_T``, ``decay``, ``rates``) -- NOT for feature /
+    pool every off-axis site as a sample of the same ordered-axis process.  The correct
+    reduction for ordered reads (``phi_T``, ``decay``, ``rates``) -- not for feature /
     plane reads (use ``over_planes`` there).  Backend-agnostic."""
     xp = _env.ns(field)
     o = int(ordered_axis) % len(field.shape)

@@ -1,12 +1,14 @@
-"""The cheap signal GATES for high-rate capture: ``Screen.has_signal`` / ``Aperture.has_signal``
-mirror ``K_signal > 0`` exactly, and the SVD-free ``probe_signal`` is CONSERVATIVE -- it may
+"""The cheap signal gates for high-rate capture.
+
+``Projection.has_signal``, and ``Aperture.has_signal()`` which delegates to it, must mirror
+``K_signal > 0`` exactly, and the SVD-free ``probe_signal`` is conservative -- it may
 over-fire but must never return False when a real mode is resolved (so gating on it cannot drop a
 detection).  Deterministic seeds."""
 import numpy as np
 import pytest
 
-from entroptics import Screen, Aperture
-from entroptics.screen import probe_signal
+from entroptics import Projection, Aperture
+from entroptics.projection import probe_signal
 
 
 def _mix(n=40, N=96, F=12, seed=0):
@@ -20,18 +22,18 @@ def _mix(n=40, N=96, F=12, seed=0):
 def test_screen_has_signal_matches_k_signal():
     hits = 0
     for W in _mix(seed=1):
-        s = Screen(W)
+        s = Projection(W)
         assert s.has_signal == (s.K_signal > 0)
         hits += s.has_signal
     assert 0 < hits < 40                               # both branches (signal / no signal) are exercised
 
 
 def test_aperture_has_signal_matches_screen():
-    # planes short enough (< the 128 window) that the Aperture never truncates -> equals Screen.
+    # planes short enough (< the 128 window) that the Aperture never truncates -> equals Projection.
     for W in _mix(N=96, seed=2):
         ap = Aperture(W)
-        assert ap.has_signal() == Screen(W).has_signal
-        assert ap.has_signal() == (Screen(W).K_signal > 0)
+        assert ap.has_signal() == Projection(W).has_signal
+        assert ap.has_signal() == (Projection(W).K_signal > 0)
 
 
 def test_aperture_has_signal_is_bool_and_idempotent():
@@ -47,10 +49,10 @@ def test_aperture_has_signal_is_bool_and_idempotent():
 
 def test_probe_signal_conservative_never_false_on_signal():
     for W in _mix(seed=3):
-        if Screen(W).K_signal > 0:
+        if Projection(W).K_signal > 0:
             assert probe_signal(W) is True             # never drop a real detection
 
 
 def test_probe_signal_defers_on_gaps():
     W = np.random.default_rng(1).standard_normal((40, 8)); W[0, 0] = np.nan
-    assert probe_signal(W) is True                     # masked / gapped -> defer to the full Screen
+    assert probe_signal(W) is True                     # masked / gapped -> defer to the full Projection

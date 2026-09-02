@@ -1,13 +1,13 @@
 """
 Experiment 6 -- Etendue / space-bandwidth product <-> rank & bandwidth.
 
-Ground truth: signals of KNOWN effective rank and KNOWN feature bandwidth.
-  (a) RANK sweep: W = sum of R equal-strength orthogonal rank-1 modes + light noise,
+Ground truth: signals of known effective rank and known feature bandwidth.
+  (a) Rank sweep: W = sum of R equal-strength orthogonal rank-1 modes + light noise,
       for increasing R.  As the true rank rises, more optical modes are active.
-  (b) BANDWIDTH sweep: a feature-bandlimited signal occupying B of F frequency bins,
+  (b) Bandwidth sweep: a feature-bandlimited signal occupying B of F frequency bins,
       for increasing B.  As the true bandwidth rises, the feature aperture widens.
-We read etendue = phi_F*phi_T and space_bandwidth = n_F*n_T and check both increase
-monotonically with the planted rank / bandwidth.
+etendue = phi_F*phi_T and space_bandwidth = n_F*n_T both increase monotonically
+with the planted rank / bandwidth.
 
 Deterministic (fixed seeds).  Re-runnable: `python exp6_etendue_sbw.py`.
 """

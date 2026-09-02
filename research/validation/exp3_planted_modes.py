@@ -5,9 +5,9 @@ Ground truth: K orthogonal rank-1 modes (K in {0,1,3,5}) planted at a known stre
 into an iid Gaussian background, across several shapes (incl. a tall (600,40) and a
 wide (40,600)).  Each mode carries singular value snr*edge, edge = the iid bulk
 singular-value edge, so ``snr`` is the mode strength in units of the noise floor.
-We report Screen(W).K_signal vs the true K as a function of snr.
+Projection(W).K_signal is reported against the true K as a function of snr.
 
-    Screen.K_signal counts singular values above the derived Johnstone / Tracy-Widom
+    Projection.K_signal counts singular values above the derived Johnstone / Tracy-Widom
     noise floor (screen.noise_floor): the shape-derived finite-size edge with the
     chi^2 and centering-degree-of-freedom corrections to the noise level, so the false-
     alarm rate is calibrated flat across aspect ratios (no fitted coefficient).
@@ -20,7 +20,7 @@ import _bootstrap  # noqa: F401 -- run against local src/, not any installed ent
 
 import numpy as np
 
-from entroptics import Screen
+from entroptics import Projection
 
 import common as C
 
@@ -41,7 +41,7 @@ def run() -> dict:
                 ks = []
                 for s in range(N_SEEDS):
                     W = C.planted_lowrank(T, F, K, snr, seed=SEED0 + s)
-                    ks.append(Screen(W).K_signal)
+                    ks.append(Projection(W).K_signal)
                 ks = np.array(ks)
                 mean_k = float(ks.mean())
                 acc = float(np.mean(ks == K))
@@ -69,7 +69,7 @@ def run() -> dict:
         title="3. Planted low-rank modes <-> K_signal",
         setup=(f"K in {KS} orthogonal rank-1 modes planted at snr in {SNRS} (units of the "
                f"iid bulk edge) into iid Gaussian backgrounds of shapes {SHAPES}; "
-               f"{N_SEEDS} seeds each.  Screen(W).K_signal vs true K."),
+               f"{N_SEEDS} seeds each.  Projection(W).K_signal vs true K."),
         table=table,
         metrics=dict(detect_accuracy_by_snr=acc_by_snr, k0_specificity=spec,
                      best_snr=best),

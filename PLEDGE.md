@@ -14,9 +14,9 @@ use, including such use by:
 - academic and research institutions; and
 - non-profit organizations.
 
-This promise covers all of the Entroptics methods, including the reserved
-inventions described in PATENTS.md. For non-commercial and research use, all 
-of them are free.
+This promise covers all of the Entroptics methods, including inventions
+not implemented in this repository. For non-commercial and research use,
+all of them are free.
 
 ## What counts as non-commercial and research use
 
@@ -34,9 +34,10 @@ use and is not covered by this promise.
 ## Commercial use
 
 The reference implementation remains free for everyone, including
-commercial users, under the Apache License 2.0. Commercial use of the
-reserved inventions requires a separate license. For commercial licensing
-or collaboration, contact connect@ikailo.com.
+commercial users, under the Apache License 2.0. Commercial use of Ikailo
+Inc.'s other inventions, including pending patent applications, requires a
+separate license. For commercial licensing or collaboration, contact
+connect@agience.ai.
 
 ## Defensive termination
 

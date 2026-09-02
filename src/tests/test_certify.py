@@ -40,8 +40,8 @@ def test_resolved_count_band_widens_interval(W):
 
 @pytest.mark.parametrize("seed", [0, 3, 11])
 def test_resolved_count_soundness_under_perturbation(seed):
-    """Weyl: with band >= the actual eigenvalue perturbation, the certified interval on the READ
-    spectrum encloses the TRUE resolved count (the real-data instance of `resolved_count_certified`)."""
+    """Weyl: with band >= the actual eigenvalue perturbation, the certified interval on the read
+    spectrum encloses the true resolved count (the real-data instance of `resolved_count_certified`)."""
     rng = np.random.default_rng(seed)
     X = build_W(seed)
     Xp = X + 0.05 * rng.standard_normal(X.shape)

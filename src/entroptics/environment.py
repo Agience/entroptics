@@ -13,9 +13,80 @@ differ between them.  Ops with identical spelling (``xp.linalg.eigh``, ``xp.abs`
 """
 from __future__ import annotations
 
+import math
 import os
 
 import numpy as np
+
+
+def available_cpus() -> int:
+    """CPUs ALLOCATED to this process, container-aware -- the cgroup CPU quota when set (a pod /
+    container gets a fraction; ``os.cpu_count()`` and ``sched_getaffinity`` return the HOST count on
+    RunPod-style pods, which over-subscribes the thread pool).  Falls back to affinity, then the host
+    count.  Always >= 1."""
+    try:                                                  # cgroup v2: "<quota> <period>" or "max ..."
+        parts = open("/sys/fs/cgroup/cpu.max").read().split()
+        if parts and parts[0] != "max":
+            return max(1, int(math.ceil(int(parts[0]) / (int(parts[1]) if len(parts) > 1 else 100000))))
+    except Exception:
+        pass
+    try:                                                  # cgroup v1
+        q = int(open("/sys/fs/cgroup/cpu/cpu.cfs_quota_us").read())
+        p = int(open("/sys/fs/cgroup/cpu/cpu.cfs_period_us").read())
+        if q > 0:
+            return max(1, int(math.ceil(q / p)))
+    except Exception:
+        pass
+    try:
+        return max(1, len(os.sched_getaffinity(0)))       # respects cpuset
+    except Exception:
+        return max(1, os.cpu_count() or 1)
+
+
+def available_memory_gb(on_gpu: bool = False) -> float | None:
+    """FREE memory this process can allocate RIGHT NOW, in GB -- container-aware.  The correct
+    delimiter is what is AVAILABLE (free), not the total: other processes hold memory, so budgeting
+    against the total would over-commit and OOM.  ``on_gpu``: free VRAM of the current CUDA device.
+    Else the free memory WITHIN the cgroup allocation (``memory.max - memory.current``; a pod gets a
+    fraction and ``/proc/meminfo`` shows the HOST), also bounded by the host ``MemAvailable``.
+    Returns ``None`` when it cannot be determined (no chunking is then applied)."""
+    if on_gpu:
+        try:
+            import torch
+            free = torch.cuda.mem_get_info()[0]                # driver-free bytes on the device
+            reusable = torch.cuda.memory_reserved() - torch.cuda.memory_allocated()   # our cache
+            return float(free + max(reusable, 0)) / 1e9        # what our NEXT alloc can actually use
+        except Exception:
+            return None
+    frees = []
+    try:                                                  # cgroup v2: free within the allocation
+        mx = open("/sys/fs/cgroup/memory.max").read().strip()
+        if mx != "max":
+            cur = int(open("/sys/fs/cgroup/memory.current").read())
+            frees.append(int(mx) - cur)
+    except Exception:
+        try:                                              # cgroup v1
+            mx = int(open("/sys/fs/cgroup/memory/memory.limit_in_bytes").read())
+            if mx <= (1 << 62):                           # not the "unlimited" sentinel
+                cur = int(open("/sys/fs/cgroup/memory/memory.usage_in_bytes").read())
+                frees.append(mx - cur)
+        except Exception:
+            pass
+    try:                                                  # host MemAvailable (a bound; host in a pod)
+        for line in open("/proc/meminfo"):
+            if line.startswith("MemAvailable"):
+                frees.append(int(line.split()[1]) * 1024)
+                break
+    except Exception:
+        pass
+    frees = [x for x in frees if x and x > 0]
+    if frees:
+        return float(min(frees)) / 1e9                    # the tightest free bound
+    try:                                                  # Windows / macOS fallback
+        import psutil
+        return float(psutil.virtual_memory().available) / 1e9   # FREE, not total
+    except Exception:
+        return None
 
 # ── compute precision: an ENVIRONMENTAL setting, not a per-read knob ───────────────────
 # The float width the projection/monitor path computes in.  Default 64 (bit-perfect -- the
@@ -69,8 +140,20 @@ def ns(x):
 
 
 def is_torch(xp) -> bool:
-    """True if xp is the torch namespace rather than numpy."""
+    """True if xp is the torch namespace."""
     return xp is not np
+
+
+def is_cuda(x) -> bool:
+    """True if ``x`` is a torch tensor resident on a CUDA device (the regime where batched dense
+    cuSOLVER factorisations -- SVD / eigh / LDL -- are all ~1-2 s and the matmul-based randomized
+    range finder is the only throughput path; on numpy or torch-CPU the exact SVD is fine)."""
+    if type(x).__module__.partition(".")[0] != "torch":
+        return False
+    try:
+        return bool(x.is_cuda)
+    except Exception:  # pragma: no cover
+        return False
 
 
 # ── dtype / construction ──────────────────────────────────────────────────────
@@ -131,6 +214,33 @@ def flip(xp, v):
     return xp.flip(v, [0]) if is_torch(xp) else v[::-1]
 
 
+def flip2(xp, v):
+    """Reverse along the LAST axis (batched descending sort of eigh's ascending output)."""
+    return xp.flip(v, [-1]) if is_torch(xp) else v[..., ::-1]
+
+
+def diagonal(xp, G):
+    """Batched main diagonal of ``(..., M, M)`` -> ``(..., M)``."""
+    return xp.diagonal(G, dim1=-2, dim2=-1) if is_torch(xp) else np.diagonal(G, axis1=-2, axis2=-1)
+
+
+def eye(xp, n, *, ref):
+    """Identity ``(n, n)`` matching ``ref``'s dtype/device."""
+    if is_torch(xp):
+        return xp.eye(int(n), dtype=ref.dtype, device=ref.device)
+    return np.eye(int(n), dtype=ref.dtype)
+
+
+def randn_like(xp, shape, *, ref, seed=0):
+    """A DETERMINISTIC standard-normal array of ``shape`` matching ``ref``'s dtype/device
+    (seeded generator, so the randomized sketch is reproducible on either backend)."""
+    if is_torch(xp):
+        import torch
+        g = torch.Generator(device=ref.device).manual_seed(int(seed))
+        return torch.randn(*shape, generator=g, device=ref.device, dtype=ref.dtype)
+    return np.random.default_rng(seed).standard_normal(shape).astype(ref.dtype)
+
+
 def sum_ax(xp, x, ax=None, keep=False):
     """Sum over axis ``ax`` (None = all).  Wraps numpy ``axis=`` / torch ``dim=``."""
     if is_torch(xp):
@@ -177,6 +287,14 @@ def median1d(xp, v):
     return xp.quantile(v, 0.5) if is_torch(xp) else np.median(v)
 
 
+def median_ax(xp, x, ax, keep=False):
+    """Median over axis ``ax`` (numpy-style interpolated), keeping the axis if ``keep``.
+    torch's ``median`` is the lower median; ``quantile(.,0.5)`` matches numpy's interpolation."""
+    if is_torch(xp):
+        return xp.quantile(x, 0.5, dim=ax, keepdim=keep)
+    return np.median(x, axis=ax, keepdims=keep)
+
+
 def movedim(xp, x, src, dst):
     """Move axis ``src`` to position ``dst`` (numpy moveaxis / torch movedim)."""
     return xp.movedim(x, src, dst) if is_torch(xp) else np.moveaxis(x, src, dst)
@@ -211,6 +329,11 @@ def cat0(xp, parts):
     return xp.cat(parts, dim=0) if is_torch(xp) else np.concatenate(parts, axis=0)
 
 
+def cat1(xp, parts):
+    """Concatenate arrays along axis 1 (numpy concatenate / torch cat)."""
+    return xp.cat(parts, dim=1) if is_torch(xp) else np.concatenate(parts, axis=1)
+
+
 def linspace(xp, a, b, n, *, ref=None):
     """``n`` evenly spaced points on ``[a, b]`` at the compute precision (on ``ref``'s device
     for torch)."""
@@ -230,6 +353,28 @@ def floor_int(xp, x):
 def std0(xp, x):
     """Population standard deviation (ddof = 0)."""
     return xp.std(x, unbiased=False) if is_torch(xp) else np.std(x)
+
+
+def std_ax(xp, x, ax):
+    """Population standard deviation (ddof = 0) over axis ``ax``."""
+    return xp.std(x, dim=ax, unbiased=False) if is_torch(xp) else np.std(x, axis=ax)
+
+
+def amax_abs(xp, x) -> float:
+    """Max absolute value of ``x`` as a Python float (a convergence-metric scalar)."""
+    return float(x.abs().amax()) if is_torch(xp) else float(np.abs(x).max())
+
+
+def round_int(xp, x):
+    """Round to the nearest integer (int64).  Exact for a value already at an integer."""
+    return x.round().long() if is_torch(xp) else np.round(x).astype(np.int64)
+
+
+def vnorm_ax(xp, x, ax, keep=True):
+    """Euclidean norm over axis ``ax`` (keeping the axis if ``keep``)."""
+    if is_torch(xp):
+        return xp.linalg.vector_norm(x, dim=ax, keepdim=keep)
+    return np.linalg.norm(x, axis=ax, keepdims=keep)
 
 
 def svdvals(xp, M):

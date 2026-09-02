@@ -1,17 +1,17 @@
 """Batched ensemble reads: ``read_batch`` (screen monitor) and ``spectral_batch`` (correlation
-eigvalsh) must be BIT-IDENTICAL to reading each frame with ``Screen`` / ``spectral_optics`` --
+eigvalsh) must be bit-identical to reading each frame with ``Projection`` / ``spectral_optics`` --
 batching only changes the loop nesting, never a float -- and must fall back cleanly for a frame
 they cannot batch (masked / non-finite / complex / odd shape / too small).  Deterministic seeds."""
 import numpy as np
 import pytest
 
-from entroptics import Screen, read_batch, BatchRead
+from entroptics import Projection, read_batch, BatchRead
 from entroptics.reads import spectral_batch, spectral_optics
 from entroptics.null_providers import reference_null, top_spectrum_value
 
 
 def _frames(shape=(128, 8), n=24, seed=0):
-    """A mix of pure-noise (no fold) and increasingly structured (folding) frames of ONE shape,
+    """A mix of pure-noise (no fold) and increasingly structured (folding) frames of one shape,
     so both the fold-guard branches and the F_eff grouping are exercised."""
     rng = np.random.default_rng(seed)
     N, F = shape
@@ -24,7 +24,7 @@ def _frames(shape=(128, 8), n=24, seed=0):
 @pytest.mark.parametrize("shape", [(128, 8), (8, 8), (64, 16), (200, 32)])
 def test_read_batch_bit_identical(shape):
     frames = _frames(shape)
-    for r, s in zip(read_batch(frames), (Screen(f) for f in frames)):
+    for r, s in zip(read_batch(frames), (Projection(f) for f in frames)):
         assert r.K_signal == s.K_signal
         assert r.sigma_top == s.sigma_top
         assert float(r.noise_floor) == float(s.noise_floor)
@@ -34,25 +34,25 @@ def test_read_batch_bit_identical(shape):
 def test_read_batch_with_null_provider():
     """A non-default (reference-null) provider is applied per frame -- still bit-identical."""
     frames = _frames((8, 8), n=20)
-    prov = reference_null([Screen(np.random.default_rng(k).standard_normal((8, 8))).sigma_top
+    prov = reference_null([Projection(np.random.default_rng(k).standard_normal((8, 8))).sigma_top
                            for k in range(12)])
-    for r, s in zip(read_batch(frames, null=prov), (Screen(f, null=prov) for f in frames)):
+    for r, s in zip(read_batch(frames, null=prov), (Projection(f, null=prov) for f in frames)):
         assert r.K_signal == s.K_signal
         assert float(r.noise_floor) == float(s.noise_floor)
         assert np.array_equal(r.S, s.S)
 
 
 def test_read_batch_mixed_fold_widths():
-    """Frames whose entropy fold lands on DIFFERENT widths must each be grouped and stay exact."""
+    """Frames whose entropy fold lands on different widths must each be grouped and stay exact."""
     frames = _frames((100, 32), n=30)
     got = read_batch(frames)
     assert len({r.S.shape[0] for r in got}) > 1        # more than one F_eff group is actually present
-    for r, s in zip(got, (Screen(f) for f in frames)):
+    for r, s in zip(got, (Projection(f) for f in frames)):
         assert r.K_signal == s.K_signal and np.array_equal(r.S, s.S)
 
 
 def test_read_batch_fallbacks_match_per_frame():
-    """Complex / NaN / odd-shape frames fall back to a per-frame Screen -- still the right answer."""
+    """Complex / NaN / odd-shape frames fall back to a per-frame Projection -- still the right answer."""
     rng = np.random.default_rng(1)
     good = rng.standard_normal((32, 8))
     cplx = rng.standard_normal((32, 8)) + 1j * rng.standard_normal((32, 8))
@@ -60,7 +60,7 @@ def test_read_batch_fallbacks_match_per_frame():
     odd = rng.standard_normal((16, 8))                 # a different shape than the others
     frames = [good, cplx, nan, odd]
     for r, f in zip(read_batch(frames), frames):
-        s = Screen(f)
+        s = Projection(f)
         assert r.K_signal == s.K_signal and np.array_equal(r.S, s.S)
 
 
