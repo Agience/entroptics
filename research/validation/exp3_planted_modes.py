@@ -16,6 +16,8 @@ Deterministic (fixed seeds).
 """
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401 -- run against local src/, not any installed entroptics
+
 import numpy as np
 
 from entroptics import Screen

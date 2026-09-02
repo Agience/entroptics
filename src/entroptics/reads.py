@@ -740,106 +740,6 @@ def shape_factor(W, profile) -> float:
     return float(ad / pf) if pf > 0 else float("nan")
 
 
-def decay_rate(profile) -> float:
-    """Exponential decay RATE alpha of a supplied 1-D decay / autocorrelation profile
-    C(tau): the log-linear least-squares slope of log(C/C(0)) over the positive lobe,
-    so C(tau) ~ C(0) exp(-alpha tau).  A CALIBRATED single rate from an external curve
-    -- complements the entropy-width ``a_delta`` (a scale, not a fitted rate) and the
-    EXACT per-mode ``Aperture.rates()``.  Returns alpha >= 0 (0 if no decay resolved)."""
-    c = np.asarray(_env.to_numpy(profile), float)
-    if c.size < 2 or c[0] == 0:
-        return 0.0
-    cn = c / c[0]
-    below = np.where(cn <= 0.0)[0]                      # positive lobe up to first crossing
-    end = max(2, int(below[0]) if below.size else cn.size)
-    taus = np.arange(end, dtype=float)
-    y = np.log(np.clip(cn[:end], 1e-12, None))
-    tbar, ybar = taus.mean(), y.mean()
-    denom = float(np.sum((taus - tbar) ** 2))
-    if denom <= 0:
-        return 0.0
-    slope = float(np.sum((taus - tbar) * (y - ybar)) / denom)
-    return max(0.0, -slope)
-
-
-# ══════════════════════════════════════════════════════════════════════════════
-# Periodic (wrapped-axis) decay: the CIRCULAR autocorrelation + its image-folded
-# (cosh) decay rate -- the window-invariant rate on a torus/closed ordered axis.
-# ══════════════════════════════════════════════════════════════════════════════
-
-def periodic_decay(screens) -> np.ndarray:
-    """The PERIODIC (circular) ordered-axis autocorrelation C(t) of the feature-AGGREGATE
-    (DC) signal -- the torus companion to ``decay``.  On a WRAPPED ordered axis (one whose
-    index is periodic: a closed loop / torus of extent L), a mode that decays forward also
-    returns as a backward-propagating IMAGE, so the true autocorrelation is not a one-sided
-    decay but SYMMETRIC, C(t) = C(L - t) (a cosh for a single exponential).  The LINEAR,
-    biased ``decay`` cannot see this; the CIRCULAR autocorrelation (Wiener-Khinchin on the
-    wrapped axis, one FFT) reads it exactly.
-
-    Aggregation: the feature-aggregate a(t) = sum_f W[t, f] (the DC / zero feature-frequency
-    projection) is the LONGEST-RANGE channel -- the one that sets the diffraction limit -- so
-    its periodic decay isolates the SLOWEST rate, where the per-channel sum in ``decay`` would
-    blend in the faster short-range channels.  CONNECTED: the disconnected aggregate mean is
-    removed, so a DC pedestal (a nonzero baseline / offset) does not read as a persistent mode.
-
-    ``screens`` is a single 2-D ``(T, F)`` screen OR an iterable/stack of them; the connected
-    mean is taken over the WHOLE stack, and the per-screen autocorrelations are ENSEMBLE-
-    AVERAGED before normalizing to C(0) = 1.  A single short screen lacks the statistics to
-    fix the pedestal -- pass the ensemble when you have it.  Read the window-invariant rate off
-    the result with ``effective_decay_rate``.  Real-valued profile; O(n T log T)."""
-    scr = screens
-    if hasattr(scr, "shape") and len(getattr(scr, "shape", ())) == 2:
-        scr = [scr]                                        # a single (T, F) screen
-    aggs = []
-    for W in scr:
-        Wn = np.asarray(_env.to_numpy(live_view(W)), float)
-        if Wn.ndim != 2 or Wn.shape[0] < 2:
-            continue
-        aggs.append(Wn.sum(axis=1))                        # a(t): DC (zero feature-freq) projection
-    if not aggs:
-        return np.ones(1)
-    T = min(a.size for a in aggs)
-    aggs = [a[:T] for a in aggs]                           # align lengths (ensemble shares the wrap)
-    grand = float(np.mean(np.concatenate(aggs)))           # the disconnected mean <a> (connected below)
-    power = np.zeros(T // 2 + 1)
-    for a in aggs:
-        fa = np.fft.rfft(a - grand)                        # circular: the wrapped-axis transform
-        power += (fa.conj() * fa).real                     # |a_hat|^2 (Wiener-Khinchin power)
-    C = np.fft.irfft(power, n=T)                           # ensemble-summed circular autocorrelation
-    c0 = C[0] if C[0] != 0 else (float(np.abs(C).max()) or 1.0)
-    return C / c0
-
-
-def effective_decay_rate(profile, *, floor: float = 0.02) -> float:
-    """The WINDOW-INVARIANT decay rate D of a PERIODIC correlator ``profile`` C(t) (from
-    ``periodic_decay``), via the image-folded effective rate:
-
-        m_eff(t) = arccosh[ (C(t-1) + C(t+1)) / (2 C(t)) ]  ==  D
-
-    which is EXACT for a single cosh at every lag and every window length.  A single decaying
-    mode on a wrapped axis is C(t) = A[e^{-D t} + e^{-D (L - t)}] = 2A e^{-D L/2} cosh(D(t - L/2));
-    the arccosh inverts that cosh ANALYTICALLY, removing the backward IMAGE, so the rate does
-    NOT drift with the window length L -- unlike a pure-exponential fit (``decay_rate``) or the
-    DMD (``Aperture.rates()``), which misfit the cosh and drift with L.  Read over the SIGNAL
-    REGION only: t from 1 while C(t) is above the noise floor (C(t) > ``floor`` * C(0)) and
-    still DECREASING -- stopping before it decays into noise or turns UP into the backward image
-    near L/2 -- and take the median (robust to the tail).  Returns D >= 0 (0 if no signal region
-    is resolved / flat correlator, where the rate is genuinely ~0)."""
-    c = np.asarray(_env.to_numpy(profile), float)
-    L = int(c.size)
-    if L < 3 or c[0] == 0:
-        return 0.0
-    cn = c / c[0]
-    ms = []
-    for t in range(1, L // 2):
-        if cn[t] <= floor or cn[t] >= cn[t - 1]:           # into noise, or the backward-image turn-up
-            break
-        x = (cn[t - 1] + cn[t + 1]) / (2.0 * cn[t])
-        if x >= 1.0:
-            ms.append(math.acosh(x))
-    return float(np.median(ms)) if len(ms) >= 2 else 0.0
-
-
 def assemble_optics(aT: AxisRead, aF: AxisRead, sp: SpectralOptics,
                     dl: DiffractionLimit, *, phi_val: float, strehl_val: float,
                     focus: float, intensity: float,
@@ -971,7 +871,7 @@ __all__ = [
     # decay (OTF) + diffraction limit + Mercer certificate
     "decay", "diffraction_limit", "DiffractionLimit",
     "mercer_certificate", "MercerCertificate",
-    "rayleigh_shape_factor", "fresnel_number", "shape_factor", "decay_rate",
+    "rayleigh_shape_factor", "fresnel_number", "shape_factor",
     "optics", "assemble_optics",
     # structure vs observation window
     "scale_profile", "ScaleProfile",

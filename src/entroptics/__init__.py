@@ -21,7 +21,9 @@ from .screen import read_batch, BatchRead           # batched monitor (bit-ident
 from .reads import spectral_batch                    # batched correlation-eigvalsh read (bit-identical)
 from .sweep import sweep                             # the aperture swept where there's coherence
 from .extract import extract                         # the read-side FILTER (project onto resolved modes)
+from .dynamics import hankel_spectrum, jackknife, HankelSpectrum  # scalar-sequence moment pencil + jackknife SE
 
-__version__ = "0.1.0"
+__version__ = "0.1.5"
 __all__ = list(_aperture.__all__) + ["set_precision", "precision", "read_batch", "BatchRead",
-                                     "spectral_batch", "sweep", "extract"]
+                                     "spectral_batch", "sweep", "extract",
+                                     "hankel_spectrum", "jackknife", "HankelSpectrum"]

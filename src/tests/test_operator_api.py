@@ -102,7 +102,7 @@ def test_scale_profile_via_aperture(W):
     assert list(sp.windows) == [20, 40, 80]
 
 
-# ── dominance, robust noise, >2D raise, decay_rate ────────────────────────────
+# ── dominance, robust noise, >2D raise ───────────────────────────────────────
 
 def test_dominance_matches_definition_and_bounds(W):
     sp = spectral_optics(W)
@@ -276,8 +276,29 @@ def test_spectral_optics_raises_on_high_d():
         spectral_optics(np.random.default_rng(0).standard_normal(8))   # 1-D
 
 
-def test_decay_rate_recovers_exponential():
-    from entroptics.reads import decay_rate
-    tau = np.arange(30)
-    assert decay_rate(np.exp(-0.25 * tau)) == pytest.approx(0.25, abs=1e-6)
-    assert decay_rate(np.ones(10)) == 0.0            # no decay -> rate 0
+# ── dominant_decay_rate: the dominant (slowest) operator mode's rate ───────────
+
+def test_dominant_decay_rate_recovers_known_rate_and_is_deterministic():
+    """The dominant (slowest) mode's rate -log|mu_1| from the operator.  A rank-1 signal
+    decaying at rate alpha has dominant eigenvalue e^{-alpha}, so the read returns alpha.
+    It is deterministic (operator eigenvalues)."""
+    alpha, T = 0.25, 60
+    v = np.array([1.0, 0.5, -0.3, 0.7])
+    W = np.exp(-alpha * np.arange(T))[:, None] * v[None, :]        # (T, F) rank-1 decay
+    ap = A.Aperture(W)
+    assert ap.dominant_decay_rate == pytest.approx(alpha, abs=1e-6)
+    assert A.Aperture(W).dominant_decay_rate == ap.dominant_decay_rate   # deterministic
+
+
+def test_connected_decay_rate_reads_the_fluctuation_and_is_deterministic():
+    """The dominant (slowest) mode's rate -log|mu_1| on the CONNECTED (mean-subtracted) spectrum.
+    For a large PERSISTENT (constant) mode plus a decaying fluctuation, the raw dominant mode is
+    the persistent one (rate ~0) and the connected read is the fluctuation's decay rate.
+    Deterministic (operator eigenvalues)."""
+    alpha, T = 0.30, 60
+    u = np.array([1.0, -1.0, 0.5, -0.5])
+    W = 10.0 * np.ones((T, 4)) + np.exp(-alpha * np.arange(T))[:, None] * u[None, :]
+    ap = A.Aperture(W)
+    assert abs(ap.dominant_decay_rate) < 1e-3         # raw: the persistent (constant) mode, rate ~0
+    assert ap.connected_decay_rate > 0.1              # connected: the decaying fluctuation
+    assert A.Aperture(W).connected_decay_rate == ap.connected_decay_rate   # deterministic

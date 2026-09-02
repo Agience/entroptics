@@ -56,8 +56,7 @@ from .reads import (
     concentration_band, concentration, Concentration,
     decay, diffraction_limit, DiffractionLimit,
     mercer_certificate, MercerCertificate,
-    rayleigh_shape_factor, fresnel_number, shape_factor, decay_rate, optics,
-    periodic_decay, effective_decay_rate,
+    rayleigh_shape_factor, fresnel_number, shape_factor, optics,
     scale_profile, ScaleProfile,
 )
 from .tensor import tensor_read, tensor_embed, tensor_reconstruct, tensor_fidelity
@@ -420,25 +419,21 @@ class Aperture:
         """xi -- the integral correlation length (reciprocal of the Abbe limit)."""
         return self.diffraction_limit.xi
 
-    # ── periodic (wrapped-axis) decay: the torus companion to the linear decay ──
     @property
-    def periodic_decay(self) -> np.ndarray:
-        """The PERIODIC (circular) ordered-axis autocorrelation of the feature-aggregate
-        (DC) signal for THIS window -- the torus companion to ``decay`` (see
-        reads.periodic_decay).  Connected; normalized to C(0) = 1.  Reads the backward
-        IMAGE that the linear ``decay`` cannot; for an unbiased estimate pass
-        the whole ENSEMBLE to reads.periodic_decay rather than a single window."""
-        return self._c("pdecay", lambda: reads.periodic_decay(self.W))
+    def dominant_decay_rate(self) -> float:
+        """The decay rate of the DOMINANT (slowest, |mu|-largest) mode, alpha_1 = -log|mu_1|, from
+        the exact Koopman/DMD operator spectrum (``rates().dominant``).  A forward operator read:
+        identify the linear propagator from the trajectory and read its dominant rate, the slowest
+        mode of a multi-mode signal.  Deterministic in the operator eigenvalues."""
+        return float(self.rates().dominant)
 
     @property
-    def effective_decay_rate(self) -> float:
-        """The WINDOW-INVARIANT decay rate of the periodic correlator (see
-        reads.effective_decay_rate): the image-folded (cosh) effective rate of THIS
-        window's ``periodic_decay``.  On a wrapped ordered axis it does NOT drift with the
-        window length, unlike the pure-exponential ``rates().dominant`` / ``decay_rate``
-        (which misfit the cosh).  For a clean estimate feed the ENSEMBLE to
-        reads.periodic_decay + reads.effective_decay_rate."""
-        return self._c("edr", lambda: reads.effective_decay_rate(self.periodic_decay))
+    def connected_decay_rate(self) -> float:
+        """The decay rate of the DOMINANT (slowest) mode, alpha_1 = -log|mu_1|, from the exact
+        Koopman/DMD operator spectrum on the CONNECTED (mean-subtracted) dynamics -- the
+        fluctuation dynamics (see ``Dynamics.connected_decay_rate``).  A forward operator read;
+        deterministic in the operator eigenvalues."""
+        return self._core().connected_decay_rate()
 
     @property
     def mercer(self) -> MercerCertificate:
@@ -691,9 +686,7 @@ __all__ = [
     # decay (OTF) + diffraction limit + Mercer certificate
     "decay", "diffraction_limit", "DiffractionLimit",
     "mercer_certificate", "MercerCertificate",
-    "rayleigh_shape_factor", "fresnel_number", "shape_factor", "decay_rate",
-    # periodic (wrapped-axis) decay: circular OTF + image-folded (cosh) rate
-    "periodic_decay", "effective_decay_rate",
+    "rayleigh_shape_factor", "fresnel_number", "shape_factor",
     # dynamical operator (exact decay rates, streaming, splice-able)
     "Dynamics", "DecayRates", "DynamicsState",
     # per-mode localization footprints (the shape of each resolved mode)

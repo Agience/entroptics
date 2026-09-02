@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "entroptics"
-version = "0.1.0"
+version = "0.1.5"
 description = "The universe, in focus."
 readme = "README.md"
 requires-python = ">=3.10"
@@ -13,7 +13,11 @@ authors = [{ name = "Ikailo John Sessford", email = "john@ikailo.com" }]
 keywords = ["entropy", "optics", "aperture"]
 classifiers = [
     "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: Apache 2.0 License",
+    "Programming Language :: Python :: 3.10",
+    "Programming Language :: Python :: 3.11",
+    "Programming Language :: Python :: 3.12",
+    "License :: OSI Approved :: Apache Software License",
+    "Operating System :: OS Independent",
     "Intended Audience :: Science/Research",
     "Topic :: Scientific/Engineering",
 ]
@@ -22,7 +26,12 @@ dependencies = ["numpy>=2.0"]   # numpy.linalg.svdvals is a 2.0 API
 [project.optional-dependencies]
 torch = ["torch>=2.0"]
 scipy = ["scipy>=1.10"]
+test = ["pytest>=8", "scipy>=1.10"]              # torch-free: fast CI, torch parity tests auto-skip
 dev = ["pytest>=8", "scipy>=1.10", "torch>=2.0"]
+
+[project.urls]
+Repository = "https://github.com/Agience/agience-entroptics"
+Issues = "https://github.com/Agience/agience-entroptics/issues"
 
 [tool.setuptools]
 package-dir = { "" = "src" }
@@ -30,5 +39,8 @@ packages = ["entroptics"]
 
 [tool.pytest.ini_options]
 testpaths = ["src/tests"]
-addopts = "-q --strict-markers"
+# This project is sync-only and does not depend on pytest-asyncio; when that plugin happens to be
+# installed it nags (at configure time, before filterwarnings apply) about an unset loop-scope option.
+# `-p no:asyncio` blocks it at the source when present and is a harmless no-op when it is absent.
+addopts = "-q --strict-markers -p no:asyncio"
 filterwarnings = ["error::RuntimeWarning"]

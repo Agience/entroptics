@@ -1,0 +1,21 @@
+cff-version: 1.2.0
+message: "If you use Entroptics, please cite it."
+title: Entroptics
+abstract: "Read any 2-D signal as a finite optical aperture whose resolution is fixed by the signal's own entropy."
+type: software
+authors:
+  - given-names: Ikailo John
+    family-names: Sessford
+    email: john@ikailo.com
+    affiliation: Ikailo
+repository-code: "https://github.com/Agience/agience-entroptics"
+url: "https://agience.ai"
+license: Apache-2.0
+version: 0.1.5
+date-released: "2026-07-09"
+keywords:
+  - entropy
+  - optics
+  - aperture
+  - signal processing
+  - formal verification

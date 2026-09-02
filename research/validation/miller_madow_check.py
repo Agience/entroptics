@@ -47,6 +47,8 @@ Deterministic (fixed seeds).  Re-runnable: `python miller_madow_check.py`.
 """
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401 -- run against local src/, not any installed entroptics
+
 import numpy as np
 from scipy.special import digamma
 

@@ -11,6 +11,8 @@ Deterministic (fixed seeds).  Re-runnable: `python exp1_correlation_length.py`.
 """
 from __future__ import annotations
 
+import _bootstrap  # noqa: F401 -- run against local src/, not any installed entroptics
+
 import numpy as np
 
 from entroptics.reads import decay, diffraction_limit

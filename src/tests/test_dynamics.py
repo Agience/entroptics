@@ -121,3 +121,61 @@ def test_reconstruct_decay_shape_and_normalisation():
     c = np.asarray(dynamics(W).reconstruct_decay(20))
     assert c.shape == (20,)
     assert c[0] == pytest.approx(1.0, abs=1e-9)     # normalised so C(0) = 1
+
+
+# ── the scalar-sequence MOMENT PENCIL (hankel_spectrum) + generic jackknife ───────────────
+def test_hankel_spectrum_recovers_known_transfer_modes():
+    """The moment pencil on a finite exponential sum C(tau)=sum_k w_k lam_k^tau recovers the lam_k
+    exactly (Prony is exact with enough moments) -- the scalar-series analogue of
+    test_rates_recover_known_operator for the covariance DMD."""
+    from entroptics import hankel_spectrum
+    lam = np.array([0.5, 0.2]); w = np.array([0.7, 0.3])
+    c = np.array([float(np.sum(w * lam ** t)) for t in range(9)])
+    hs = hankel_spectrum(c, 2)
+    got = np.sort(np.asarray(hs.evals))[::-1]
+    assert np.allclose(got[:2], [0.5, 0.2], atol=1e-8)
+    assert abs(hs.leading - 0.5) < 1e-8
+    assert abs(hs.rate + np.log(0.5)) < 1e-8            # rate = -log(lambda_1)
+    assert hs.psd > -1e-9                               # PSD (eigenvalues >= 0); H0 here is exactly rank-2,
+                                                        # so its min eigenvalue is a roundoff-zero (sign is
+                                                        # platform-dependent), not a negative indefinite mode
+
+
+def test_hankel_spectrum_matches_handrolled_pencil():
+    """Bit-for-bit agreement with the hand-rolled reflection-positive pencil the mass-gap scripts
+    used, so relocating the read into the viewer changes no published number."""
+    rng = np.random.default_rng(3)
+    lam = np.array([0.6, 0.33, 0.15]); w = np.array([0.5, 0.3, 0.2])
+    c = np.array([float(np.sum(w * lam ** t)) for t in range(12)]) + 1e-4 * rng.standard_normal(12)
+    n = 3
+    cN = c / c[0]                                        # the exact 8_7 `pencil` body:
+    idx = np.add.outer(np.arange(n + 1), np.arange(n + 1))
+    H0, H1 = cN[idx], cN[idx + 1]
+    ww, V = np.linalg.eigh(H0); keep = ww > 1e-6 * ww.max()
+    Vr = V[:, keep] / np.sqrt(ww[keep]); M = Vr.T @ H1 @ Vr
+    ev_ref = np.sort(np.linalg.eigvalsh(0.5 * (M + M.T)))[::-1]
+    from entroptics import hankel_spectrum
+    ev_got = np.asarray(hankel_spectrum(c, n).evals)
+    assert ev_got.shape == ev_ref.shape and np.allclose(ev_got, ev_ref, rtol=0, atol=1e-12)
+
+
+def test_jackknife_mean_matches_closed_form():
+    """Delete-one jackknife SE of the sample mean equals the textbook s/sqrt(N)."""
+    from entroptics import jackknife
+    x = np.random.default_rng(0).standard_normal(50)
+    est, se = jackknife(x, lambda s: float(np.mean(s)))
+    assert abs(est - x.mean()) < 1e-12
+    assert abs(se - x.std(ddof=1) / np.sqrt(len(x))) < 1e-12
+
+
+def test_jackknife_binned_matches_massgap_convention():
+    """Binned (delete-one-bin) jackknife reproduces sqrt((G-1)/G sum (theta_g-mean)^2), the
+    mass-gap scripts' error convention."""
+    from entroptics import jackknife
+    X = np.random.default_rng(1).standard_normal((64, 4))
+    read = lambda s: float(np.mean(s))
+    _, se = jackknife(X, read, n_bins=8)
+    N, G = 64, 8; groups = np.array_split(np.arange(N), G)
+    th = np.array([read(X[np.setdiff1d(np.arange(N), g)]) for g in groups])
+    ref = np.sqrt((G - 1) / G * np.sum((th - th.mean()) ** 2))
+    assert abs(se - ref) < 1e-12

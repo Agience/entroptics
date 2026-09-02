@@ -1,0 +1,14 @@
+{
+  "title": "Entroptics",
+  "description": "Read any 2-D signal as a finite optical aperture whose resolution is fixed by the signal's own entropy.",
+  "upload_type": "software",
+  "license": "Apache-2.0",
+  "creators": [
+    { "name": "Sessford, Ikailo John", "affiliation": "Ikailo" }
+  ],
+  "keywords": ["entropy", "optics", "aperture", "signal processing", "formal verification"],
+  "related_identifiers": [
+    { "identifier": "https://github.com/Agience/agience-entroptics", "relation": "isSupplementTo", "scheme": "url" },
+    { "identifier": "https://agience.ai", "relation": "isSupplementTo", "scheme": "url" }
+  ]
+}

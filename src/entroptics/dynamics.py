@@ -306,25 +306,49 @@ class Dynamics:
     def _reduce(self, Pxx, Pyx):
         """The reduced propagator ``(A_tilde, Vr, wr)`` from a pair of covariances (raw or
         connected).  Truncated to the resolved SIGNAL rank (``_signal_rank``) so the fit is
-        over-determined and well-posed at T < F.  Backend-agnostic."""
+        over-determined and well-posed at T < F.  Backend-agnostic.
+
+        Memory-frugal for a WIDE ``F`` (state = pooled spatial volume ``L^d``): the rank is fixed
+        from the eigenvalue spectrum alone (no ``F x F`` eigenvector matrix), then ONLY the top-``r``
+        eigenvectors are taken via a partial (subset) eigensolve.  EXACT -- identical to the full
+        ``eigh`` truncated to ``r`` -- but peak memory is ``O(F^2)`` (Pxx + r vectors) instead of
+        ``O(F^2)`` twice (Pxx + the full ``V``), so ``F ~ 3e4`` (e.g. ``L=32``) fits where the full
+        ``eigh`` OOMs."""
         b, xp = self._b, self._b.xp
-        w, V = xp.linalg.eigh(Pxx)                        # Hermitian PSD -> real w, ascending
-        w = b.clampmin(b.real(w), 0.0)
-        order = b.argsort_desc(w)                         # descending energy
-        w, V = w[order], V[:, order]
+        F = int(Pxx.shape[0])
+        w = b.clampmin(b.real(xp.linalg.eigvalsh(Pxx)), 0.0)   # eigenvalues ONLY (no F x F V)
+        order = b.argsort_desc(w)                              # descending energy
+        w = w[order]
         if int(w.shape[0]) == 0 or float(w[0]) <= 0:
-            return b.zeros((0, 0), complex=self._complex), V[:, :0], w[:0]
-        floor = float(w[0]) * 1e-10                       # data-derived rank (drop null modes)
+            return b.zeros((0, 0), complex=self._complex), b.zeros((F, 0)), w[:0]
+        floor = float(w[0]) * 1e-10                            # data-derived rank (drop null modes)
         r = int((w > floor).sum())
         r = max(1, min(r, self.n_pairs, self.F))
-        if self.n_pairs < 2 * self.F:                     # UNDER-SAMPLED (n_pairs < 2F): the DMD
-            r = min(r, max(1, self._signal_rank()))       #   would overfit -> truncate to the
+        if self.n_pairs < 2 * self.F:                          # UNDER-SAMPLED (n_pairs < 2F): the DMD
+            r = min(r, max(1, self._signal_rank()))            #   would overfit -> truncate to the
             # resolved signal rank so the fit is over-determined (|mu|>1 spurious modes gone).
             # Well-sampled data keeps the full numerical rank, so exact recovery is untouched.
         if self.rank is not None:
             r = min(r, int(self.rank))
-        Vr, wr = V[:, :r], w[:r]
+        Vr, wr = self._top_eigvecs(Pxx, r), w[:r]              # top-r eigenvectors, partial solve
         return (Vr.conj().T @ Pyx @ Vr) / wr[None, :], Vr, wr
+
+    def _top_eigvecs(self, Pxx, r):
+        """The top-``r`` eigenvectors of a Hermitian PSD matrix via a PARTIAL (subset) eigensolve --
+        never forms the full ``F x F`` eigenvector matrix.  numpy path uses LAPACK's subset driver
+        (``scipy.linalg.eigh(subset_by_index=...)``, the relatively-robust ``evr``); any other
+        backend falls back to the full ``eigh`` (unchanged behaviour).  Exact."""
+        b, xp = self._b, self._b.xp
+        F = int(Pxx.shape[0])
+        try:
+            import numpy as _np, scipy.linalg as _sla
+            if isinstance(Pxx, _np.ndarray):
+                _, V = _sla.eigh(Pxx, subset_by_index=[F - r, F - 1], driver="evr")  # ascending
+                return b.astype(_np.ascontiguousarray(V[:, ::-1]), self._complex)     # -> descending
+        except Exception:
+            pass
+        w, V = xp.linalg.eigh(Pxx)                             # fallback: full eigh (other backends)
+        return V[:, b.argsort_desc(b.real(w))][:, :r]
 
     def _reduced(self):
         """RAW reduced propagator -- for exact system-ID rate recovery (Theorem 9.2)."""
@@ -429,13 +453,27 @@ class Dynamics:
         margin = float(xp.max(xp.abs(mu)))
         return dict(margin=margin, forgets=bool(margin < 1.0 - tol), n_modes=int(mu.shape[0]))
 
+    def connected_decay_rate(self) -> float:
+        """alpha_1 = -log|mu_1|: the decay rate of the DOMINANT (slowest, |mu|-largest) mode of
+        the CONNECTED (mean-subtracted) operator spectrum -- the fluctuation dynamics, centred as
+        in ``forgetting`` and ``reconstruct_decay`` (see ``_centered``).  A forward operator read,
+        deterministic in the operator eigenvalues.  ``0`` when no mode is resolved."""
+        if self._b is None:
+            return 0.0
+        b, xp = self._b, self._b.xp
+        A_c = self._reduced_c()[0]
+        if int(A_c.shape[0]) == 0:
+            return 0.0
+        mag = xp.max(xp.abs(xp.linalg.eigvals(A_c)))       # |mu_1| = dominant (largest) magnitude
+        return float(-xp.log(b.clampmin(mag, 1e-300)))
+
     def _feature_evals(self, *, k: int | None = None, oversample: int = 8,
                        n_power: int = 2, seed: int = 0):
         """Descending eigenvalues of the unit-diagonal feature correlation from ``Pxx``, on
         the operator's backend (numpy or torch, on-device).  ``k=None`` is the
         eigendecomposition (O(F^3)); ``k`` returns only the top ``~k`` via a randomized
         range-finder with ``n_power`` subspace iterations [Halko 2011] in **O(F^2 (k+p))** --
-        the feature-side lever for a wide, LOW-RANK ``F`` with a spectral gap (a few signal
+        the feature-side lever for a wide, LOW-RANK ``F`` with a spectral separation (a few signal
         modes over a noise bulk; the bulk below the floor never needs resolving). Deterministic per ``seed``."""
         b, xp = self._b, self._b.xp
         Cov = self._centered()[0]                                # connected (mean-subtracted) covariance
@@ -624,3 +662,103 @@ def dynamics(W, *, forgetting: float = 1.0, rank: int | None = None,
         raise ValueError("W must be 2-D (T, F)")
     return Dynamics(int(W.shape[1]), forgetting=forgetting, rank=rank,
                     far=far, null=null).update_block(W)
+
+
+# ── the reflection-positive MOMENT PENCIL: the transfer spectrum of a scalar correlation
+#    SEQUENCE (Prony / Hankel-DMD), the scalar-series companion to the covariance DMD above ──
+@dataclass
+class HankelSpectrum:
+    """Transfer/Koopman eigenvalues read from a scalar correlation sequence's own moments.
+    ``evals`` are sorted descending -- the leading one is the slowest (gap) mode."""
+    evals:     object   # transfer eigenvalues lambda_k of the moment pencil, descending
+    isolation: float    # lambda_1 / lambda_2 -- how isolated the leading (gap) mode is
+    psd:       float    # H0 conditioning (min/max eigenvalue): >= 0 iff PSD (0 = singular/rank-deficient)
+    n:         int      # moment order (the pencil is (n+1) x (n+1))
+
+    @property
+    def leading(self) -> float:
+        """The dominant transfer eigenvalue lambda_1 (the slowest / gap mode)."""
+        e = np.asarray(self.evals)
+        return float(e[0]) if e.size else float("nan")
+
+    @property
+    def rate(self) -> float:
+        """The gap = -log(lambda_1) (decay rate of the slowest mode); NaN if lambda_1 not in (0,1)."""
+        lam = self.leading
+        return -float(np.log(lam)) if 0.0 < lam < 1.0 else float("nan")
+
+
+def hankel_spectrum(c, n: int, *, rcond: float = 1e-6) -> HankelSpectrum:
+    """The transfer-operator spectrum of a real correlation sequence via the reflection-positive
+    MOMENT PENCIL (a.k.a. Prony / Hankel-DMD / matrix pencil).
+
+    ``c`` is a correlation sequence ``c[tau] = <O(0) O(tau)>`` at integer lags ``tau = 0..K`` (real,
+    an autocovariance).  Form the Hankel moment matrices
+
+        H0[i,j] = c[i+j],   H1[i,j] = c[i+j+1]        (i, j = 0..n)
+
+    and solve the SYMMETRIC generalized eigenproblem ``H1 v = lambda H0 v`` by whitening on H0's
+    positive spectrum (its SPD square root): ``M = H0^{-1/2} H1 H0^{-1/2}``, ``lambda = eigvalsh(M)``.
+    The ``lambda_k`` ARE the transfer/one-step-propagator eigenvalues; the leading ``lambda_1 =
+    e^{-rate}`` is the slowest (gap) mode.  H0 is a Gram / moment matrix, positive semidefinite by
+    reflection positivity in the limit; ``psd`` (min/max H0 eigenvalue) reports how well finite
+    statistics realise that.
+
+    This is the SCALAR-SEQUENCE companion to the vector-covariance DMD of :class:`Dynamics`: the same
+    forward transfer spectrum, read from a correlation sequence's own moments rather than a state
+    trajectory.  Domain-agnostic -- ``c`` is any real correlation sequence.
+
+    Scanning ``n`` exposes the moment-order systematic: a well-isolated leading mode is stable in
+    ``n`` while ``psd`` stays positive.  Report the band across ``n``; do not pick one favourable
+    order.  (See :func:`jackknife` for an error bar, since the pencil has no closed-form interval.)"""
+    c = np.asarray(c, dtype=float).ravel()
+    if n < 1:
+        raise ValueError("moment order n must be >= 1")
+    if c.size < 2 * n + 2:
+        raise ValueError(f"need >= {2 * n + 2} correlation lags for moment order n={n}, got {c.size}")
+    if c[0] != 0:
+        c = c / c[0]                                   # normalise C(0)=1 (the pencil is ratio-invariant)
+    idx = np.add.outer(np.arange(n + 1), np.arange(n + 1))
+    H0 = c[idx]
+    H1 = c[idx + 1]
+    w, V = np.linalg.eigh(0.5 * (H0 + H0.T))
+    wmax = float(w.max()) if w.size else 0.0
+    keep = w > rcond * wmax
+    if not bool(keep.any()):
+        return HankelSpectrum(evals=np.zeros(0), isolation=float("nan"), psd=0.0, n=n)
+    Vr = V[:, keep] / np.sqrt(w[keep])
+    M = Vr.T @ H1 @ Vr
+    ev = np.sort(np.linalg.eigvalsh(0.5 * (M + M.T)))[::-1]
+    iso = float(ev[0] / ev[1]) if ev.size > 1 and ev[1] > 0 else float("inf")
+    psd = float(w.min() / wmax) if wmax > 0 else 0.0
+    return HankelSpectrum(evals=ev, isolation=iso, psd=psd, n=n)
+
+
+def jackknife(samples, read, *, n_bins: int | None = None):
+    """Delete-one(-bin) JACKKNIFE point estimate and standard error of a scalar ``read``.
+
+    ``samples``: an ``(N, ...)`` array or length-``N`` sequence.  ``read``: ``callable(subset) -> float``,
+    evaluated on the full set and on each delete-one(-bin) subset (the subset is passed in the SAME
+    form as ``samples``).  With ``n_bins`` the ``N`` samples are split into that many contiguous bins,
+    each deleted in turn (delete-one-bin, cheaper for large ``N``); without it, delete-one-sample.
+    Returns ``(estimate_on_full, se)`` with
+
+        se = sqrt( (G-1)/G * sum_g (theta_(g) - mean_g)^2 ),   G = number of groups.
+
+    Domain-agnostic resampling for reads with NO closed-form interval (e.g. :func:`hankel_spectrum`)."""
+    is_arr = hasattr(samples, "shape")
+    arr = samples if is_arr else list(samples)
+    N = int(arr.shape[0]) if is_arr else len(arr)
+    if N < 2:
+        raise ValueError("jackknife needs >= 2 samples")
+    G = N if n_bins is None else min(int(n_bins), N)
+    groups = np.array_split(np.arange(N), G)
+
+    def _sub(drop):
+        keep = np.setdiff1d(np.arange(N), drop)
+        return arr[keep] if is_arr else [arr[i] for i in keep]
+
+    full = float(read(arr))
+    theta = np.array([float(read(_sub(g))) for g in groups])
+    se = float(np.sqrt((G - 1) / G * np.sum((theta - theta.mean()) ** 2)))
+    return full, se
