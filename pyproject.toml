@@ -1,0 +1,34 @@
+[build-system]
+requires = ["setuptools>=64"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "entroptics"
+version = "0.1.0"
+description = "The universe, in focus."
+readme = "README.md"
+requires-python = ">=3.10"
+license = { file = "LICENSE.md" }
+authors = [{ name = "Ikailo John Sessford", email = "john@ikailo.com" }]
+keywords = ["entropy", "optics", "aperture"]
+classifiers = [
+    "Programming Language :: Python :: 3",
+    "License :: OSI Approved :: Apache 2.0 License",
+    "Intended Audience :: Science/Research",
+    "Topic :: Scientific/Engineering",
+]
+dependencies = ["numpy>=2.0"]   # numpy.linalg.svdvals is a 2.0 API
+
+[project.optional-dependencies]
+torch = ["torch>=2.0"]
+scipy = ["scipy>=1.10"]
+dev = ["pytest>=8", "scipy>=1.10", "torch>=2.0"]
+
+[tool.setuptools]
+package-dir = { "" = "src" }
+packages = ["entroptics"]
+
+[tool.pytest.ini_options]
+testpaths = ["src/tests"]
+addopts = "-q --strict-markers"
+filterwarnings = ["error::RuntimeWarning"]
