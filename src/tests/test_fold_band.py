@@ -120,3 +120,60 @@ def test_folding_does_not_change_what_is_resolved():
     idx = (np.arange(F) * n_F) // F
     folded = np.stack([W[:, idx == j].mean(1) for j in range(n_F)], axis=1)
     assert Projection(folded).K_signal == native == K
+
+
+def _bandpass_frame(seed=0, T=38, F=4096, width=0.02, burst=3.0, noise=0.30):
+    """A wide, short frame with a strong bandpass -- the shape the band folds HARDEST.
+
+    Not an arbitrary choice: it is the shape of a CHIME waterfall, and it is the regime the two
+    tests above do not reach.  They exercise a 0.8 fold on a signal at 3x the Marchenko-Pastur
+    edge; this one folds by about 16x, which is where a fold that blended cells into structure
+    would show it."""
+    g = np.random.default_rng(seed)
+    f = np.arange(F)[None, :]
+    t = np.arange(T)[:, None]
+    band = np.exp(-0.5 * ((f - F * 0.5) / (width * F)) ** 2) + 0.02
+    pulse = np.exp(-0.5 * ((t - 0.5 * T) / 2.0) ** 2)
+    return band * (1.0 + burst * pulse) + noise * band * g.standard_normal((T, F))
+
+
+def _shuffle_channels(W, seed):
+    """Permute each channel independently along the ordered axis.
+
+    This destroys every ordered structure while leaving each channel's multiset of values -- and
+    so its total power, the feature marginal, and ``H_F`` -- exactly as it was.  The frame
+    therefore meets the band's concentration criterion identically and folds the same way, which
+    is what makes it a control on the FOLD rather than on the frame."""
+    g = np.random.default_rng(seed)
+    idx = g.permuted(np.tile(np.arange(W.shape[0])[:, None], (1, W.shape[1])), axis=0)
+    return np.take_along_axis(W, idx, axis=0)
+
+
+def test_a_hard_fold_does_not_manufacture_coherence():
+    """The expensive direction, tested where it is expensive: a HEAVY fold on real-record shape.
+
+    ``test_noise_does_not_fold`` shows the band declines to fold an iid frame.  It cannot show
+    what happens when a frame legitimately DOES fold and folds hard -- a real waterfall has strong
+    per-channel gain structure, so its feature marginal is concentrated for reasons that have
+    nothing to do with the burst, and the band folds it by one to two orders of magnitude.  If
+    averaging that many adjacent channels blended noise into apparent structure, the coherence
+    would rise on a frame that has none.
+
+    The control holds the fold fixed and removes only the ordered structure, so the two readings
+    differ in exactly one thing.  Measured on the CHIME/FRB Catalog 1 records that fold hardest
+    (down to 271 channels of 8768), the real frames read z = 1.9 to 8.7 while their shuffled
+    counterparts stayed inside +/-1.9 -- this pins the same separation on a frame that ships."""
+    W = _bandpass_frame()
+    p = Projection(W)
+    F = W.shape[1]
+    assert p.screen.shape[1] < F / 8, (
+        f"this frame is meant to fold hard (got {p.screen.shape[1]} of {F})")
+    assert p.coherence > 4.0, "the planted burst must read as coherent at that width"
+
+    for seed in range(5):
+        ps = Projection(_shuffle_channels(W, 500 + seed))
+        assert ps.screen.shape[1] == p.screen.shape[1], (
+            "the control must fold identically, or it is not a control on the fold")
+        assert abs(ps.coherence) < 3.0, (
+            f"a {F // p.screen.shape[1]}x fold must not manufacture coherence "
+            f"(shuffled frame read z={ps.coherence:.2f})")

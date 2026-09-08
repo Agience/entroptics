@@ -11,26 +11,37 @@ from entroptics.reads import decay, concentration, spectral_optics
 
 @pytest.mark.parametrize("shape", [(1, 8), (16, 1), (2, 2), (3, 3), (2, 16), (16, 2)])
 def test_degenerate_shapes_optics_runs(shape):
-    """Every shape reads without raising.  The fill is a number exactly when there is variation
-    to read: the reads are taken on the centred block, so a frame of a SINGLE observation is
-    identically zero once centred and has no structure to be a fraction of."""
+    """Every shape reads without raising, and the fill is a number for every one of them.
+
+    A frame of a SINGLE observation has one mode and that mode carries everything, so the fill
+    is 1.0 -- one occupied mode out of the one available.  It used to read NaN, because the
+    block was centred first and a single row is identically zero once de-meaned; the read then
+    reported "no structure" for a record that has exactly one."""
     o = A.Aperture(np.random.default_rng(0).standard_normal(shape)).optics()
-    if shape[0] > 1:
-        assert 0.0 < o["phi"] <= 1.0 + 1e-12
-    else:
-        assert np.isnan(o["phi"])          # one row, centred, is nothing
+    assert 0.0 < o["phi"] <= 1.0 + 1e-12
+    if shape[0] == 1:
+        assert o["phi"] == pytest.approx(1.0)   # one row is one fully occupied mode
     assert o["n_T"] >= 1 and o["n_F"] >= 1
 
 
-def test_a_baseline_is_not_structure():
-    """Adding a constant says nothing about the signal, so it must not move the fill.  The read
-    used to be taken on the raw block, where an offset lands in a leading singular value: a
-    global constant moved `phi` by more than a factor of three."""
+def test_a_constant_level_is_a_mode_and_is_counted():
+    """A constant level is not a nuisance to be removed: it is the zero-order beam, and the fill
+    counts it like any other mode.
+
+    Adding a large offset therefore makes a block MORE coherent -- the constant dominates the
+    spectrum, so the fraction of occupied modes falls toward 1/n.  This read used to centre the
+    block first, which deleted that mode and made the fill offset-invariant by construction.
+    It was removed on 2026-09-02: de-meaning asserts the mean carries no signal, which is a
+    claim about the record that the record does not make, and on a set of unit direction
+    vectors the mean direction is precisely the topic the set is about."""
     rng = np.random.default_rng(0)
     W = rng.standard_normal((200, 3)) @ rng.standard_normal((3, 32))         + 0.3 * rng.standard_normal((200, 32))
     ref = A.Aperture(W, window=None).phi
-    for offset in (7.0, 50.0, rng.standard_normal(32) * 4):        # global, and per-channel
-        assert A.Aperture(W + offset, window=None).phi == pytest.approx(ref, rel=1e-12)
+    for offset in (7.0, 50.0):                                     # a global constant level
+        moved = A.Aperture(W + offset, window=None).phi
+        assert moved < ref, (offset, moved, ref)                   # a mode was added, and counted
+    assert (A.Aperture(W + 50.0, window=None).phi
+            < A.Aperture(W + 7.0, window=None).phi < ref)          # more level, more coherent
 
 
 @pytest.mark.parametrize("shape", [(1, 8), (16, 1), (2, 2)])

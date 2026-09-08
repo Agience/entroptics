@@ -326,6 +326,9 @@ class Projection:
     n_T, n_F                  : per-axis effective mode counts
     delta_T, delta_F          : per-axis matched cell scales (window / bin width)
     screen                    : (N, F_eff) the projected screen tensor
+    centre, scale             : the whitening map on the SCREEN's feature grid -- a screen-side
+                                array ``x`` is read back into the caller's units as
+                                ``x * scale + centre`` (see ``_screen_units``)
     U, S, Vt                  : SVD factors of the screen (the modes within)
     noise_floor               : the singular-value noise floor
     sigma_top                 : top singular value
@@ -379,8 +382,9 @@ class Projection:
         self.delta_F = geom["delta_F"]
         self._geom = geom
 
-        data = normalize(W, mask)
+        data, centre, scale = normalize(W, mask, return_stats=True)
         self.screen = project(data, self.delta_T, self.delta_F)
+        self.centre, self.scale = self._screen_units(centre, scale)
 
         self.null = null
         self._xp = xp; self._far = float(far); self._seed = int(seed)
@@ -397,6 +401,40 @@ class Projection:
         self.K_signal = int(sig.shape[0])
         self.H_screen = shannon_bits(sig ** 2) if int(sig.shape[0]) else 0.0
 
+    def _screen_units(self, centre, scale):
+        """Carry the whitening map onto the screen's feature grid: ``(centre, scale)``.
+
+        ``normalize`` reports one ``(centre, scale)`` per INPUT channel; the screen's feature
+        axis is those channels folded to ``F_eff``.  A screen-side array is therefore read back
+        into the caller's units by this pair and not by the input-channel one, so the fold is
+        applied to the stats with the same :func:`_fold_axis` applied to the data -- one fold,
+        not two conventions.  Only the F fold matters: the whitening is per column, so folding
+        the ordered axis moves no channel's units (it changes the row count, which the shape
+        already says).
+
+        The map is the channel's own in two of the fold's three regimes, both of which leave a
+        screen column standing for exactly ONE whitened channel: ``F_eff == F`` returns the
+        input unchanged, and ``F_eff > F`` is a nearest-block hold, which holding the stats the
+        same way inverts.  When the axis COARSENS, screen column ``j`` is the mean of
+        ``(W[:, i] - c_i) / s_i`` over its group and the map is the group's common scale.  That
+        is the right map rather than a fallback, for two reasons that hold together:
+
+          * It is EXACT for whatever is common across the group.  If the group's whitened
+            channels share a component ``w``, then ``mean_i(s_i w + c_i) = w * mean(s) +
+            mean(c)`` -- and a component common across channels is precisely what a resolved
+            mode is, so it is exactly the content ``clean`` carries.  The error lives in what
+            differs within a group, which is the noise the filter has already attenuated.
+          * The fold merges only ADJACENT channels, and it coarsens only when the feature
+            marginal is smooth -- which is the same statement as neighbouring channels being
+            alike.  Measured across a gain ramp swept from 1x to 60x over the band, the worst
+            WITHIN-group scale ratio stayed at ~1.3 while the across-band ratio reached 60.
+            The regime that would strain this map is the regime that does not fold."""
+        F_eff = int(self.screen.shape[1])
+        if F_eff == int(centre.shape[0]):
+            return centre, scale
+        fold = lambda v: _fold_axis(v.reshape(1, -1), F_eff, axis=1).reshape(-1)
+        return fold(centre), fold(scale)
+
     def refloor(self, null):
         """This same projection, floored by a different ``null`` provider.
 
@@ -406,7 +444,7 @@ class Projection:
         screen, or the normalization that produced either. Rebuilding a whole ``Projection`` to
         change it recomputes an identical ``svdvals``.
 
-        ⚑ Measured 2026-08-27 on a 64-patch sweep at ``patch=256``: ``sweep(null="local")`` built
+        Measured 2026-08-27 on a 64-patch sweep at ``patch=256``: ``sweep(null="local")`` built
         80 projections for 64 patches -- one per patch, plus a second for each of the 16 that
         passed the coherence gate -- and SVD was 66% of the run (0.855s of 1.295s). The second
         projection of a coherent patch is that redundancy, and it is what this removes.

@@ -43,6 +43,20 @@ def corr(a, b):
     return float(a @ b / d) if d > 0 else np.nan
 
 
+def native(clean, F):
+    """A read taken on the folded screen, mapped back onto the recorded feature axis.
+
+    ``extract`` returns the field on the screen it was read on, and Def 2.2 folds that screen to
+    the marginal's own width -- for this burst, 186 channels of 256.  Comparing the read to the
+    input therefore has to undo the fold's index map first; ``clean`` is piecewise-constant across
+    each folded group, so the inverse is the same map applied backwards and no interpolation is
+    invented.  This is the same unfold ``frb_panel._entroptics`` does for display."""
+    n = clean.shape[1]
+    if n == F:
+        return clean
+    return clean[:, (np.arange(F) * n) // F]
+
+
 def dropout_recovery(B, frac, snr, seed):
     """extract on a noisy burst with ``frac`` of its channels DROPPED; return the recovery over the
     surviving channels, the recovered image (dropped -> NaN) and the drop mask.
@@ -61,9 +75,13 @@ def dropout_recovery(B, frac, snr, seed):
     if n:
         drop[rng.choice(F, n, replace=False)] = True
     surv = ~drop
-    rec_surv, _ = Aperture(W[:, surv], window=None).extract()
+    rec_surv, info = Aperture(W[:, surv], window=None).extract()
+    rec_surv = native(rec_surv, int(surv.sum()))          # off the folded screen, onto the axis
     rec = np.full_like(B, np.nan)
-    if rec_surv.shape == (B.shape[0], int(surv.sum())):
+    # "Resolved nothing" is a read that KEPT no mode -- every mode below the floor, or every one
+    # above it cut as persistent.  Not a shape test: a folded screen comes back narrower than the
+    # input on a read that resolved perfectly well, so shape answers a different question.
+    if info["n_kept"] > 0:
         rec[:, surv] = rec_surv
     W_disp = W.copy(); W_disp[:, drop] = np.nan
     return corr(rec[:, surv], B[:, surv]), rec, W_disp, drop
@@ -76,6 +94,7 @@ def main():
     # panels 2/3: noise only
     W2 = B + np.random.default_rng(0).standard_normal(B.shape) * (1.0 / SNR)
     rec3, _ = Aperture(W2, window=None).extract()
+    rec3 = native(rec3, F)                                # off the folded screen, onto the axis
     p3 = corr(rec3, B) * 100
 
     # panels 5/6: noise + channel dropout

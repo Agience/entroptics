@@ -131,3 +131,41 @@ def test_the_backends_agree():
     gt = joint_entropies(torch.from_numpy(X), torch.from_numpy(Y))
     for k in ("H_X", "H_Y", "H_XY", "I_XY", "H_X_given_Y"):
         assert float(gt[k]) == pytest.approx(gn[k], abs=1e-12), k
+
+
+def test_coupling_accepts_a_real_side_against_a_complex_one():
+    """Two sides of one read can arrive with different dtypes: numpy returns a REAL array
+    from `eigvals` whenever a matrix's eigenvalues happen to come out real, so the same
+    quantity computed for two sectors can be complex on one and real on the other.  That is
+    a fact about the data, not about the basis, and the embedding must be taken on both
+    sides or neither -- taking it on one left Ca at (2D, 2D) against Cb at (D, D) and
+    `tr(Ca Cb)` raised a bare broadcast error."""
+    import numpy as np
+    from entroptics.reads import coupling
+    rng = np.random.default_rng(0)
+    A = rng.standard_normal((50, 4)) + 1j * rng.standard_normal((50, 4))
+    B = rng.standard_normal((50, 4))
+    mixed = coupling(A, B)
+    promoted = coupling(A, B.astype(complex))
+    assert np.isfinite(mixed.z)
+    for f in ("z", "strength", "phase", "tightness"):
+        # `tightness` comes off an SVD of the cross-covariance, whose dtype differs between
+        # the two calls, so it agrees to round-off rather than bit-for-bit.
+        assert float(getattr(mixed, f)) == pytest.approx(float(getattr(promoted, f))), f
+    assert coupling(B, A).z == pytest.approx(mixed.z)          # symmetric in the pair
+
+
+def test_coupling_real_real_path_is_untouched_by_the_embedding_fix():
+    """The forced embedding is value-identical on a real side (the zero block contributes
+    nothing), so a real/real pair must read exactly as before."""
+    import numpy as np
+    from entroptics.reads import coupling, _real_embed
+    rng = np.random.default_rng(3)
+    X = rng.standard_normal((40, 5))
+    assert _real_embed(np, X) is X                              # unforced: untouched
+    forced = _real_embed(np, X, force=True)
+    assert forced.shape == (40, 10)
+    assert np.array_equal(forced[:, :5], X) and not forced[:, 5:].any()
+    a, b = rng.standard_normal((40, 5)), rng.standard_normal((40, 5))
+    c = coupling(a, b)
+    assert np.isfinite(c.z) and c.tightness > 0

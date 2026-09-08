@@ -1,4 +1,4 @@
-"""
+﻿"""
 null_providers.py -- the noise floor as a caller-suppliable, local null provider.
 
 A *null provider* is a callback ``FloorContext -> float``: given one screen it returns
@@ -55,6 +55,16 @@ caller plugs any method -- or its own callback -- via ``null=``:
       floor_from_null_sampler(surrogate) turn any surrogate into a provider (block bootstrap,
                                          phase randomisation, a physics null, ...).
       shuffle_in_time, top_spectrum_value   the example surrogate + the scoring building block.
+  (5) weighted aggregation -- the screen is a weighted mean of an ensemble:
+      weighted_effective(stack, w)       CLOSED FORM.  A weighted mean has per-cell variance
+                                         Var(X)/effective_n with Kish's count, so the aggregate
+                                         is an ordinary screen at a noise level the weights
+                                         dictate, and the derived edge applies unchanged once
+                                         the noise is read at the effective count rather than
+                                         the row count.  No draws, no seed, no quantile.  (A
+                                         bootstrap version was written first and removed: it
+                                         resampled the very ensemble whose unrepresentativeness
+                                         it was meant to price, so it inherited the blindness.)
 
 A different provider per cut point.  Each cut point (``KINDS``: ``"projection"`` = K_signal,
 ``"spectral"`` = single-screen resolved_modes, ``"bulk"`` = the pooled SpectralAccumulator)
@@ -81,6 +91,7 @@ from typing import Callable
 import numpy as np
 
 from . import environment as _env
+from .entropy import MAD_SCALE
 
 # The distinct cut points a provider can be keyed to (``ctx.kind``).  Each is a separate
 # noise-vs-signal decision, so each can take its own provider (see ``by_kind`` / a mapping):
@@ -91,6 +102,11 @@ from . import environment as _env
 KINDS = ("projection", "spectral", "bulk")
 
 
+# The ensemble a screen belongs to is read off its dtype: `_env.is_complex_obj`.  A
+# covariance-only bulk context carries no data and reports False -- the real branch, which is
+# where every existing caller already is.
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Tracy-Widom_1 (GOE / real matrices): universal edge quantiles + survival function
 # ══════════════════════════════════════════════════════════════════════════════
@@ -99,6 +115,20 @@ KINDS = ("projection", "spectral", "bulk")
 # distribution (Bejan 2005; Chiani 2014), fixed once for a target false-alarm rate.
 # This is the only number in the "mp" provider, and it is derived, not calibrated.
 _TW1_UPPER_Q: dict[float, float] = {0.10: 0.4501, 0.05: 0.9793, 0.025: 1.3675, 0.01: 2.0234}
+
+# A COMPLEX Gaussian / Wishart matrix's largest eigenvalue converges to Tracy-Widom_2 (GUE), not
+# TW1 -- so a complex screen scored at the TW1 quantile is scored at the wrong operating point.
+# Measured on 400 draws at 200x200: the real deviate is (-1.166, sd 1.211) and lands on TW1,
+# delivering its nominal 0.050 exactly, while the complex deviate is (-1.586, sd 0.811) and lands
+# on TW2 -- for which the TW1 level 0.9793 sits so far out in the thinner tail that the DELIVERED
+# false-alarm rate was 0.000 at every aspect ratio.
+#
+# THERE IS NO TW2 QUANTILE TABLE HERE, DELIBERATELY.  An earlier version carried four values read
+# off Chiani (2014) Table 3 and short-circuited the derivation with them.  They are a lookup, and
+# the same numbers fall out of inverting the survival function below to within 0.003-0.006 --
+# comfortably inside that approximation's own ~7e-3 CDF error.  Every level now goes through the
+# same derivation, so there is no level at which the answer comes from a table and no discontinuity
+# between the levels that were tabulated and the levels that were not.
 
 
 def tw1_quantile(far: float) -> float:
@@ -120,6 +150,15 @@ def tw1_quantile(far: float) -> float:
 _TW1_G_K = 46.44580     # Gamma shape    = 4 / skew^2
 _TW1_G_TH = 0.1861300   # Gamma scale    = sqrt(var) * skew / 2
 _TW1_G_LOC = -9.848007  # Gamma location = mean - shape * scale
+# The same moment-matched Gamma for TW2 (GUE).  DERIVED HERE rather than quoted: the three
+# parameters are a moment match to TW2's own mean, variance and skewness, which are universal
+# constants of the distribution, and writing the match out means the shape/scale/location cannot
+# drift away from the moments they come from.  (Quoting Chiani's Table 1 instead gives the same
+# three numbers to 1.3e-05.)
+_TW2_MEAN, _TW2_VAR, _TW2_SKEW = -1.771086807, 0.8131947928, 0.2240842036
+_TW2_G_K = 4.0 / _TW2_SKEW ** 2                          # Gamma shape
+_TW2_G_TH = _TW2_VAR ** 0.5 * _TW2_SKEW / 2.0            # Gamma scale
+_TW2_G_LOC = _TW2_MEAN - _TW2_G_K * _TW2_G_TH            # Gamma location = -alpha
 _LANCZOS = (0.99999999999980993, 676.5203681218851, -1259.1392167224028,
             771.32342877765313, -176.61502916214059, 12.507343278686905,
             -0.13857109526572012, 9.9843695780195716e-6, 1.5056327351493116e-7)
@@ -167,34 +206,68 @@ def tw1_sf(g: float) -> float:
     return _reg_gamma_upper(_TW1_G_K, (g - _TW1_G_LOC) / _TW1_G_TH)
 
 
-def _tw1_quantile_invert(far: float) -> float:
-    """Invert the (monotone-decreasing) survival function: the ``q`` with ``tw1_sf(q) = far``,
+def tw2_sf(g: float) -> float:
+    """P(TW2 > g): the Tracy-Widom_2 (GUE) upper-tail probability, the same Chiani Gamma
+    approximation with TW2's parameters.  This is the law a COMPLEX matrix's largest
+    eigenvalue follows."""
+    return _reg_gamma_upper(_TW2_G_K, (g - _TW2_G_LOC) / _TW2_G_TH)
+
+
+def _tw_quantile_invert(far: float, sf) -> float:
+    """Invert a (monotone-decreasing) survival function: the ``q`` with ``sf(q) = far``,
     by bisection.  Lets the derived edge serve an arbitrary, arbitrarily-sharp ``far``."""
     lo, hi = -10.0, 60.0
     for _ in range(200):
         mid = 0.5 * (lo + hi)
-        if tw1_sf(mid) > far:          # tail too heavy -> need a larger quantile
+        if sf(mid) > far:              # tail too heavy -> need a larger quantile
             lo = mid
         else:
             hi = mid
     return 0.5 * (lo + hi)
 
 
+def _tw1_quantile_invert(far: float) -> float:
+    """Invert ``tw1_sf``.  Its own name because it is already part of the public surface."""
+    return _tw_quantile_invert(far, tw1_sf)
+
+
+def tw2_quantile(far: float) -> float:
+    """The TW2 upper quantile ``q`` with ``P(TW2 <= q) = 1 - far`` -- the complex sibling of
+    :func:`tw1_quantile`, obtained at EVERY level by inverting ``tw2_sf``.  No level is tabulated,
+    so no level is privileged and the function has no step in it."""
+    if not (0.0 < far < 1.0):
+        raise ValueError(f"far must be in (0, 1); got {far}")
+    return _tw_quantile_invert(far, tw2_sf)
+
+
+def tw_quantile(far: float, *, complex_: bool = False) -> float:
+    """The edge quantile for the ensemble the data belongs to: TW1 (GOE) for a real matrix,
+    TW2 (GUE) for a complex one.  Dispatching on the data's own dtype is the point -- the
+    ensemble is a fact about the data, not a caller preference."""
+    return tw2_quantile(far) if complex_ else tw1_quantile(far)
+
+
 # ══════════════════════════════════════════════════════════════════════════════
 # Finite-size Johnstone edge + de-biased per-cell noise variance (shared primitives)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def johnstone(N: int, F: int) -> tuple[float, float]:
+def johnstone(N: int, F: int, *, complex_: bool = False) -> tuple[float, float]:
     """Johnstone (2001) centering ``mu`` and scaling ``sigma`` for the largest
     eigenvalue (top singular value squared) of an N x F Gaussian matrix, so that
-    ``(lambda_max - mu)/sigma -> Tracy-Widom_1``.  The derived finite-size edge (no fitted
-    coefficient).  Called with (N, F) for the screen, (T, N) for the correlation floor."""
-    nn = math.sqrt(max(N - 1, 1)); ff = math.sqrt(max(F, 1))
+    ``(lambda_max - mu)/sigma -> Tracy-Widom``.  The derived finite-size edge (no fitted
+    coefficient).  Called with (N, F) for the screen, (T, N) for the correlation floor.
+
+    ``complex_`` selects the ensemble's own adjustment.  Chiani (2014) eq. (33)-(34) writes the
+    centring as ``(sqrt(N + a1) + sqrt(F + a2))^2`` with ``a1 = a2 = -1/2`` for the real Wishart
+    and ``a1 = a2 = 0`` for the complex one; the real branch keeps Johnstone's own ``N - 1``,
+    which is what every real read here has always used and must not move."""
+    nn = math.sqrt(max(N, 1)) if complex_ else math.sqrt(max(N - 1, 1))
+    ff = math.sqrt(max(F, 1))
     a = nn + ff
     return a * a, a * (1.0 / nn + 1.0 / ff) ** (1.0 / 3.0)
 
 
-def debias_denominator(N: int, F: float) -> float:
+def debias_denominator(N: int, F: float, *, complex_: bool = False) -> float:
     """The de-biasing denominator ``F * c_F * dof`` that turns a median row energy into the
     per-cell noise variance ``sigma^2``.  Split out so every screen-floor call site (per-frame
     ``noise_sigma2`` / ``mp``, the numpy batch ``projection._mp_floor_batch``, and the batched
@@ -210,28 +283,31 @@ def debias_denominator(N: int, F: float) -> float:
     is that it has no discrete steps, and truncating it here would put one back.  Bit-identical
     to the integer form at every integer width, so no caller moves."""
     Ff = float(F)
-    c_F = (1.0 - 2.0 / (9.0 * max(Ff, 1e-30))) ** 3
+    # A REAL row energy is sigma^2 * chi^2_F, median ~ F(1 - 2/(9F))^3 (Wilson-Hilferty).  A
+    # COMPLEX row energy is a sum of F i.i.d. Exp(sigma^2), i.e. sigma^2 * chi^2_{2F}/2, whose
+    # median is F(1 - 1/(9F))^3 -- the same correction at twice the degrees of freedom.
+    c_F = (1.0 - (1.0 if complex_ else 2.0) / (9.0 * max(Ff, 1e-30))) ** 3
     dof = max(int(N) - 1, 1) / int(N)
     return Ff * c_F * dof
 
 
-def screen_floor_sq(sigma2, N: int, F: int, far: float):
+def screen_floor_sq(sigma2, N: int, F: int, far: float, *, complex_: bool = False):
     """The screen noise floor squared (in variance / eigenvalue units): ``sigma^2 * (mu +
     q*sigma_J)`` with the finite-size Johnstone centring/scaling and the TW1 quantile at ``far``.
     ``sigma2`` may be a scalar (one screen) or an array (per-frame over a batch); the return has
     its shape.  Take ``sqrt`` for the singular-value floor.  One definition shared by the
     per-frame ``mp`` provider, the numpy batch floor, and the batched resolved read."""
-    mu, sig_J = johnstone(int(N), int(F))
-    q = tw1_quantile(far)
+    mu, sig_J = johnstone(int(N), int(F), complex_=complex_)
+    q = tw_quantile(far, complex_=complex_)
     return sigma2 * (mu + q * sig_J)
 
 
-def noise_sigma2(xp, screen, N: int, F: int) -> float:
+def noise_sigma2(xp, screen, N: int, F: int, *, complex_: bool = False) -> float:
     """The de-biased robust per-cell noise variance the ``mp`` / ``bulk`` providers build
     on: the median row energy over F divided by :func:`debias_denominator` (the chi^2 median
     ``c_F`` and the centring dof ``(N-1)/N``).  Shared with the per-mode significance so they
     agree."""
-    return float(_env.median1d(xp, _env.sum_ax(xp, xp.abs(screen) ** 2, 1))) / debias_denominator(N, F) + 1e-30
+    return float(_env.median1d(xp, _env.sum_ax(xp, xp.abs(screen) ** 2, 1))) / debias_denominator(N, F, complex_=complex_) + 1e-30
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -281,13 +357,18 @@ def mp(ctx: FloorContext) -> float:
     """The default provider: the finite-size Johnstone / Tracy-Widom edge.  Projection:
     ``sqrt(sigma^2 * (mu + q*sigma_J))`` with the de-biased per-cell variance.  Correlation
     floor: ``(mu + q*sigma_J)/T`` in correlation units.  Parameter-free; only ``far``."""
-    q = tw1_quantile(ctx.far)
+    # The ensemble is a fact about the data, so it is read off the data and never asked for: a
+    # complex screen's largest eigenvalue follows TW2 (GUE), with the complex Wishart centring
+    # and the complex row-energy de-bias.  Real input takes exactly the path it always did.
+    cx = _env.is_complex_obj(ctx.data)
+    q = tw_quantile(ctx.far, complex_=cx)
     if ctx.kind == "projection":
         N, F = int(ctx.shape[0]), int(ctx.shape[1])
         xp = _env.ns(ctx.data)
-        return math.sqrt(screen_floor_sq(noise_sigma2(xp, ctx.data, N, F), N, F, ctx.far))
+        s2 = noise_sigma2(xp, ctx.data, N, F, complex_=cx)
+        return math.sqrt(screen_floor_sq(s2, N, F, ctx.far, complex_=cx))
     T, N = int(ctx.shape[0]), int(ctx.shape[1])
-    mu, sig_J = johnstone(T, N)
+    mu, sig_J = johnstone(T, N, complex_=cx)
     return (mu + q * sig_J) / T
 
 
@@ -401,6 +482,91 @@ def permutation(*, draws: int = 200, far: float | None = None) -> Callable[[Floo
     read's ``ctx.far``; a value pins the provider's own level.  Use ``null=permutation()``
     (or write your own the same way)."""
     return floor_from_null_sampler(shuffle_in_time, draws=draws, far=far)
+
+
+def weighted_effective(stack, weights) -> Callable[["FloorContext"], float]:
+    """The floor for a weighted aggregation, DERIVED -- no resampling, no draws, no quantile.
+
+    `weighted_ensemble` below prices the aggregate by bootstrapping the ensemble.  That is a
+    fit, and worse, it is a fit on the very sample whose unrepresentativeness is the thing
+    being priced: if the ensemble missed the configurations that carry the answer, every
+    replicate misses them too, and the floor inherits the blindness it was built to measure.
+
+    This one is closed form.  A weighted mean of M samples has per-cell variance
+
+        Var(C) = Var(X) * sum w^2 / (sum w)^2 = Var(X) / effective_n
+
+    with `effective_n` Kish's count -- a derived property of the weights alone, already in the
+    library as `reads.carriage(...).effective_n`.  So the aggregate IS an ordinary screen, at a
+    noise level the weights dictate, and `mp`'s own derived edge applies to it unchanged once
+    the noise is read at the effective count rather than the row count.
+
+    Nothing here is drawn, chosen or calibrated: the per-cell dispersion is measured across the
+    ensemble (a measurement, not a fit), divided by a derived count, and handed to the same
+    `screen_floor_sq` every other read goes through.
+    """
+    stack = np.asarray(_env.to_numpy(stack))
+    w = np.asarray(_env.to_numpy(weights), dtype=float).ravel()
+    if stack.ndim != 3:
+        raise ValueError(f"stack must be (M, T, F); got shape {stack.shape}")
+    if w.shape[0] != stack.shape[0]:
+        raise ValueError(f"weights has {w.shape[0]} entries for {stack.shape[0]} samples")
+    sw, sw2 = float(w.sum()), float(np.sum(w ** 2))
+    if sw == 0.0:
+        raise ValueError("weights sum to zero: the aggregation is undefined, so is its floor")
+    eff = sw * sw / sw2                                   # Kish, exactly reads.carriage's
+    aggregate = np.tensordot(w, stack, axes=(0, 0)) / sw
+
+    def _provider(ctx: "FloorContext") -> float:
+        from .entropy import mad_stats
+        from .projection import project
+        N, F = int(ctx.shape[0]), int(ctx.shape[1])
+        T, Fin = aggregate.shape
+        _, scale, _ = mad_stats(np, aggregate)
+        scale = np.where(np.asarray(scale) > 0, scale, 1.0)
+        dev = (stack - aggregate[None]) / scale[None, None, :]        # screen units
+
+        # The edge is a statement about the MEAN per-cell variance, so that is the statistic
+        # taken -- not a robust centre, which reports the quiet cells when the loud ones set
+        # the top singular value.
+        per_row = np.mean(dev ** 2, axis=(0, 2))                      # (T,)
+        sigma2_1 = float(np.mean(per_row))
+
+        # ...and one variance only describes the screen if the rows SHARE one.  How much
+        # row-to-row spread mere sampling produces is not taken from an asymptotic formula --
+        # the first version used sqrt(2/(M*Fin)) and fired on homoscedastic ensembles, because
+        # the aggregate is a SIGNED reweighting and its effective degrees of freedom are not
+        # M*Fin.  It is measured from the ensemble instead: split the samples in half, and the
+        # disagreement between the halves' per-row variances IS the sampling spread, with no
+        # formula and nothing to tune.  A screen whose rows differ by more than that is refused
+        # rather than priced -- the floor would be a single number for a thing that has none,
+        # and returning it quietly is how a read comes back confidently wrong.
+        M = stack.shape[0]
+        h = M // 2
+        if h >= 2:
+            a = np.mean(dev[:h] ** 2, axis=(0, 2))
+            b = np.mean(dev[h:2 * h] ** 2, axis=(0, 2))
+            sampling = float(np.std(a - b) / math.sqrt(2.0))      # per-half -> per-row scale
+            between = float(np.std(per_row))
+            if between > sampling * _norm_isf(ctx.far / max(T, 1)):
+                raise ValueError(
+                    "weighted_effective: the ensemble's per-sample noise is not homoscedastic "
+                    f"in the screen's units -- row-to-row spread {between:.3g} against the "
+                    f"{sampling:.3g} this ensemble's own split-half disagreement allows. A "
+                    "single floor does not describe this screen; whiten the ordered axis "
+                    "first, or use a provider that does not assume one noise level.")
+
+        cells = max(1.0, (T * Fin) / max(project(np.zeros((T, Fin)), T / N, Fin / F).size, 1))
+        sigma2 = sigma2_1 / (eff * cells)
+        cx = _env.is_complex_obj(ctx.data)
+        if ctx.kind == "projection":
+            return math.sqrt(screen_floor_sq(sigma2, N, F, ctx.far, complex_=cx))
+        mu, sig_J = johnstone(N, F, complex_=cx)
+        return sigma2 * (mu + tw_quantile(ctx.far, complex_=cx) * sig_J)
+
+    _provider.__name__ = "weighted_effective_null"
+    _provider.effective_n = eff
+    return _provider
 
 
 # ── reference-calibrated Gaussian null (deterministic, O(1), analytically sharp) ──

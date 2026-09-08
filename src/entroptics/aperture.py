@@ -699,7 +699,8 @@ class Aperture:
                       null=null if null is not None else self._effective_null("projection"),
                       seed=self._seed if seed is None else int(seed))   # native backend
 
-    def extract(self, *, far: float | None = None, reject_persistent: bool = True, shrink: bool = True):
+    def extract(self, *, far: float | None = None, reject_persistent: bool = True,
+                shrink: bool = True):
         """The read-side FILTER, through the front door: pull the resolved signal out of the
         aperture's window at NATIVE resolution.  Projects the data onto the projection's modes above
         the derived floor whose footprint is transient-like -- ``reject_persistent`` drops the
@@ -710,7 +711,14 @@ class Aperture:
         resolved modes (``clean = U diag(Sd) Vt``, U/Vt from the data's own projection).  Returns
         ``(clean, info)`` -- ``info`` carries K_signal, contrast, and the kept/dropped mode indices
         with their phi_T/phi_F.  The filter itself is :func:`extract.filter_projection`, which takes
-        the projection this aperture already holds."""
+        the projection this aperture already holds.
+
+        ``clean`` comes back in ``W``'s OWN units.  The modes are read on the whitened screen, so
+        the projection lands there; the per-channel whitening is undone before returning, and the
+        ``centre`` / ``scale`` that did it are reported in ``info``.  The entropy fold is a
+        different matter and is left in place -- it is what makes the screen the screen, its shape
+        is in ``info["screen_shape"]``, and inverting it would synthesise cells that were never
+        resolved."""
         return filter_projection(self.projection(far=far),           # `far=None` -> self.far
                                  reject_persistent=reject_persistent, shrink=shrink)
 

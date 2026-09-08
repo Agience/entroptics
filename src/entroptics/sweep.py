@@ -165,7 +165,7 @@ def sweep(W: np.ndarray, mask: np.ndarray | None = None, *, patch: int = 1024, s
             # RE-FLOOR, do not rebuild. The provider reaches one line of `Projection.__init__` --
             # `noise_floor(..., s=self.S)` -- which is handed the spectrum, so it moves the floor
             # inside a decomposition the scan pass has already paid for. Rebuilding recomputed an
-            # identical `svdvals` once per coherent patch. ⚑ Measured 2026-08-27, 64 patches at
+            # identical `svdvals` once per coherent patch. Measured 2026-08-27, 64 patches at
             # patch=256: 80 projections for 64 patches, SVD 66% of the run. `refloor` is an
             # identity, held by `tests/test_projection_refloor.py`.
             sc = p["sc"].refloor(prov) if prov is not None else p["sc"]

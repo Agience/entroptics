@@ -32,6 +32,8 @@ Mode spectrum / propagation (from the correlation eigenspectrum):
   concentration(rows)                 focus of a vector stack on its dominant axis.
   coupling(a, b)                      the SIGNED coupling between two sides of a screen
                                       (exact permutation null; the two-way screen's read).
+  carriage(X, w)                      what the WEIGHTS of a weighted aggregation carry
+                                      (exact permutation null; weights against samples).
 
 Diffraction limit -- from the signal's OWN decay (no external input):
   decay(W)             the ordered-axis autocorrelation C(tau) = the OTF, as a
@@ -81,21 +83,41 @@ def phi(M, mask=None) -> float:
     fraction, BOUNDED by construction.  phi -> 1 fully disordered (all modes
     active); phi -> 0 fully coherent (one mode).
 
-    Read on the CENTRED block, as every other spectral read here is.  A baseline is not
-    structure: an uncentred spectrum puts a constant offset into a leading singular value, so
-    adding a single global constant -- which says nothing about the signal at all -- moved this
-    read by more than a factor of three.  Centring is idempotent, so a block that already arrived
-    centred (a projected screen) is unchanged.
+    Read on the block AS RECORDED.  Nothing is subtracted from it.
+
+    This read counts MODES, and a constant level is a mode: in the optics this library speaks,
+    it is the zero-order beam, physically present and passed by the aperture like any other.
+    De-meaning would delete it and the count would then report what is left.  That is a force
+    applied to the record -- an assertion that the mean carries no signal, which is a claim
+    about the data that the data did not make -- and this library's whole position is that the
+    signal sets its own aperture.
+
+    The distinction is worth stating because the correlation reads DO remove the level, and
+    that is not the same act.  A correlation asks how coordinates co-vary, which is a question
+    about deviation and is undefined without a reference; the record's own mean is the only
+    non-arbitrary one, and using it is the read's definition rather than an imposition on the
+    record.  A mode count asks how much structure the signal has, and there zero is physical:
+    no field is no energy.
+
+    Measured where it mattered: on 50x384 retrieval horizons of unit direction vectors the
+    centred fill read 0.609 against 0.319 as recorded, a factor of 2.06, because the shared
+    mean direction of a set of embeddings IS the topic the set is about.  Removed 2026-09-02.
+
+    Absence is a separate matter and is handled by MASKING, never by zeroing.  ``live_view``
+    drops a row or column that was never measured, so it never reaches ``n``; a cell missing
+    in an otherwise live channel is imputed.  A channel of measured zeros is NOT absent -- it
+    is an observation of no power, it is a mode the record has, and it counts.  Zeroing an
+    absent cell would collapse that distinction and make a frame read as more coherent purely
+    because it was stored at a wider stride than it was measured at.
 
     A spectrum carrying NO power is not a fill of 0 modes reported as one: 2^H is 1 for an empty
     or all-zero spectrum, so dividing by n would return 1/n -- which by Lemma 3.2 is exactly the
     rank-1 reading, the most coherent an aperture can be. A frame nothing was measured in would
     then be indistinguishable from a perfect single mode. There is no fraction of active modes to
     report when no mode is active, so the read is NaN."""
-    M = live_view(M, mask)                # ignore fully-dead rows/cols; clean scattered gaps
-    xp = _ns(M)
-    M = _centred(xp, M)                   # THE library's one centring -- see the note above
-    S = _env.svdvals(xp, _env.asnum(M))   # singular values (real), on M's backend (GPU if torch)
+    M = live_view(M, mask)                # absence is MASKED here: fully-dead rows/cols are
+    xp = _ns(M)                           # dropped, so they never reach the denominator, and
+    S = _env.svdvals(xp, _env.asnum(M))   # scattered gaps are imputed. Nothing is zeroed.
     return _fill_of(S ** 2, int(S.shape[0]))
 
 
@@ -875,12 +897,23 @@ class Coupling:
     n:            int     # rows (ordered-axis samples) compared
 
 
-def _real_embed(xp, X):
+def _is_complex(xp, X) -> bool:
+    return bool(xp.is_complex(X) if _env.is_torch(xp) else np.iscomplexobj(X))
+
+
+def _real_embed(xp, X, *, force: bool = False):
     """The real embedding ``C^D -> R^{2D}``, ``x -> [Re x | Im x]``.  Exactly
     ``Re<a,b>_C = <emb a, emb b>_R``, so the signed read and its permutation variance are ONE
-    real code path for real and complex sides alike (no complex-only branch of the math)."""
-    is_c = xp.is_complex(X) if _env.is_torch(xp) else np.iscomplexobj(X)
-    return _env.cat1(xp, [xp.real(X), xp.imag(X)]) if is_c else X
+    real code path for real and complex sides alike (no complex-only branch of the math).
+
+    ``force`` embeds a REAL side too, as ``[X | 0]``.  The embedding doubles the coordinate
+    count, so taking it on one side of a pair and not the other leaves two Gram matrices of
+    different sizes.  ``force`` is value-identical on a real side -- the zero block contributes
+    nothing to either ``tr(Ca Cb)`` or the norms -- so it only ever converts a shape error into
+    the answer that was already correct."""
+    if _is_complex(xp, X):
+        return _env.cat1(xp, [xp.real(X), xp.imag(X)])
+    return _env.cat1(xp, [X, X * 0]) if force else X
 
 
 def coupling(a, b, *, far: float = 0.05) -> Coupling:
@@ -972,7 +1005,14 @@ def coupling(a, b, *, far: float = 0.05) -> Coupling:
     tot = float(_env.sum_ax(xp, sv ** 2))
     tightness = (float(sv[0]) ** 2 / tot) if tot > 0 else 0.0
     S = complex(_env.to_numpy(_env.sum_ax(xp, xp.conj(Ac) * Bc)))      # <A~, B~>_F
-    Ar, Br = _real_embed(xp, Ac), _real_embed(xp, Bc)   # Re<.,.>_C == <.,.>_R on the embedding
+    # The embedding is taken on BOTH sides or neither.  A real frame and a complex frame can be
+    # the SAME quantity on the SAME basis -- numpy hands back a real dtype whenever a matrix's
+    # eigenvalues happen to come out real, so two sides of one read arrive with different dtypes
+    # as a fact about the data, not about the basis this read is a statement about.  Embedding
+    # only the complex one left Ca at (2D, 2D) against Cb at (D, D) and `tr(Ca Cb)` raised a bare
+    # broadcast error.  Forcing both is value-identical wherever it already worked.
+    emb = _is_complex(xp, Ac) or _is_complex(xp, Bc)
+    Ar, Br = _real_embed(xp, Ac, force=emb), _real_embed(xp, Bc, force=emb)
     Ca, Cb = Ar.T @ Ar, Br.T @ Br                       # real, symmetric -> tr(Ca Cb) = sum(Ca*Cb)
     var = float(_env.sum_ax(xp, Ca * Cb)) / (T - 1)     # EXACT permutation variance of Re S
     nA, nB = float(_env.vnorm(xp, Ar)), float(_env.vnorm(xp, Br))
@@ -984,6 +1024,130 @@ def coupling(a, b, *, far: float = 0.05) -> Coupling:
                     strength=float(strength) if resolved else 0.0,
                     phase=float(math.atan2(S.imag, S.real)), tightness=float(tightness),
                     resolved=resolved, cutoff=float(cutoff), n=T)
+
+
+# ══════════════════════════════════════════════════════════════════════════════
+# Carriage: what the WEIGHTS of a weighted aggregation carry (exact permutation null)
+# ══════════════════════════════════════════════════════════════════════════════
+
+@dataclass(frozen=True)
+class Carriage:
+    """What the weights of a weighted read carry (see :func:`carriage`).
+
+    ``z`` is the EVIDENCE, per coordinate, always reported; ``resolved`` is the DECISION at
+    the reader's level.  ``effective_n`` is Kish's effective sample size of the weights alone
+    -- a property of the weights, not of the frames, and the ceiling on what any aggregation
+    of them can support."""
+    z:           object   # per-coordinate exact-permutation z of the weight-carried part
+    carried:     float    # ||A||^2 / E_pi||A||^2 -- 1 under the null, > 1 when the weights carry
+    resolved:    int      # coordinates whose |z| clears the two-sided level `far`
+    cutoff:      float    # the |z| that level requires (standard-normal inverse survival)
+    n:           int      # samples aggregated
+    effective_n: float    # (sum w)^2 / sum w^2 -- Kish's effective sample size
+
+
+def carriage(X, w, *, far: float = 0.05) -> Carriage:
+    """How much of a WEIGHTED aggregation the weights actually carry, against the exact null
+    that the weights are re-paired with the frames at random.
+
+    ``X`` is a stack of ``n`` samples -- ``(n, ...)``, each sample a frame of any shape -- and
+    ``w`` is the ``(n,)`` weight each sample enters with.  A weighted read is
+    ``sum_i w_i X_i``, and the question this answers is whether the weights carried any of it,
+    or whether the same number would have come out of any re-pairing of weights to samples.
+
+    Write the centred pieces ``w~_i = w_i - mean(w)`` and ``X~_i = X_i - mean(X)``.  Then
+
+        A = sum_i w~_i X~_i,        sum_i w_i X_i = n * mean(w) * mean(X) + A
+
+    so ``A`` is exactly the part of the weighted sum the weights contribute BEYOND the
+    unweighted mean -- the only part a re-pairing can move.  Under a uniformly random
+    permutation of the weights the first two moments are closed form (Pitman 1937 /
+    Hoeffding 1952 -- the permutation moments :func:`coupling` specialises for two sides):
+
+        E_pi[A]     = 0
+        Var_pi[A_c] = S_w * g_c / (n - 1),     S_w = sum_i w~_i^2,   g_c = sum_i X~_i,c^2
+
+    since ``E[w~_pi(i)^2] = S_w/n`` and ``E[w~_pi(i) w~_pi(j)] = -S_w/(n(n-1))`` for
+    ``i != j``, and ``sum_i X~_i,c = 0`` kills the cross term.  Summing over coordinates,
+    ``E_pi||A||^2 = S_w * G / (n - 1)`` with ``G = sum_c g_c``.  No sampling and no RNG: the
+    permutation MOMENTS are exact and the tail is the Pitman CLT limit, so at very small ``n``
+    the level is approximate while the first two moments are not -- the same discipline as
+    :func:`coupling`.
+
+    ``carried = ||A||^2 / E_pi||A||^2`` is the frame-level ratio: 1 when the weights carry
+    nothing, above 1 when they carry.  ``z`` reports the same fact per coordinate, so a caller
+    can see WHERE the weights act, and ``resolved`` counts the coordinates clearing ``far``.
+
+    ``effective_n = (sum w)^2 / sum w^2`` is Kish's effective sample size, a derived property
+    of the weights alone.  It is the ceiling: an aggregation of ``n`` samples whose weights
+    have ``effective_n = k`` carries the statistical weight of ``k`` samples, however large
+    ``n`` is.  For weights of constant magnitude and mixed sign it is ``n * mean(w)^2``, so a
+    signed aggregation whose mean weight is small is reporting its own cost in this field.
+
+    This is the null for a WEIGHTED READ, and it is the third of the library's permutation
+    nulls, each for a different object: ``projection.coherence`` nulls structure WITHIN one
+    frame's order (rows against lagged rows); :func:`coupling` nulls a relation BETWEEN two
+    frames on a shared basis (side against side); this one nulls the contribution of the
+    WEIGHTS to an aggregation (weights against samples).  A read of a difference of frames
+    that each individually resolve is exactly the case the single-frame random-matrix floors
+    (Marchenko-Pastur, Tracy-Widom, Johnstone) have no term for, because they price additive
+    noise inside one sampled frame and this prices a cancellation across many.
+
+    Deterministic and backend-agnostic; ``O(n P)`` in the total number of cells.
+    """
+    xp = _ns(X)
+    if len(getattr(X, "shape", ())) < 2:
+        raise ValueError(
+            "carriage expects a STACK of samples (n, ...) -- axis 0 indexes the samples that "
+            f"were aggregated; got shape {getattr(X, 'shape', None)}")
+    if len(getattr(w, "shape", ())) != 1:
+        raise ValueError(
+            f"carriage expects one weight per sample, a 1-D (n,) array; got "
+            f"{getattr(w, 'shape', None)}")
+    n = int(X.shape[0])
+    if int(w.shape[0]) != n:
+        raise ValueError(
+            f"one weight per sample: got {int(w.shape[0])} weights for {n} samples")
+    cutoff = _norm_isf(float(far) / 2.0)          # two-sided: the weights may carry either way
+    ref = X if _env.is_torch(xp) else None
+    empty = Carriage(z=_env.zeros(xp, 0, ref=ref), carried=0.0, resolved=0,
+                     cutoff=float(cutoff), n=n, effective_n=0.0)
+    if n < 2:
+        return empty
+
+    Xf = X.reshape(n, -1)
+    # A coordinate not measured on every sample is not a coordinate the aggregation ran over
+    # -- the same argument `coupling` makes about a basis one side never observed.
+    finite = _env.sum_ax(xp, xp.isfinite(xp.abs(Xf)), 0) == n
+    if not bool(_env.to_numpy(_env.sum_ax(xp, finite, 0)) > 0):
+        return empty
+    Xf = Xf[:, finite]
+
+    sw = float(_env.to_numpy(_env.sum_ax(xp, w)))
+    sw2 = float(_env.to_numpy(_env.sum_ax(xp, w * w)))
+    eff = (sw * sw / sw2) if sw2 > 0 else 0.0
+
+    wc = w - _env.sum_ax(xp, w) / n
+    Xc = Xf - _env.mean0(xp, Xf)
+    S_w = float(_env.to_numpy(_env.sum_ax(xp, wc * wc)))
+    g = _env.sum_ax(xp, Xc * Xc, 0)
+    G = float(_env.to_numpy(_env.sum_ax(xp, g)))
+
+    # Constant weights carry nothing BY CONSTRUCTION (A is identically zero), and a stack that
+    # never varied has nothing for them to carry.  Neither is a null that failed to resolve;
+    # both are the read being exactly zero, so it reads zero rather than as evidence.
+    if S_w <= 0.0 or G <= 0.0:
+        return Carriage(z=_env.zeros(xp, int(Xc.shape[1]), ref=ref), carried=0.0,
+                        resolved=0, cutoff=float(cutoff), n=n, effective_n=float(eff))
+
+    A = wc @ Xc                                   # (P,) the weight-carried part
+    var = (S_w / (n - 1)) * g
+    safe = _env.clampmin(xp, var, float(np.finfo(float).tiny))
+    z = xp.where(var > 0, A / xp.sqrt(safe), xp.zeros_like(A))
+    A2 = float(_env.to_numpy(_env.sum_ax(xp, A * A)))
+    resolved = int(_env.to_numpy(_env.sum_ax(xp, xp.abs(z) > cutoff)))
+    return Carriage(z=z, carried=float(A2 / (S_w * G / (n - 1))), resolved=resolved,
+                    cutoff=float(cutoff), n=n, effective_n=float(eff))
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -1362,6 +1526,8 @@ __all__ = [
     "concentration", "Concentration",
     # coupling between two sides of a screen (signed, exact-permutation null)
     "coupling", "Coupling",
+    # what the WEIGHTS of a weighted aggregation carry (exact permutation null)
+    "carriage", "Carriage",
     # decay (OTF) + diffraction limit + Mercer certificate
     "decay", "diffraction_limit", "DiffractionLimit",
     "mercer_certificate", "MercerCertificate",

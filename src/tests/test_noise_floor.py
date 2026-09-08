@@ -422,3 +422,120 @@ def test_a_reference_calibrated_aperture_uses_the_projection_statistic():
     by_hand = reference_null([top_spectrum_value(r, "projection") for r in ref])
     assert Aperture(W, reference=ref).projection().noise_floor == \
            pytest.approx(Projection(W, null=by_hand).noise_floor, rel=1e-12)
+
+
+# ── the weighted-aggregation null ────────────────────────────────────────────
+# A screen that is a WEIGHTED MEAN of an ensemble carries the statistical weight of Kish's
+# effective_n (reads.carriage), not of its row count.  Nothing in the aggregate records that,
+# so the single-frame floors cannot price it.
+#
+# The assertions below are RELATIONS, not thresholds.  A floor is the (1 - far) quantile of a
+# null distribution, so the thing to check is COVERAGE -- how often the realised error falls
+# below it -- against the level that was asked for, with the tolerance coming from the
+# binomial arithmetic of the number of instances run.  Bands picked by hand were the first
+# version of this file and they were the author's constants, not the read's.
+
+
+def _signed_aggregate(rng, M, avg_sign, kind, T=18, F=12):
+    tau = np.arange(T)[:, None]
+    amp = np.abs(rng.normal(1.0, 0.3, (2, F)))
+    truth = np.exp(-np.array([0.35, 0.9])[None, :] * tau) @ amp
+    s = np.where(rng.random(M) < (1 + avg_sign) / 2, 1.0, -1.0)
+    noise = rng.normal(0.0, 0.4, (M, T, F))
+    if kind != "iid":
+        noise = noise * truth[None]          # error proportional to a decaying signal
+    stack = truth[None] + noise
+    return truth, s, stack, (s[:, None, None] * stack).mean(0) / s.mean()
+
+
+def _true_top(C, truth, proj):
+    from entroptics.entropy import mad_stats
+    from entroptics.projection import project
+    T, F = C.shape
+    n_out, f_out = proj.screen.shape
+    _, scale, _ = mad_stats(np, C)
+    scale = np.where(np.asarray(scale) > 0, scale, 1.0).reshape(1, -1)
+    return float(np.linalg.svd(project((C - truth) / scale, T / n_out, F / f_out),
+                               compute_uv=False)[0])
+
+
+def test_weighted_effective_covers_at_the_level_it_was_asked_for():
+    """COVERAGE, not a ratio band: the realised error must fall below the floor about
+    (1 - far) of the time, scored by the exact binomial tail at a stated false-failure budget.
+    A k-sigma band on a rate stops discriminating in the tail -- see test_complex_edge_law."""
+    from math import comb
+    from entroptics import null_providers as npv
+    far, n_inst = 0.05, 40
+    below = 0
+    for k in range(n_inst):
+        rng = np.random.default_rng(1000 + k)
+        truth, s, stack, C = _signed_aggregate(rng, 1500, 0.3, "iid")
+        proj = Projection(C, far=far, null=npv.weighted_effective(stack, s))
+        below += float(proj.noise_floor) >= _true_top(C, truth, Projection(C))
+    n, q = n_inst, 1 - far
+    pk = comb(n, below) * q ** below * (1 - q) ** (n - below)
+    pv = sum(comb(n, j) * q ** j * (1 - q) ** (n - j) for j in range(n + 1)
+             if comb(n, j) * q ** j * (1 - q) ** (n - j) <= pk * (1 + 1e-12))
+    assert pv > 1e-4, (below, n_inst, pv)
+
+
+def test_weighted_effective_refuses_when_its_own_assumption_fails():
+    """One floor describes a screen only if the rows share one noise level.  When the
+    per-sample noise runs down the ordered axis the floor came out 20x LOW -- so the provider
+    refuses instead of returning it.  A read that cannot justify a number must not produce
+    one; that is the difference between a limitation and a defect."""
+    from entroptics import null_providers as npv
+    refused = 0
+    for k in range(12):
+        rng = np.random.default_rng(1000 + k)
+        _, s, stack, C = _signed_aggregate(rng, 1500, 0.3, "decay")
+        try:
+            Projection(C, far=0.05, null=npv.weighted_effective(stack, s)).noise_floor
+        except ValueError as e:
+            refused += 1
+            assert "homoscedastic" in str(e)
+    assert refused == 12, refused
+
+
+def test_weighted_effective_gives_ground_as_the_ensemble_loses_weight():
+    """As Kish's effective_n falls the floor must rise and the resolved count must not grow.
+    Monotonicity is the claim; there is no factor to assert."""
+    from entroptics import null_providers as npv
+    from entroptics.reads import carriage
+    ks, floors, effs = [], [], []
+    for M, avg in ((4000, 0.5), (1500, 0.2), (600, 0.08)):
+        rng = np.random.default_rng(21)
+        _, s, stack, C = _signed_aggregate(rng, M, avg, "iid")
+        p = Projection(C, null=npv.weighted_effective(stack, s))
+        ks.append(int(p.K_signal))
+        floors.append(float(p.noise_floor))
+        effs.append(float(carriage(stack, s).effective_n))
+    assert effs == sorted(effs, reverse=True), effs      # the ensembles do lose weight
+    assert ks == sorted(ks, reverse=True), ks            # resolving never GROWS as it does
+    assert floors == sorted(floors), floors              # and the floor rises to say why
+
+
+def test_weighted_effective_draws_nothing_at_all():
+    """The bootstrap version took a draw count and a seed; this one takes neither, because it
+    draws nothing.  A floor that does not resample cannot inherit the blindness of the sample
+    it is pricing -- which is why the bootstrap was removed rather than tuned."""
+    import inspect
+    from entroptics import null_providers as npv
+    assert not hasattr(npv, "weighted_ensemble")         # removed, not renamed
+    assert set(inspect.signature(npv.weighted_effective).parameters) == {"stack", "weights"}
+    rng = np.random.default_rng(3)
+    _, s, stack, C = _signed_aggregate(rng, 800, 0.3, "iid")
+    vals = {float(Projection(C, seed=k, null=npv.weighted_effective(stack, s)).noise_floor)
+            for k in (1, 2, 7)}
+    assert len(vals) == 1, vals                          # no randomness enters at any point
+    for bad in (lambda: npv.weighted_effective(stack[0], s),
+                lambda: npv.weighted_effective(stack, s[:-1]),
+                lambda: npv.weighted_effective(stack, np.zeros_like(s))):
+        with pytest.raises(ValueError):
+            bad()
+
+
+def test_default_floor_is_untouched_by_the_new_provider():
+    from entroptics import null_providers as npv
+    W = np.random.default_rng(11).standard_normal((64, 24))
+    assert float(Projection(W).noise_floor) == float(Projection(W, null=npv.mp).noise_floor)

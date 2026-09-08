@@ -1,4 +1,4 @@
-"""
+﻿"""
 entropy.py -- Entropy geometry: the matched scale read from a signal's own
 Shannon entropy, plus the fold (fractional resample) and normalize.
 
@@ -18,39 +18,38 @@ Per-axis geometry symbols (a = T or F):
 """
 from __future__ import annotations
 
-import logging as _logging
+import math as _math
 
 import numpy as np
 
 from . import environment as _env
 
-try:
-    from scipy.stats import norm as _scipy_norm
-    _SCIPY_AVAILABLE = True
-except ImportError:  # pragma: no cover
-    _SCIPY_AVAILABLE = False
-    _scipy_norm = None  # type: ignore[assignment]
-
 # MAD_SCALE: median-absolute-deviation -> Gaussian sigma.  Exact 1/Phi^{-1}(0.75).
 #
-# The fallback carries the same number to full float64 precision, so a scipy-less install reads
-# the same rank as a scipy-having one.  The constant propagates through the per-channel whitening
-# into `noise_sigma2`, into the floor, and out through `k`, so a 5-dp abbreviation (~1.5e-7
-# relative) moves results.
+# The constant propagates through the per-channel whitening into `noise_sigma2`, into the floor,
+# and out through `k`, so a 5-dp abbreviation (~1.5e-7 relative) moves results.  It is written to
+# full float64 precision for that reason.
 #
-# The scipy branch is the derivation: if scipy ever disagrees with the literal, that is a finding to act on.
-_MAD_SCALE_EXACT: float = 1.482602218505602   # 1/Phi^{-1}(0.75), float64-exact
+# **The derivation is a test, not an import.**  This module used to do `from scipy.stats import
+# norm` at module level and compute `1/norm.ppf(0.75)`, falling back to the literal below when
+# scipy was absent.  The two are bit-identical, so the import recomputed a number the file already
+# contained -- and it pulled `scipy.stats` into every process that touches entroptics, for a single
+# scalar.
+#
+# It was also not the check it was documented as: it USED scipy's value when scipy was present
+# rather than comparing the two, so a disagreement would have been adopted in silence.  The
+# comparison it was meant to be now lives in `src/tests/test_mad_scale_derivation.py`, which fails
+# if scipy ever disagrees with this literal.
+MAD_SCALE: float = 1.482602218505602   # 1/Phi^{-1}(0.75), float64-exact; derived in the tests
 
-if _SCIPY_AVAILABLE:
-    MAD_SCALE: float = float(1.0 / _scipy_norm.ppf(0.75))
-else:  # pragma: no cover - exercised only on a scipy-less install
-    _logging.getLogger(__name__).warning(
-        "entroptics: scipy is unavailable, so MAD_SCALE is taken from its exact float64 "
-        "literal (%r). The value is "
-        "identical; this is logged because the derivation was not re-run, not because the "
-        "number changed.", _MAD_SCALE_EXACT,
-    )
-    MAD_SCALE: float = _MAD_SCALE_EXACT
+# MAD_SCALE_C: the same map for a COMPLEX Gaussian.  MAD_SCALE above is 1/Phi^{-1}(0.75), the
+# REAL Gaussian's median-|x| -> sigma constant, and it is wrong by 23% on complex data.  For
+# z with E|z|^2 = 1 (real and imaginary parts each variance 1/2), |z|^2 ~ Exp(1), so
+#     median|z| = sqrt(median of Exp(1)) = sqrt(ln 2) = 0.8325546...
+# and the constant that recovers sigma from median|z| is 1/sqrt(ln 2).  Measured on 400k draws:
+# median|z| * MAD_SCALE = 1.2325 (target 1.0); median|z| * MAD_SCALE_C = 0.9985.  Derived, not
+# calibrated -- the same standard as MAD_SCALE, and checked against it in the tests.
+MAD_SCALE_C: float = 1.0 / _math.sqrt(_math.log(2.0))   # 1/sqrt(ln 2), derived here
 
 # MAD_LOGVAR: the asymptotic sampling variance of log(MAD-hat) from N Gaussian samples is
 # ~ MAD_LOGVAR / N.  This is the analytic influence-function variance 1/(16 f(D)^2 D^2) =
@@ -655,7 +654,11 @@ def mad_stats(xp, data, *, complex_median: bool = False):
     else:
         med = _env.median0(xp, data)
     centred = data - med[None, :]
-    mad = _env.median0(xp, xp.abs(centred)) * MAD_SCALE
+    # The MAD -> sigma constant is not one constant.  MAD_SCALE is 1/Phi^{-1}(0.75), the REAL
+    # Gaussian's; for a complex Gaussian |z|^2 ~ Exp(1) so median|z| = sqrt(ln 2) and the constant
+    # is 1/sqrt(ln 2).  Using the real one on complex data inflates the scale by 1.2343x, which is
+    # a 23% error in a number this file otherwise carries to 1e-7.
+    mad = _env.median0(xp, xp.abs(centred)) * (MAD_SCALE_C if complex_median else MAD_SCALE)
     # `mad > 0` is exact: a MAD is a median of magnitudes, so it is >= 0 and is 0 only when the
     # channel never moved off its own median.  The pooled scale of the channels that DID move then
     # sets the floor for the rest -- see resolution_floor.
@@ -693,7 +696,7 @@ def _shrink_mad(xp, mad, pos, typical: float, N: int):
     return xp.where(pos, xp.exp(lm0 + w * (lm - lm0)), xp.zeros_like(mad))
 
 
-def normalize(W: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray:
+def normalize(W: np.ndarray, mask: np.ndarray | None = None, *, return_stats: bool = False):
     """Per-channel robust (MAD) whitening at native resolution -- give each feature
     channel a common, unit noise scale so the screen's noise floor is a clean iid
     reference.  This is normalization only; the entropy-matched rescaling of both
@@ -709,6 +712,22 @@ def normalize(W: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray:
     would drag the average toward the noise mean).
 
     Returns a (T, F) array (same shape as W) of whitened channels; masked cells NaN.
+
+    ``return_stats`` additionally returns the map that was applied: ``(whitened, centre,
+    scale)``, each of ``centre`` and ``scale`` a ``(F,)`` per-channel vector, so that
+
+        W[:, j] ~= whitened[:, j] * scale[j] + centre[j]
+
+    recovers the caller's units.  The whitening is the ONLY step between a caller's frame
+    and the screen that is not a fold, so without these two vectors a screen-side array --
+    ``Aperture.extract``'s ``clean`` is the one that is DATA rather than a measurement --
+    cannot be read back against the frame it came from.  The pair is computed either way;
+    the flag only decides whether it is returned rather than dropped.
+
+    A channel with no resolvable spread comes back with ``scale = 0`` and whitened cells of
+    0, and the map above still holds: that channel's every value IS its centre, which is what
+    was measured.  A ``scale`` of 0 is therefore not a failure to report, and inverting with
+    it is exact.
     """
     xp = _env.ns(W)
     is_complex = xp.is_complex(W) if _env.is_torch(xp) else np.iscomplexobj(W)
@@ -718,23 +737,32 @@ def normalize(W: np.ndarray, mask: np.ndarray | None = None) -> np.ndarray:
         bad = bad | mask
     if bool(bad.any()):
         # robust masked / non-finite path (np.ma, numpy) -- the rare batch-with-gaps case.
-        out = _normalize_masked_np(_env.to_numpy(W), _env.to_numpy(bad))
+        out, cen, scl = _normalize_masked_np(_env.to_numpy(W), _env.to_numpy(bad))
         if _env.is_torch(xp):
             import torch
-            return torch.as_tensor(out, device=W.device)
-        return out
+            out = torch.as_tensor(out, device=W.device)
+            if return_stats:
+                cen = torch.as_tensor(cen, device=W.device)
+                scl = torch.as_tensor(scl, device=W.device)
+        return (out, cen, scl) if return_stats else out
 
     # clean path -- backend-agnostic (numpy on CPU, torch on its device).
-    _, mad_eff, centered = mad_stats(xp, data, complex_median=is_complex)
+    med, mad_eff, centered = mad_stats(xp, data, complex_median=is_complex)
     safe = mad_eff > 0.0          # mad_stats already zeroed anything below the resolution floor
     zero = _env.zeros(xp, tuple(int(s) for s in data.shape), complex=is_complex,
                      ref=(data if _env.is_torch(xp) else None))
-    return xp.where(safe[None, :], centered / xp.where(safe[None, :], mad_eff[None, :], 1.0), zero)
+    out = xp.where(safe[None, :], centered / xp.where(safe[None, :], mad_eff[None, :], 1.0), zero)
+    return (out, med, mad_eff) if return_stats else out
 
 
 def _normalize_masked_np(W, bad):
     """Robust per-channel MAD whitening in numpy with a bad-cell mask (np.ma);
-    masked / non-finite cells -> NaN.  The rare batch-with-gaps path (see normalize)."""
+    masked / non-finite cells -> NaN.  The rare batch-with-gaps path (see normalize).
+
+    Returns ``(whitened, centre, scale)`` -- the same triple the clean path returns, so
+    ``normalize(..., return_stats=True)`` reports the map from either branch.  The masked
+    branch computes its own median and its own per-channel-gapped shrinkage, so its stats
+    are not the clean path's and cannot be recovered by re-running that one."""
     is_complex = np.iscomplexobj(W)
     data = W.astype(np.complex128 if is_complex else np.float64).copy()
     mask = np.asarray(bad, bool)
@@ -747,7 +775,8 @@ def _normalize_masked_np(W, bad):
         med = np.ma.median(data_ma, axis=0, keepdims=True).filled(0.0)
     centered = data - med
     centered_ma = np.ma.array(centered, mask=mask)
-    mad_raw = (np.ma.median(np.abs(centered_ma), axis=0, keepdims=True).filled(0.0)) * MAD_SCALE
+    mad_raw = (np.ma.median(np.abs(centered_ma), axis=0, keepdims=True).filled(0.0)) * (
+        MAD_SCALE_C if np.iscomplexobj(data) else MAD_SCALE)
     spread = mad_raw > 0                      # exact -- see mad_stats
     typical_mad = float(np.median(mad_raw[spread])) if np.any(spread) else 0.0
     posm = mad_raw > resolution_floor(np, typical_mad, mad_raw)
@@ -767,4 +796,4 @@ def _normalize_masked_np(W, bad):
     safe = mad_eff > 0.0
     out = np.where(safe, centered / np.where(safe, mad_eff, 1.0), 0.0)
     out[mask] = np.nan
-    return out
+    return out, np.asarray(med).reshape(-1), np.asarray(mad_eff).reshape(-1)

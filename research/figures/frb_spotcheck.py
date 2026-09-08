@@ -29,6 +29,8 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[2] / "src"))
 
 from entroptics import Aperture
 
+from data_path import waterfall_root
+
 N_DEFAULT = 12
 SEED_DEFAULT = 20260901
 
@@ -42,9 +44,8 @@ def _entroptics(wf):
 
 
 def main():
-    if len(sys.argv) < 2:
-        raise SystemExit("usage: python frb_spotcheck.py <path-to-CHIME-FRB-Catalog1> [n] [seed]")
-    root = sys.argv[1]
+    # An explicit argument wins; else FRB_WATERFALLS, else research.local.env.
+    root = waterfall_root(sys.argv[1] if len(sys.argv) > 1 else None)
     n = int(sys.argv[2]) if len(sys.argv) > 2 else N_DEFAULT
     seed = int(sys.argv[3]) if len(sys.argv) > 3 else SEED_DEFAULT
 

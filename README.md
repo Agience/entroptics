@@ -6,7 +6,7 @@
 [![CI](https://github.com/Agience/entroptics/actions/workflows/ci.yml/badge.svg)](https://github.com/Agience/entroptics/actions/workflows/ci.yml)
 [![Proofs](https://img.shields.io/badge/proofs-Lean%204%20%2F%20Mathlib-4B0082)](https://github.com/Agience/entroptics/tree/main/research/lean)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21273400-blue)](https://doi.org/10.5281/zenodo.21273400)
-[![Sponsor](https://img.shields.io/badge/Sponsor-ikailo-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/ikailo)
+[![Sponsor](https://img.shields.io/badge/Sponsor-Agience-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Agience)
 
 ## *The universe, in focus.*
 
@@ -19,13 +19,14 @@ It is a small, standalone library, **numpy only** at the core (scipy and torch o
 ## Install
 
 ```bash
-pip install -e .              # core (numpy only)
-pip install -e ".[torch]"     # + GPU / torch tensors
-pip install -e ".[scipy]"     # + exact MAD constant
-pip install -e ".[dev]"       # + pytest, torch, scipy (to run the tests)
+pip install entroptics              # core (numpy only)
+pip install "entroptics[torch]"     # + GPU / torch tensors
+pip install "entroptics[scipy]"     # + exact MAD constant
 ```
 
-Requires Python ≥ 3.10 and numpy ≥ 2.0.
+Requires Python ≥ 3.10 and numpy ≥ 2.0. From a checkout, `pip install -e ".[dev]"` adds pytest,
+scipy and torch; `[figures]` adds matplotlib and h5py, which `research/figures/*.py` needs and the
+library core does not.
 
 ## The apparatus
 
@@ -156,6 +157,17 @@ info["n_kept"], info["n_dropped"]   # transient modes kept, persistent (RFI) mod
 
 `clean = U · diag(S̃) · Vᴴ` uses the data's own screen modes `U, Vᴴ` and the Gavish–Donoho optimal singular-value shrinkage `S̃` against the derived floor: exact recovery in the noise-free limit, idempotent, with the persistent narrowband (`φ_F ≤ φ_T`) modes dropped.
 
+**`clean` comes back in `W`'s own units.** The modes are read on the screen, and the screen is `project(normalize(W))` — each channel's median removed and its robust scale divided out — so the projection lands on the whitened grid. That whitening is inverted before `extract` returns, and `info["centre"]` / `info["scale"]` report the map that did it. So `clean` plots against `W`, and:
+
+```python
+removed = W - clean          # exactly what the filter discarded: noise and the dropped modes
+```
+
+Two things follow, and both are the definition rather than caveats:
+
+- **The entropy fold is not inverted.** It is what makes the screen the screen, its shape is in `info["screen_shape"]`, and undoing it would synthesise cells that were never resolved.
+- **`clean` is the per-channel baseline plus the resolved modes.** A channel's median is not a mode — `normalize` removes it before the SVD runs, so no cut was ever offered it. A persistent narrowband tone has its *modulation* dropped by the `φ_F ≤ φ_T` cut while its DC level stays in the baseline. Wanting that gone too is baseline estimation, a different read.
+
 ### Streaming, resume, splice
 
 Feed frames from the first one and propagate; the exact-rate operator updates online.
@@ -242,7 +254,8 @@ data-derived Tukey fence via `null=null_providers.robust`.
   Gavish–Donoho optimal shrinkage against the derived floor, dropping persistent narrowband
   (`phi_F <= phi_T`) interference. Returns `(clean, info)`; `clean` is a linear projection of the
   measured data — it synthesises nothing — and `info` carries `K_signal`, `contrast`, `coherence`
-  and the kept/dropped modes.
+  and the kept/dropped modes. `clean` comes back in the **input's own units** — the per-channel
+  whitening the modes are read through is inverted before returning.
 
 ### Other shapes of input
 
@@ -285,7 +298,7 @@ clean, info = Aperture(W[:, live], window=None).extract()        # everything do
 info["K_signal"], info["contrast"], info["coherence"]
 ```
 
-`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §14.1 of [the paper](research/PAPER.md).
+`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The read comes back on the waterfall's own amplitude scale, so the "Removed" panel is a plain `wf - clean` with nothing rescaled by hand. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §14.1 of [the paper](research/PAPER.md).
 
 ## Why it's principled
 
@@ -355,21 +368,11 @@ The suite (`src/tests/`) pins the full optics read as a golden contract, checks 
 
 The governing lemmas of the theory ([`research/PAPER.pdf`](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf)) are **machine-checked in Lean 4 / Mathlib** ([`research/lean/`](https://github.com/Agience/entroptics/tree/main/research/lean), 44 theorems): the fill-fraction and Strehl bounds, positive-semidefiniteness of the biased autocovariance (peak-at-zero-lag OTF), the exact permutation-null mean of the coherence, the Weyl-certified attenuation interval, axial≠directional concentration, and exact decay-rate recovery + additive splicing. `lake build` compiles with **no `sorry`**, resting only on Mathlib's standard axioms.
 
-## One system, three instruments
-
-Entroptics is the **lens** of the Agience system — the accuracy instrument. No observer sees the whole: every signal arrives through a finite aperture, and entropy is the exact measure of the gap between the aperture and the world. Entroptics reads that gap honestly — every constant derived, the observer's one input (decision risk) declared out loud, the governing lemmas machine-checked.
-
-The lens composes with two siblings: **[Mantle](https://github.com/Agience/agience-mantle)**, the memory — an encrypted-by-default artifact store where provenance lives inside every artifact, and where reachability across the grant graph decides *which keys are issued*; and **[Agience](https://github.com/Agience)**, the seat — the platform where people and agents work, and where nothing a model produced carries weight until an observer stakes something on it. Entroptics carries information through space, Mantle carries it through time, and Agience is the one who is looking.
-
 ## Contributing
 
 Bug reports, validation experiments, backend-parity fixes, and new reads (with their theorems) are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The short version: the library is parameter-free, deterministic, and numpy-only at the core, and contributions must keep it that way — every constant needs a provenance, every claim needs a theorem, and the golden-contract tests must stay bit-identical across backends.
 
-## License
-
-**Apache License 2.0** - see [`LICENSE.md`](https://github.com/Agience/entroptics/blob/main/LICENSE.md), [`NOTICE`](https://github.com/Agience/entroptics/blob/main/NOTICE), [`PATENTS.md`](https://github.com/Agience/entroptics/blob/main/PATENTS.md) and [`PLEDGE.md`](https://github.com/Agience/entroptics/blob/main/PLEDGE.md).
-
-## Star History
+## Star history
 
 <a href="https://www.star-history.com/?repos=Agience%2Fentroptics&type=date&legend=top-left">
  <picture>
@@ -378,3 +381,9 @@ Bug reports, validation experiments, backend-parity fixes, and new reads (with t
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Agience/entroptics&type=date&legend=top-left&sealed_token=DRxmKEUu-jgYDGrGi5K7vVFwrww1YJiMFU2_nv85yGjwPbsvhmTkOSlVv2aQQGkVDHXd2jlGQnjZDHbYYOXwfObR6iE9wTeV5jyplb30xZ3GFdD1ebDZIAonKgIvYBZ5vH8Z7T-2lSgsWrktUeeoPUdPPRELXBa4LY0ILQatLXzOLeWpq4dU5eVFXTcH" />
  </picture>
 </a>
+
+Security issues: email **connect@agience.ai** rather than opening a public issue.
+
+Licensed under Apache-2.0 — see [`LICENSE.md`](https://github.com/Agience/entroptics/blob/main/LICENSE.md),
+[`NOTICE`](https://github.com/Agience/entroptics/blob/main/NOTICE), [`PATENTS.md`](https://github.com/Agience/entroptics/blob/main/PATENTS.md)
+and [`PLEDGE.md`](https://github.com/Agience/entroptics/blob/main/PLEDGE.md).

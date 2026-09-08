@@ -88,14 +88,25 @@ from .aperture import *          # noqa: F401,F403 -- the full front-door surfac
 from .environment import set_precision, precision   # ENVIRONMENTAL compute precision (64 default / 32 fast)
 from .projection import read_batch, BatchRead           # batched monitor (bit-identical ensemble read)
 from .reads import spectral_batch                    # batched correlation-eigvalsh read (bit-identical)
+from .reads import carriage, Carriage             # weighted-aggregation null (weights against samples)
 from .dynamics import hankel_spectrum, jackknife, HankelSpectrum  # scalar-sequence moment pencil + jackknife
 from .batch import (resolved_batch, ResolvedBatch,   # the ONE batched resolved-screen read (numpy CPU / torch GPU)
                     ResolvedScreen, ResolvedScreenBatch, ResourceLimits, recommend_backend)
 from .lift import koopman_lift, delay_embed          # Koopman observable lift (nonlinear -> linear operator)
 
-__version__ = "0.2.1"
+# Taken from the installed distribution rather than written here, so it cannot disagree with
+# pyproject.toml. It did: pyproject said 0.2.2 while this literal still said 0.2.1, and callers ask
+# the module, not the metadata -- a reader pinned against `entroptics.__version__` would have been
+# told 0.2.1 by a 0.2.2 install and its version guard would have passed on the wrong library.
+# The fallback covers running from a source tree that was never installed.
+from importlib.metadata import PackageNotFoundError as _PkgNotFound, version as _dist_version
+
+try:
+    __version__ = _dist_version("entroptics")
+except _PkgNotFound:                                  # not installed: a source checkout on sys.path
+    __version__ = "0.0.0+source"
 __all__ = list(_aperture.__all__) + ["set_precision", "precision", "read_batch", "BatchRead",
-                                     "spectral_batch",
+                                     "spectral_batch", "carriage", "Carriage",
                                      "hankel_spectrum", "jackknife", "HankelSpectrum",
                                      "resolved_batch", "ResolvedBatch", "ResolvedScreen",
                                      "ResolvedScreenBatch", "ResourceLimits", "recommend_backend",

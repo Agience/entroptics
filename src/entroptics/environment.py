@@ -139,6 +139,17 @@ def ns(x):
     return np
 
 
+def is_complex_obj(x) -> bool:
+    """Whether an array is complex, backend-agnostically.  ``None`` reports False.
+
+    The expression ``xp.is_complex(x) if is_torch(xp) else np.iscomplexobj(x)`` was inlined in
+    eight places before this existed; new code takes it from here rather than adding a ninth."""
+    if x is None:
+        return False
+    xp = ns(x)
+    return bool(xp.is_complex(x) if is_torch(xp) else np.iscomplexobj(x))
+
+
 def is_torch(xp) -> bool:
     """True if xp is the torch namespace."""
     return xp is not np

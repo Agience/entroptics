@@ -43,10 +43,11 @@ from matplotlib import gridspec
 
 from entroptics import Aperture
 
-if len(sys.argv) > 1:
-    ROOT = sys.argv[1]
-else:
-    raise ValueError("usage: python frb_panel.py <path-to-CHIME-FRB-Catalog1>")
+from data_path import waterfall_root
+
+# An explicit argument wins; else FRB_WATERFALLS, else research.local.env.  Resolved here rather
+# than at each read so a misconfiguration is reported once, before any file is opened.
+ROOT = waterfall_root(sys.argv[1] if len(sys.argv) > 1 else None)
 EVENTS = ["FRB20190425A", "FRB20190106B", "FRB20190227A", "FRB20190323B"]
 
 COLS = ["RAW",
@@ -75,7 +76,11 @@ def _entroptics(wf):
     The read is taken on the folded screen (Def 2.2), which for these frames is narrower than the
     live width.  It is mapped back through the fold's own index so the panels share the recorded
     frequency axis; the mapping invents nothing, since the read is constant across each folded
-    group.  ``n_F`` is returned so the committed table records the width it was read at."""
+    group.  ``n_F`` is returned so the committed table records the width it was read at.
+
+    The FOLD is the only thing undone here.  ``extract`` returns the read in the waterfall's own
+    units, so the panels and the residual are on the recorded amplitude scale with nothing
+    rescaled by hand."""
     W = wf.T                                                     # (time, freq)
     live = np.isfinite(W).all(axis=0) & (np.nanstd(W, axis=0) > 0)
     n_live = int(live.sum())
@@ -96,14 +101,24 @@ def _agreement(wf, read, live, idx, n_F, mod):
     the same waterfall, not ground truth, so what it can show is whether the read moves toward
     CHIME's own account of the burst -- not whether either is right.
 
-    Two things would make the comparison unfair, and both are controlled.  All three are scored
+    Three things would make the comparison unfair, and all three are controlled.  All are scored
     on the SAME cells (the live channels), because the read is undefined on dead ones and scoring
-    each "wherever it is finite" scores them on different pixels.  And the read arrives smoothed
+    each "wherever it is finite" scores them on different pixels.  The read arrives smoothed
     along frequency -- it is piecewise-constant across each folded group -- while the model is
     smooth too, so a plain box-average of the RAW to the same width is included: everything the
-    fold does and nothing the read does."""
+    fold does and nothing the read does.
+
+    And every series is scored with its PER-CHANNEL BASELINE REMOVED, because ``model_wfall`` has
+    none: its per-channel median is exactly 0 in every channel, so it is a statement about the
+    burst and not about each channel's standing level.  Correlating a series that carries a
+    baseline against one that does not scores the baseline as disagreement.  It applies to all
+    four or none -- centring the read while the raw and rebinned references keep their baselines
+    would hand the read a comparison the references never got, and inflate its agreement."""
+    def _demedian(A):
+        return A - np.nanmedian(A, axis=1, keepdims=True)   # axis 1 is time; rows are channels
+
     def _c(a, b, m):
-        x, y = a[m], b[m]
+        x, y = _demedian(a)[m], _demedian(b)[m]
         x = x - x.mean(); y = y - y.mean()
         d = np.linalg.norm(x) * np.linalg.norm(y)
         return float(x @ y / d) if d > 0 else np.nan
@@ -140,15 +155,9 @@ def main():
     for i, (event, path) in enumerate(rows):
         wf, mod, ext, dm = _load(path)
         clean, info, nlive, n_F, _live, _idx = _entroptics(wf)
-        # What the filter took out.  The read carries the burst's MORPHOLOGY, not the input's
-        # amplitude scale -- it is taken on the scale-equalised screen -- so differencing the two
-        # directly would show a scaled copy of the burst and read as signal loss that is not
-        # there.  The scale is matched by least squares over the live cells first; what remains
-        # is what the read genuinely did not keep.
-        ok = np.isfinite(clean) & np.isfinite(wf)
-        den = float(np.sum(clean[ok] ** 2))
-        scale = float(np.sum(wf[ok] * clean[ok]) / den) if den > 0 else 1.0
-        removed = wf - scale * clean
+        # What the filter took out.  `extract` returns the read in the waterfall's own units, so
+        # this is a plain difference: what remains is what the read did not keep.
+        removed = wf - clean
 
         xlabel = "time (ms)" if i == n - 1 else None
         ax0 = fig.add_subplot(gs[i, 0])

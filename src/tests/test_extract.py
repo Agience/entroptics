@@ -93,9 +93,9 @@ def test_hard_threshold_form_is_a_projection():
 
     This is a property of that map, not of ``Aperture.extract()``.  The front door composes it
     with per-channel MAD whitening and Gavish-Donoho shrinkage: shrinkage de-biases the surviving
-    singular values, so the composed map is not idempotent, and the whitening means the output
-    carries morphology rather than the input's amplitude scale.  What the front door does measure
-    is pinned in ``test_extract_front_door_fidelity`` below."""
+    singular values, so the composed map is not idempotent.  The whitening is undone before the
+    front door returns, so its output IS on the input's amplitude scale -- what it measures is
+    pinned in ``test_extract_front_door_fidelity`` below."""
     B = make_burst(); floor = noise_floor(B)
     U, S, Vt = np.linalg.svd(B, full_matrices=False)
     keep = S > floor
@@ -127,41 +127,70 @@ def test_extract_front_door_fidelity():
 
     Three facts, all measured on the calibration burst:
       1. across the noise-relevant band it recovers the burst's morphology (correlation > 0.95);
-      2. it carries morphology, NOT the input's amplitude scale -- the relative error against the
-         input is large even where the correlation is near one, because the read is taken on the
-         whitened screen;
-      3. fidelity is not monotone in S/N.  It peaks in the mid band and falls toward the
-         noiseless limit, where per-channel MAD whitening divides by a vanishing scale.  This is
-         a real limit of the filter and is pinned here so it cannot regress silently."""
+      2. it recovers the burst's AMPLITUDE too, because the read comes back in the input's own
+         units -- the relative error against the truth is small, and beats the raw frame wherever
+         noise is non-trivial.  The read is taken on the whitened screen and the whitening is
+         undone before returning; this assertion is what pins that it stays undone;
+      3. what the filter costs where there is nothing to remove.  Its own residual is ~1%, so
+         above S/N ~ 200 the raw frame is already closer to the truth than the filtered one.
+         That is the limit of the map, and it is pinned here.
+
+    Correlation is monotone in S/N and stays above 0.99 across the whole range, the noiseless
+    limit included -- the whitening is inverted before return, so dividing a channel by a
+    vanishing scale is undone by multiplying it back and nothing degrades at that end."""
     B = make_burst()
 
     def run(snr):
         W = B if snr is None else B + np.random.default_rng(0).standard_normal(B.shape) / snr
         clean, _ = Aperture(W, window=None).extract()
         cn = _native(clean, B.shape[1])
-        return corr(cn, B), relerr(cn, B)
+        return corr(cn, B), relerr(cn, B), relerr(W, B)
 
     band = {snr: run(snr) for snr in (10, 50, 1000)}
-    for snr, (c, _) in band.items():
+    for snr, (c, _, _) in band.items():
         assert c > 0.95, f"morphology must survive at S/N={snr} (got {c:.3f})"
 
-    # (2) high correlation, large relative error: the output is not on the input's scale
-    c50, e50 = band[50]
-    assert c50 > 0.98 and e50 > 1.0, "extract carries morphology, not amplitude scale"
+    # (2) the output is ON the input's scale: close to the truth in absolute terms, and closer
+    # than the raw frame is, wherever there is noise to remove.
+    for snr in (10, 50):
+        c, e, raw_e = band[snr]
+        assert e < 0.2, f"S/N={snr}: extract must land on the input's scale (relerr {e:.3f})"
+        assert e < raw_e, f"S/N={snr}: clean must beat the raw frame ({e:.3f} vs {raw_e:.3f})"
 
-    # (3) the near-noiseless limit is where it fails, not where it is best
-    c_clean, _ = run(None)
-    assert c_clean < 0.5, "noiseless-limit failure is a known limit; update the paper if it moves"
-    assert c50 > c_clean, "fidelity is not monotone in S/N -- it peaks in the mid band"
+    # (3) monotone and near-perfect in correlation, including the noiseless limit -- and the
+    # residual the filter costs is what stops it beating a frame that had no noise to begin with.
+    c_clean, e_clean, _ = run(None)
+    assert c_clean > 0.99, "the noiseless limit must not degrade -- it was a units artifact"
+    assert band[10][0] <= band[50][0] <= band[1000][0] <= c_clean, "correlation rises with S/N"
+    assert 0.001 < e_clean < 0.05, (
+        "the filter's own residual on a noiseless frame; update the paper if it moves")
+    assert e_clean > relerr(B, B) , "a filter costs something where there is nothing to remove"
 
 
 def test_persistent_structure_rejection():
-    """C. a persistent modulated tone is dropped by the phi_F>phi_T geometry cut, burst preserved."""
+    """C. a persistent modulated tone is dropped by the phi_F>phi_T geometry cut, burst preserved.
+
+    The cut is a statement about MODES, so it is scored against the tone's MODULATION.  A
+    channel's median is not a mode -- ``normalize`` removes it before the SVD runs, so no cut was
+    ever offered it -- and ``extract`` returns the input's units, which carries that baseline back
+    through.  The tone's DC level therefore stays in the baseline of the channels it sits on while
+    its varying part is dropped.  Scoring against the raw ``R``, DC included, would be scoring
+    this filter for a baseline estimate it does not claim to make; the identity that DOES hold
+    over the whole frame is checked below."""
     rng = np.random.default_rng(7)
     B, R = make_burst(), make_tone()
-    W = B + R + rng.standard_normal(B.shape) * (1.0 / 8)
+    noise = rng.standard_normal(B.shape) * (1.0 / 8)
+    W = B + R + noise
     clean, info = Aperture(W, window=None).extract()
     cn = _native(clean, B.shape[1])
-    assert corr(cn, B) > 0.9, "burst must be preserved"
-    assert abs(corr(cn, R)) < 0.2, "tone must be removed"
+
+    R_mod = R - R.mean(axis=0, keepdims=True)          # the tone as a MODE: its varying part
+    assert abs(corr(cn, R_mod)) < 0.2, "the tone's modulation must be removed"
     assert info["n_dropped"] >= 1, "the persistent mode must be flagged and dropped"
+
+    # What the filter discarded is exactly W - clean: the noise and the tone's modulation, and
+    # NOT the burst.  This is the identity the input-units return exists to make true.
+    removed = W - cn
+    assert corr(removed, noise) > 0.3, "the noise must be in what was removed"
+    assert corr(removed, R_mod) > 0.3, "the tone's modulation must be in what was removed"
+    assert abs(corr(removed, B)) < 0.1, "the burst must NOT be in what was removed -- it was kept"
