@@ -6,10 +6,9 @@ eigenvalues, a mode count, ordered vs permuted structure, stationary vs regime-s
 a rank/bandwidth) and shows the corresponding read **recovers it**.  Everything is
 seeded and deterministic; regenerate with `python research/validation/run_all.py`.
 
-Scripts: `common.py` (seeded ground-truth generators), `exp1..exp18_*.py`,
-`miller_madow_check.py`.
+Scripts: `common.py` (seeded ground-truth generators), `exp1..exp18_*.py`.
 
-Produced 2026-09-01 by `python research/validation/run_all.py` with entroptics 0.2.1 (numpy backend), numpy 2.4.4, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.12.10 on Windows AMD64.
+Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0.2.2 (numpy backend), numpy 2.4.4, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.12.10 on Windows AMD64.
 
 
 ## Headline numbers
@@ -32,7 +31,6 @@ Produced 2026-09-01 by `python research/validation/run_all.py` with entroptics 0
 - **16. The matched scale must be read before the whitening** -- On a planted line of known width, the scale read on the RAW frame folds in 9/9 cases (n_F tracking the line width) while the same read taken AFTER whitening folds in 0/9 -- it returns n_F = F every time. The mechanism is measured: the on-line channels hold 88.2% of the power before whitening and 9.6% after, because dividing each channel by its own scale lifts the noise-only channels to the amplitude of the line.
 - **17. K_signal against the standard rank selectors** -- On the exp3 planted signals at the same seeds, exact-count accuracy: K_signal 0.997 (36/36 cells), AIC 0.946 (27/36 cells), GD 0.935 (36/36 cells), MDL 0.889 (27/36 cells).  K_signal is the most accurate of the four.  AIC/MDL are undefined where the snapshot count does not exceed the variable count, and are reported n/a there rather than guessed.
 - **18. The nulls under coloured noise** -- On pure AR(1) noise with NO planted signal, the derived floor resolves a mode in 100.0% of draws at rho > 1 against 2.5% in the i.i.d. control (nominal alpha = 0.05); the worst cell is 100.0% at shape 200x200, rho = 2.  This is NOT specific to the derived floor: on the same records the standard selectors report K_signal 10.1, GD 22.9, MDL 19.0, AIC 44.7 spurious modes on average, so every iid-calibrated selector over-reads and K_signal over-reads the least.  The coherence read fires as it should -- adjacent rows genuinely are more alike than a re-ordering -- so the two must not be read as one number.
-- **Miller-Madow band derivation check** -- The inner band (T-1)/(2F ln2) is a conservative guard -- T times the mean deficit (measured inner/deficit 16.5..534.8) -- so structureless noise essentially never folds; but for tall-thin shapes it exceeds log2(T) and would disable the fold vacuously, which the cap min(inner, (1/2)log2 len) removes without touching the inner band on tall/square shapes.
 
 ---
 
@@ -525,22 +523,3 @@ Produced 2026-09-01 by `python research/validation/run_all.py` with entroptics 0
 | 40x600 | 32 | 5.35 | 1 | 12.3 | 17.9 | 26.3 | 15.91 |
 
 **Conclusion.** A serially correlated field genuinely moves the bulk -- the singular values really do sit above the iid edge -- so this is a property of the null every one of these methods is calibrated against, not of any one estimator. What the comparison measures is how far each is wrong when the assumption is broken. The floor's calibration assumes independent rows and the ordered axis of a real record does not supply them. What this measures is how far the false-alarm rate moves when that assumption is broken deliberately, at correlation lengths spanning the range section 4 reads off real data. A rate at or near the i.i.d. control means the floor tolerates serial correlation at that shape; a rate above it is the floor counting correlation as signal, and the number is what a reader needs in order to judge whether it matters for their records.
-
-
-## Miller-Madow band derivation check
-
-**Setup.** iid complex Gaussian W across shapes [(16, 8), (32, 16), (64, 16), (64, 64), (128, 32), (256, 64), (512, 32), (512, 4), (256, 8)], 4000 seeds each; power marginal p^T_t ~ sum_f |W_tf|^2; deficit = log2(T) - E[H_T].
-
-| T x F | deficit (MC) | inner band (T-1)/(2F ln2) | cap (1/2)log2 T | banded = min | inner vacuous? | inner / deficit |
-| --- | --- | --- | --- | --- | --- | --- |
-| 16x8 | 0.08216 | 1.3525 | 2 | 1.3525 | no | 16.46 |
-| 32x16 | 0.0433 | 1.3976 | 2.5 | 1.3976 | no | 32.28 |
-| 64x16 | 0.04386 | 2.8403 | 3 | 2.8403 | no | 64.76 |
-| 64x64 | 0.01106 | 0.7101 | 3 | 0.7101 | no | 64.22 |
-| 128x32 | 0.02223 | 2.8628 | 3.5 | 2.8628 | no | 128.77 |
-| 256x64 | 0.0112 | 2.8741 | 4 | 2.8741 | no | 256.71 |
-| 512x32 | 0.0224 | 11.519 | 4.5 | 4.5 | yes | 514.15 |
-| 512x4 | 0.1723 | 92.152 | 4.5 | 4.5 | yes | 534.82 |
-| 256x8 | 0.08792 | 22.993 | 4 | 4 | yes | 261.52 |
-
-**Conclusion.** The inner band is a deliberately conservative uniform-null guard: it exceeds the mean marginal deficit by the factor T, so structureless noise essentially never folds (a band set to the mean deficit folds ~half of noise realizations and, because any fold blends adjacent cells, drives the coherence null P(z>2) from 0.023 to 1.0 and the K_signal false-alarm rate to ~100%, which is why the band is set above the mean). Its one defect -- exceeding log2(len) for extreme aspect ratios (the 'inner vacuous?' column), disabling the fold vacuously -- is fixed by capping at (1/2) log2(len): the 'banded' column is the guard actually used (Definition 2.2), unchanged from the inner band on every non-vacuous shape and operative (folds below sqrt(len) effective cells) on the rest. In the construction only the feature axis folds, so the operative guard is the symmetric beta_F capped the same way; the ordered axis is kept at native resolution, so its band never engages.

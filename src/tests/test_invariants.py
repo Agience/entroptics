@@ -50,7 +50,7 @@ def test_strehl_in_unit_interval(seed):
 
 @pytest.mark.parametrize("seed", [0, 1, 2, 3, 4])
 def test_pure_noise_does_not_fold(seed):
-    """iid noise sits inside the Miller-Madow band of max entropy -> geometry snaps
+    """iid noise sits inside the fold band of max entropy -> geometry snaps
     delta to 1.0 on both axes (no spurious adjacent-row correlation)."""
     rng = np.random.default_rng(1000 + seed)
     g = A.Aperture(rng.standard_normal((64, 32))).geometry

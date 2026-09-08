@@ -254,13 +254,12 @@ def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05
     folding the ordered axis would blend adjacent rows into spurious correlation.  For the
     feature axis, a near-uniform marginal (structureless noise) sits below its max log2(F)
     only by a finite-sample deficit, so the fold snaps to none (delta_F = 1.0) whenever H_F lies
-    within a band of log2(F).  The band is the conservative Miller-Madow uniform-null bias
-    (F-1)/(2 T ln2), capped at log2(F)/2: deliberately large (neither noise nor a low-rank
-    signal's delocalised marginal folds -- folding either would blur the SVD modes) but capped
-    so it never exceeds log2(F) and disables the fold vacuously for wide-short data.  The cap
-    means the guard always folds once power concentrates below sqrt(F) effective channels.
-    Closed-form; the only choice is the sqrt(F) concentration floor.  See
-    research/validation/miller_madow_check.py.
+    within the band of `fold_band`.  The band is the larger of a Cantelli bound on the exact
+    Dirichlet null deficit and the width change that moves the Marchenko-Pastur edge past its
+    Tracy-Widom margin: a fold must be both real and worth making.  Neither term can reach
+    log2(F), so the band stays inside the entropy range without a cap, and neither carries a
+    constant that is not derived from a stated null.  Closed-form, fixed by the axis lengths
+    alone.
 
     Read BEFORE the whitening, and why that is forced.  `projection.read` runs
     `geometry -> normalize -> project`: this read is taken on the RAW frame, and only then is
@@ -306,7 +305,7 @@ def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05
     #
     #     H_F = log2(F)                  the no-signal maximum
     #     H_F >= log2(F) - fold_band     the concentration test
-    #     fold_band(T, F) = min((F-1)/(2 T ln2), log2(F)/2)   the capped Miller-Madow band
+    #     fold_band(T, F)                the null-deficit band
     #     delta_F = F / 2^H_F            the matched cell scale
     #
     # so widening the axis with cells nothing was observed in raises the bar the signal must
@@ -481,10 +480,8 @@ def fold_band(T: int, F: int, *, far: float = 0.05) -> float:
     governs wide-short frames, where the null deficit is large; the second governs square and tall
     ones, where it is not.
 
-    **This replaces a capped Miller-Madow band** -- ``T`` times the *mean* deficit, capped at
-    ``(1/2) log2 F``.  Both numbers were consequences of summarising a tail by a mean and then
-    stopping the summary running past the entropy range.  Neither term here can reach ``log2 F``,
-    so no cap can bind, and neither carries a constant that is not derived from a stated null.
+    Neither term can reach ``log2 F``, so no cap can bind, and neither carries a constant
+    that is not derived from a stated null.
     """
     Fi = max(2, int(F))
     Ti = max(1, int(T))

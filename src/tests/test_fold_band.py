@@ -1,9 +1,7 @@
 """The fold band (Def 2.2) and the two derived criteria behind it.
 
-The band replaced a capped Miller-Madow form -- ``T`` times the *mean* null deficit, capped at
-``(1/2) log2 F`` because the multiplier ran past the entropy range on wide-short frames.  Both
-numbers were chosen.  What replaces them is the larger of two bounds, each derived from a null
-the instrument already carries:
+The band is the larger of two bounds, each derived from a null the instrument already
+carries:
 
     significance   the deficit exceeds what the null itself produces
     sufficiency    the fold moves the Marchenko-Pastur edge by more than its Tracy-Widom margin

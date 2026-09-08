@@ -4,8 +4,8 @@
 cell contributes nothing and `0 log 0 = 0` leaves the entropy untouched.  It also measures the
 extent -- how many rows and columns actually carry an observation -- separately from the array's
 raw shape, because that extent, not the shape, sizes every quantity the entropy is compared
-against: the no-signal maximum `log2(F)`, the concentration test, the Miller-Madow band
-`(F-1)/(2 T ln2)`, and the matched scale.  Widening an axis with cells nothing was observed in
+against: the no-signal maximum `log2(F)`, the concentration test, the fold band, and the
+matched scale.  Widening an axis with cells nothing was observed in
 would raise the bar the signal has to clear while adding no signal.
 
 The failure mode these tests watch for, stated first so they can fail:
