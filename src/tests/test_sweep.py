@@ -102,8 +102,8 @@ def test_the_on_pulse_reads_follow_the_profiles_own_noise():
 
 
 def test_a_flagged_channel_is_absent_from_a_patch_not_zero_in_it():
-    """A swept patch used to be cleaned with `nan_to_num`, so a channel nothing was observed in
-    became a measurement of exactly zero power sitting in the patch, diluting it.
+    """A channel nothing was observed in is absent from the patch, not a measurement of exactly
+    zero power sitting in it and diluting it.
 
     Checked against the only ground truth available: the same field with those channels deleted."""
     rng = np.random.default_rng(0)

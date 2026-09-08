@@ -410,9 +410,9 @@ def top_spectrum_value(X: np.ndarray, kind: str) -> float:
     """
     X = np.asarray(X)
     if kind not in KINDS:
-        # Named, not defaulted: the two branches score DIFFERENT quantities, so a kind that is
+        # Named, not defaulted: the two branches score different quantities, so a kind that is
         # not a cut point must raise, never fall through to the correlation branch and
-        # calibrate a reference on the wrong statistic.  ("screen" was this kind before 0.2.1.)
+        # calibrate a reference on the wrong statistic.
         raise ValueError(f"top_spectrum_value: unknown kind {kind!r}; expected one of {KINDS}. "
                          f"The cut point formerly called 'screen' is now 'projection'.")
     if kind == "projection":

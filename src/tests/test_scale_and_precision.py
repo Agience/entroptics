@@ -63,9 +63,9 @@ def test_a_channel_with_no_spread_gets_no_scale_rather_than_a_small_one(signal):
 
 
 def test_coarse_quantization_does_not_blow_up_the_floor():
-    """Quantization noise is real noise and the derived floor should measure it -- what it must not
-    do is diverge. A channel whose samples collapse onto one level used to be divided by a
-    manufactured scale of ~1e-11, lifting the screen to 1e10 and beyond."""
+    """Quantization noise is real noise and the derived floor measures it -- what it must not do is
+    diverge. A channel whose samples collapse onto one level must not be divided by a manufactured
+    scale of ~1e-11, which lifts the screen to 1e10 and beyond."""
     rng = np.random.default_rng(2)
     clean = rng.standard_normal((300, 3)) @ rng.standard_normal((3, 64))
     lo, hi = clean.min(), clean.max()

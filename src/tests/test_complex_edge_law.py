@@ -85,10 +85,10 @@ def test_tw2_quantiles_match_chiani_table_3():
     assert abs(npv._TW2_G_K - k) < 1e-9 and abs(npv._TW2_G_TH - th) < 1e-12
     assert abs(npv._TW2_G_LOC - (npv._TW2_MEAN - k * th)) < 1e-9
 
-    # no level is privileged: the function must have no step at the formerly tabulated levels
+    # no level is privileged: the function must have no step at any level
     for far in (0.05, 0.0501, 0.0499):
         assert abs(npv.tw2_quantile(far) - npv._tw_quantile_invert(far, npv.tw2_sf)) < 1e-12
-    # TW2's tail is thinner than TW1's, which is the whole reason the old floor never fired
+    # TW2's tail is thinner than TW1's
     assert npv.tw2_quantile(0.05) < npv.tw1_quantile(0.05)
     assert npv.tw_quantile(0.05, complex_=True) == npv.tw2_quantile(0.05)
     assert npv.tw_quantile(0.05, complex_=False) == npv.tw1_quantile(0.05)
