@@ -56,9 +56,10 @@ import exp15_decay_scatter as e15
 import exp16_scale_before_whitening as e16
 import exp17_rank_baselines as e17
 import exp18_coloured_null as e18
+import exp19_operator_gaps as e19
 
 MODULES = [e1, e2, e3, e4, e5, e6, e7, e8, e9, e10, e11, e12, e13, e14, e15, e16,
-           e17, e18]
+           e17, e18, e19]
 
 def _environment() -> str:
     """The environment this run happened in.
@@ -92,7 +93,7 @@ eigenvalues, a mode count, ordered vs permuted structure, stationary vs regime-s
 a rank/bandwidth) and shows the corresponding read **recovers it**.  Everything is
 seeded and deterministic; regenerate with `python research/validation/run_all.py`.
 
-Scripts: `common.py` (seeded ground-truth generators), `exp1..exp18_*.py`.
+Scripts: `common.py` (seeded ground-truth generators), `exp1..exp19_*.py`.
 
 {ENVIRONMENT}
 """

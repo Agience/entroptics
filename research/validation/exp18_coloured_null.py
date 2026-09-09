@@ -88,6 +88,27 @@ def run() -> dict:
 
     table = C.md_table(["shape", "rho", "mean K_signal", "P(K_signal > 0)",
                         "mean GD", "mean MDL", "mean AIC", "mean coherence z"], rows)
+
+    # Where the effect actually lives: the RAW singular spectrum, before any estimator sees it.
+    # Every selector above reads against an i.i.d. edge, so if the spectrum itself sits above that
+    # edge then none of them can be right here and the comparison is about degree, not about one
+    # estimator's defect.  Scored against Bai-Yin, s_max -> sqrt(N) + sqrt(F), which is the
+    # asymptotic edge for i.i.d. unit-variance entries and carries no fitted constant.
+    rows_s = []
+    for (T, F) in SHAPES:
+        edge = float(np.sqrt(T) + np.sqrt(F))
+        for rho in (1.0, 2.0):
+            s1, above = [], []
+            for s in range(N_SEEDS):
+                sv = np.linalg.svd(_ar1_rows(T, F, rho, seed=SEED0 + s), compute_uv=False)
+                s1.append(float(sv[0])); above.append(int((sv > edge).sum()))
+            rows_s.append([f"{T}x{F}", rho, round(edge, 2), round(float(np.mean(s1)), 1),
+                           round(float(np.mean(above)), 1)])
+    table_s = C.md_table(["shape", "rho", "Bai-Yin edge", "mean s_1",
+                          "mean # singular values above the edge"], rows_s)
+    ref = next(r for r in rows_s if r[0] == "200x200" and r[1] == 2.0)
+    table = ("**(a) what each selector reports**\n\n" + table
+             + "\n\n**(b) the raw spectrum, against the i.i.d. edge it is read at**\n\n" + table_s)
     # mean spurious count at rho > 1, over the cells where each method is defined
     col_cells = [sp for sp, r in zip(spurious, rows) if r[1] > 1.0]
     def _mean(i):
@@ -115,7 +136,10 @@ def run() -> dict:
     concl = (
         "A serially correlated field genuinely moves the bulk -- the singular values really do sit "
         "above the iid edge -- so this is a property of the null every one of these methods is "
-        "calibrated against, not of any one estimator. What the comparison measures is how far "
+        "calibrated against, not of any one estimator. "
+        f"At {ref[0]} and rho = {ref[1]:g} the leading singular value of the raw field averages "
+        f"{ref[3]} against a Bai-Yin i.i.d. edge of {ref[2]}, with {ref[4]} values above that edge. "
+        "What the comparison measures is how far "
         "each is wrong when the assumption is broken. "
         "The floor's calibration assumes independent rows and the ordered axis of a real record "
         "does not supply them. What this measures is how far the false-alarm rate moves when that "

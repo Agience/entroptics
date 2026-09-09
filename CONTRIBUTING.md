@@ -12,6 +12,14 @@ The library is parameter-free, deterministic and numpy-only at the core. Every c
 provenance, every claim needs a theorem, and the golden-contract tests must stay bit-identical
 across backends.
 
+## Reporting an issue
+
+Open an issue at https://github.com/Agience/entroptics/issues. A report is most useful with the
+array shape, the backend (numpy or torch), and the read you called. Security issues go to
+**connect@agience.ai** rather than a public issue.
+
+Participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
 ## Contributing
 
 Fork, branch from `main`, sign off every commit (`git commit -s`) to certify the

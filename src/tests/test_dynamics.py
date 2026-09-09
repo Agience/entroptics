@@ -236,9 +236,13 @@ def _slowest(W):
 
 def test_dropout_does_not_bias_the_decay_rates():
     """Zeroing a missing cell makes the transition INTO it look like decay toward zero, so every
-    rate reads faster than it is -- the read rose from 0.0195 to 0.4597 (23x) as dropout went from
-    0 to 35%, always in the same direction.  The gaps are carried by the record's own operator
-    instead, so the read stops depending on how much was dropped."""
+    rate reads faster than it is, and worse the more is dropped.  The gaps are carried by the
+    record's own operator instead, so the read stops depending on how much was dropped.
+
+    This asserts the BOUND -- the carried rate does not move with the dropped fraction.  The
+    VALUES the paper quotes are measured and written down by
+    ``research/validation/exp19_operator_gaps.py``, not here: a bound in a test leaves the value
+    itself recorded nowhere but a docstring, and a docstring is not an artifact."""
     W0, _ = _planted_system()
     rng = np.random.default_rng(0)
     ref = _slowest(W0)

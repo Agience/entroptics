@@ -7,13 +7,14 @@ authors:
   - given-names: Ikailo John
     family-names: Sessford
     email: john@ikailo.com
+    orcid: "https://orcid.org/0009-0002-0150-4027"
     affiliation: Ikailo
 repository-code: "https://github.com/Agience/entroptics"
 url: "https://agience.ai"
 license: Apache-2.0
 doi: "10.5281/zenodo.21273400"
-version: 0.2.1
-date-released: "2026-09-02"
+version: 0.2.3
+date-released: "2026-09-09"
 keywords:
   - entroptics
   - entropy

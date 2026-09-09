@@ -95,10 +95,9 @@ from .batch import (resolved_batch, ResolvedBatch,   # the ONE batched resolved-
 from .lift import koopman_lift, delay_embed          # Koopman observable lift (nonlinear -> linear operator)
 
 # Taken from the installed distribution rather than written here, so it cannot disagree with
-# pyproject.toml. It did: pyproject said 0.2.2 while this literal still said 0.2.1, and callers ask
-# the module, not the metadata -- a reader pinned against `entroptics.__version__` would have been
-# told 0.2.1 by a 0.2.2 install and its version guard would have passed on the wrong library.
-# The fallback covers running from a source tree that was never installed.
+# pyproject.toml.  Callers pin against `entroptics.__version__`, not against the metadata, so a
+# literal here that drifts from the distribution would let a version guard pass on the wrong
+# library.  The fallback covers running from a source tree that was never installed.
 from importlib.metadata import PackageNotFoundError as _PkgNotFound, version as _dist_version
 
 try:

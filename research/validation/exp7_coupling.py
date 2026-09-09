@@ -119,8 +119,13 @@ def run() -> dict:
         f"(agreement {min(r[2] for r in rows_a if r[1] != 0):.3f}) while independent sides "
         f"resolve nothing; the closed-form permutation variance tr(C_a C_b)/(T-1) matches "
         f"{N_PERM} brute-force re-pairings to within {worst:.2%}, the residual being the sampling "
-        f"error of a variance estimated from a non-normal permutation distribution (the worst "
-        f"case reads 1.029 at 20k draws and 1.006 at 200k); over {len(zs)} independent "
+        # The convergence sequence is measured, not asserted here: the reproduce.py under
+        # research/supplemental/coupling sweeps 20k / 100k / 200k at these same shapes and writes
+        # brute_force.csv.  This experiment runs one draw count, reports that one, and points at
+        # the sweep for the rest.
+        f"error of a variance estimated from a non-normal permutation distribution, which shrinks "
+        f"with the draw count (swept in research/supplemental/coupling/reproduce.py: worst case 1.029 at "
+        f"20k, 1.020 at 100k, 1.009 at 200k); over {len(zs)} independent "
         f"pairs the null has mean {zs.mean():.3f}, std {zs.std():.3f} and fires at "
         f"{rate:.3f} (nominal {FAR}).")
     concl = ("The coupling's sign is a MEASUREMENT: it tracks the planted sign and returns "

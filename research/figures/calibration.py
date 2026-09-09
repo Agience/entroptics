@@ -57,6 +57,33 @@ def native(clean, F):
     return clean[:, (np.arange(F) * n) // F]
 
 
+def relerr(a, b):
+    return float(np.linalg.norm(a - b) / (np.linalg.norm(b) + 1e-30))
+
+
+def snr_band(B, snrs=(10, 50, 1000, None)):
+    """The read against the truth across the noise-relevant band, and against the raw frame.
+
+    ``test_extract.py`` computes exactly this and asserts BOUNDS on it -- correlation above 0.95,
+    relative error below 0.2.  The paper quotes the VALUES, and nothing wrote them down, so a
+    figure that drifted stayed in the prose until someone re-derived it by hand.  This emits them.
+
+    ``snr=None`` is the noiseless limit.  The raw-field columns are the same comparison made
+    against the unfiltered frame, which is what says where the filter stops helping: its own
+    residual is about 1%, so above S/N ~ 200 the raw frame is already closer to the truth."""
+    rows = []
+    for snr in snrs:
+        W = B if snr is None else B + np.random.default_rng(0).standard_normal(B.shape) / snr
+        clean, _ = Aperture(W, window=None).extract()
+        cn = native(clean, B.shape[1])
+        rows.append({"snr": "none" if snr is None else snr,
+                     "read_corr": f"{corr(cn, B):.3f}",
+                     "raw_corr": f"{corr(W, B):.3f}",
+                     "read_relerr": f"{relerr(cn, B):.3f}",
+                     "raw_relerr": f"{relerr(W, B):.3f}"})
+    return rows
+
+
 def dropout_recovery(B, frac, snr, seed):
     """extract on a noisy burst with ``frac`` of its channels DROPPED; return the recovery over the
     surviving channels, the recovered image (dropped -> NaN) and the drop mask.
@@ -104,7 +131,17 @@ def main():
     # panel 4: two separate series over dropout fraction.  A read that resolves nothing is a
     # FAILURE TO PRODUCE, not a 0% recovery -- averaging the two together plots the success rate
     # and calls it fidelity.
-    fracs = np.arange(0.0, 0.85, 0.03)
+    #
+    # The sweep runs to the LIMIT, which is one surviving channel: a grid that stops partway
+    # leaves the collapse off the edge of the plot and reads as flat robustness everywhere.
+    # It is sampled in the surviving COUNT rather than the dropped fraction, because that is the
+    # quantity the read is limited by -- 84% of 256 channels dropped still leaves 41, which is
+    # why nothing changes out there, and the last decade of the fraction axis holds every
+    # surviving count from 41 down to 1.
+    surv_grid = sorted({F - int(round(fr * F)) for fr in np.arange(0.0, 0.85, 0.03)}
+                       | {41, 32, 26, 20, 16, 13, 10, 8, 6, 5, 4, 3, 2, 1})
+    fracs = np.array([(F - s) / F for s in reversed(surv_grid)])
+    survs = np.array(list(reversed(surv_grid)))
     succ, cond = [], []
     for fr in fracs:
         vals = [dropout_recovery(B, fr, SNR, seed=100 + s)[0] for s in range(N_SEEDS)]
@@ -121,9 +158,22 @@ def main():
         w.writerow(["# entroptics extract() calibration (synthetic burst)"])
         w.writerow([f"# SNR={SNR}", f"noise_only_recovery_pct={p3:.2f}",
                     f"dropout_recovery_pct={p6:.2f}", f"drop_fraction_pct={pdrop:.1f}"])
-        w.writerow(["channels_dropped_pct", "resolved_pct", "recovery_pct_when_resolved"])
-        for x, sv, y in zip(fx, sy, cy):
-            w.writerow([f"{x:.1f}", f"{sv:.1f}", "" if not np.isfinite(y) else f"{y:.2f}"])
+        # the S/N band the paper quotes, emitted rather than left to a bounds assertion
+        w.writerow(["# S/N band: the read and the raw frame, both against the truth"])
+        w.writerow(["snr", "read_corr", "raw_corr", "read_relerr", "raw_relerr"])
+        for r in snr_band(B):
+            w.writerow([r["snr"], r["read_corr"], r["raw_corr"],
+                        r["read_relerr"], r["raw_relerr"]])
+        w.writerow([])
+        w.writerow(["# recovery against channel dropout, swept to one surviving channel"])
+        w.writerow(["channels_dropped_pct", "channels_surviving", "resolved_pct",
+                    "recovery_pct_when_resolved"])
+        for x, ns, sv, y in zip(fx, survs, sy, cy):
+            w.writerow([f"{x:.2f}", int(ns), f"{sv:.1f}",
+                        "" if not np.isfinite(y) else f"{y:.2f}"])
+        # The terminal point, which is not a measurement: at 100% no channel survives and the
+        # front door refuses the read rather than returning a recovery of anything.
+        w.writerow(["100.00", 0, "0.0", ""])
     print(f"wrote {dat}")
 
     fig = plt.figure(figsize=(12.5, 6.7))
@@ -141,15 +191,36 @@ def main():
     wf(fig.add_subplot(gs[0, 1]), W2, f"+ noise   (S/N {SNR})")
     wf(fig.add_subplot(gs[0, 2]), rec3, f"recovery\n{p3:.1f}%")
 
+    # Plotted against the SURVIVING count on a log axis, descending, rather than against the
+    # dropped fraction: the surviving count is what limits the read, and on a linear fraction
+    # axis every change is crushed into the last few percent -- 84% dropped still leaves 41 of
+    # 256 channels, so a sweep drawn that way reads as flat robustness and hides its own limit.
     axc = fig.add_subplot(gs[1, 0])
-    axc.plot(fx, cy, "o-", color="#1f7a3d", ms=4, label="recovery, when resolved")
-    axc.plot(fx, sy, "s--", color="#8a4b9c", ms=3.5, lw=1.2, label=f"resolved at all ({N_SEEDS} draws)")
-    axc.axvline(pdrop, ls=":", color="0.5", lw=1)
-    axc.set_xlabel("channels dropped (%)", fontsize=9); axc.set_ylabel("percent", fontsize=9)
-    axc.set_ylim(0, 103); axc.set_xlim(0, 85)
+    axc.plot(survs, cy, "o-", color="#1f7a3d", ms=3.5, label="recovery, when resolved")
+    axc.plot(survs, sy, "s--", color="#8a4b9c", ms=3, lw=1.2, label=f"resolved at all ({N_SEEDS} draws)")
+    axc.set_xscale("log")
+    axc.invert_xaxis()
+    axc.set_xticks([256, 64, 16, 4, 1])
+    axc.set_xticklabels(["256", "64", "16", "4", "1"])
+    axc.axvline(F - int(round(pdrop / 100 * F)), ls=":", color="0.5", lw=1)
+    axc.set_xlabel("channels surviving  (of 256, log scale)", fontsize=9)
+    axc.set_ylabel("percent", fontsize=9)
+    axc.set_ylim(0, 103)
     axc.set_title("recovery vs channels dropped", fontsize=10); axc.grid(alpha=0.3)
-    axc.legend(fontsize=7.2, loc="lower left", framealpha=0.9)
     axc.tick_params(labelsize=8)
+    # At 100% dropped no channel survives; there is no read to score, and the front door refuses
+    # it rather than returning a recovery of nothing.  Stated on the panel, off the log axis.
+    axc.annotate("0 surviving:\nread refused", xy=(0.985, 0.055), xycoords="axes fraction",
+                 ha="right", va="bottom", fontsize=6.8, color="#b3261e",
+                 bbox=dict(boxstyle="round,pad=0.28", fc="white", ec="#b3261e", lw=0.7))
+    axc.legend(fontsize=6.8, loc="lower left", framealpha=0.9)
+    # The dropped fraction the sweep is stated in, as the secondary scale.
+    axt = axc.twiny()
+    axt.set_xscale("log"); axt.set_xlim(axc.get_xlim())
+    axt.set_xticks([256, 64, 16, 4, 1])
+    axt.set_xticklabels([f"{100 * (1 - s / F):.0f}" for s in (256, 64, 16, 4, 1)], fontsize=7)
+    axt.set_xlabel("channels dropped (%)", fontsize=8, labelpad=2)
+    axt.tick_params(length=2)
 
     wf(fig.add_subplot(gs[1, 1]), W5_disp, f"+ noise (S/N {SNR}) + {pdrop:.0f}% random channel dropout")
     wf(fig.add_subplot(gs[1, 2]), rec6_disp, f"recovery of surviving channels\n{p6:.1f}%")

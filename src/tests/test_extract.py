@@ -162,9 +162,53 @@ def test_extract_front_door_fidelity():
     c_clean, e_clean, _ = run(None)
     assert c_clean > 0.99, "the noiseless limit must not degrade -- it was a units artifact"
     assert band[10][0] <= band[50][0] <= band[1000][0] <= c_clean, "correlation rises with S/N"
-    assert 0.001 < e_clean < 0.05, (
-        "the filter's own residual on a noiseless frame; update the paper if it moves")
+    assert 0.001 < e_clean < 0.05, "the filter's own residual on a noiseless frame"
     assert e_clean > relerr(B, B) , "a filter costs something where there is nothing to remove"
+
+
+def test_snr_band_matches_the_committed_table():
+    """The values the paper quotes, asserted against the table that publishes them.
+
+    The assertions above are BOUNDS -- correlation above 0.95, relative error below 0.2 -- and a
+    bound leaves the value itself written down nowhere but a docstring.  Section 12 of the paper
+    quotes the values, so for a long time the only thing tying the two together was a comment
+    saying to update the paper by hand if the numbers moved.  They moved; nobody did.
+
+    ``research/figures/calibration.py`` now emits the band to ``calibration.csv``, and this
+    asserts that what the filter computes here is what that table says.  Change the filter and
+    this fails until the figure is re-run, which is the point.
+
+    Skipped when the research tree is absent (an installed wheel has no ``research/``); the
+    committed table is what CI runs against."""
+    import csv
+    from pathlib import Path
+
+    table = Path(__file__).resolve().parents[2] / "research/figures/calibration.csv"
+    if not table.is_file():
+        pytest.skip("research/figures/calibration.csv not present (installed wheel, not a checkout)")
+
+    rows = {}
+    for r in csv.reader(table.open()):
+        if len(r) == 5 and r[0] not in ("snr",) and not r[0].startswith("#"):
+            try:
+                rows[r[0]] = [float(v) for v in r[1:]]
+            except ValueError:
+                continue
+    assert rows, f"no S/N band rows in {table}; re-run research/figures/calibration.py"
+
+    B = make_burst()
+    for key, (read_corr, raw_corr, read_relerr, raw_relerr) in rows.items():
+        snr = None if key == "none" else float(key)
+        W = B if snr is None else B + np.random.default_rng(0).standard_normal(B.shape) / snr
+        clean, _ = Aperture(W, window=None).extract()
+        cn = _native(clean, B.shape[1])
+        for name, got, want in (("read_corr", corr(cn, B), read_corr),
+                                ("raw_corr", corr(W, B), raw_corr),
+                                ("read_relerr", relerr(cn, B), read_relerr),
+                                ("raw_relerr", relerr(W, B), raw_relerr)):
+            assert round(got, 3) == pytest.approx(want, abs=5e-4), (
+                f"S/N={key} {name}: filter gives {got:.4f}, calibration.csv says {want} "
+                f"-- re-run research/figures/calibration.py")
 
 
 def test_persistent_structure_rejection():

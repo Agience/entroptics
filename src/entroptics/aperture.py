@@ -264,7 +264,7 @@ class Aperture:
             return 0
         if m >= 1.0 - 1e-9:
             return 1 << 60          # persistent active mode -> keep all.  This margin bounds the
-                                    # frame WINDOW (a locality/resource bound, PAPER §13.1) and
+                                    # frame WINDOW (a locality/resource bound, PAPER §11.1) and
                                     # enters no read, unlike the operator's own `forgets`, which is
                                     # reported and so is taken at the arithmetic's resolution.
         if eps is None:

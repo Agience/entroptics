@@ -16,6 +16,18 @@ Entroptics (entropy + optics) treats a 2-D array `W` of shape `(T, F)`, one **or
 
 It is a small, standalone library, **numpy only** at the core (scipy and torch optional), built entirely from geometry and standard theorems. Parameter-free and domain-agnostic.
 
+## Statement of need
+
+Selecting a rank is a prerequisite for a large class of analyses, and it is usually done with a threshold the analyst picks or a criterion that needs a known noise level. In practice a pipeline then carries a constant that was tuned on one instrument and is silently wrong on another.
+
+Existing tools reflect this. `scikit-learn`'s PCA offers a variance-explained fraction or Minka's MLE; [`optht`](https://github.com/erichson/optht) implements the Gavish–Donoho optimal hard threshold, whose unknown-noise form estimates its scale from the median singular value; and the Wax–Kailath AIC and MDL criteria, standard in array processing, are derived for *n* snapshots of *p* variables with *n* > *p* and are undefined otherwise.
+
+**Entroptics is for people who need a rank, a resolution and a reconstruction from records whose instrument they do not control, or across many substrates at once** — radio-astronomy waterfalls, spectrograms, sensor panels, embedding stacks — where a per-substrate constant is exactly what cannot be supplied. Its distinguishing property is that **no constant in it is fitted to data or calibrated to a substrate**: every fixed number is a derived mathematical quantity (a χ² median, an influence-function variance, a universal Tracy–Widom quantile) or a criterion stated in the documentation. What you supply is an operating point — a false-alarm level α, and the null it is taken against.
+
+Two further needs it addresses are more specific. It handles the wide, short regime (*F* ≫ *T*) that a dedispersed burst cutout or a short multichannel record presents, where the finite-size Tracy–Widom edge holds the top eigenvalue but the asymptotic Marchenko–Pastur edge does not. And it treats a masked or never-measured cell as **absent** throughout, so every read divides by the extent actually observed rather than the array's nominal shape.
+
+The intended audience is researchers and practitioners in signal processing, radio astronomy and applied statistics. For the DMD component specifically, [PyDMD](https://github.com/PyDMD/PyDMD) and [PyKoopman](https://github.com/dynamicslab/pykoopman) are more complete DMD libraries and are the better choice if DMD is your problem; Entroptics differs in maintaining the operator as a fixed sufficient statistic whose read cost is independent of stream length, and in truncating at its own derived floor rather than a supplied tolerance.
+
 ## Install
 
 ```bash
@@ -318,7 +330,7 @@ clean, info = Aperture(W[:, live], window=None).extract()        # everything do
 info["K_signal"], info["contrast"], info["coherence"]
 ```
 
-`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The read comes back on the waterfall's own amplitude scale, so the "Removed" panel is a plain `wf - clean` with nothing rescaled by hand. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §14.1 of [the paper](research/PAPER.md).
+`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The read comes back on the waterfall's own amplitude scale, so the "Removed" panel is a plain `wf - clean` with nothing rescaled by hand. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §12.1 of [the paper](research/PAPER.md).
 
 ## Why it's principled
 
@@ -405,6 +417,31 @@ makes it able to fail:
 ## Formal certification
 
 The governing lemmas of the theory ([`research/PAPER.pdf`](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf)) are **machine-checked in Lean 4 / Mathlib** ([`research/lean/`](https://github.com/Agience/entroptics/tree/main/research/lean), 44 theorems): the fill-fraction and Strehl bounds, positive-semidefiniteness of the biased autocovariance (peak-at-zero-lag OTF), the exact permutation-null mean of the coherence, the Weyl-certified attenuation interval, axial≠directional concentration, and exact decay-rate recovery + additive splicing. `lake build` compiles with **no `sorry`**, resting only on Mathlib's standard axioms.
+
+## Documentation
+
+- **[API reference](docs/API.md)** — every public name, with its signature and what it does. Generated from the library itself by `python docs/generate_api.py`, so it cannot drift from the code.
+- **[`research/PAPER.md`](research/PAPER.md)** — the construction: definitions, proofs, and the provenance of every constant (§11.1).
+- **[`research/validation/RESULTS.md`](research/validation/RESULTS.md)** — what each read recovers against a planted ground truth.
+- **[`research/supplemental/`](research/supplemental/)** — the applications and statistics papers, each with a `reproduce.py` and a `verify.py`.
+
+## Getting help
+
+- **Questions and bug reports:** open an issue at [github.com/Agience/entroptics/issues](https://github.com/Agience/entroptics/issues). A report is most useful with the array shape, the backend (numpy or torch), and the read you called.
+- **Security issues:** email **connect@agience.ai** rather than opening a public issue.
+- **Contributions:** see [CONTRIBUTING.md](CONTRIBUTING.md).
+- **Conduct:** participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
+
+## What runs without a download
+
+The library, its test suite and the full validation suite need **no external data** — every input is generated from a fixed seed:
+
+```bash
+pytest                                    # 675 tests
+python research/validation/run_all.py     # 19 experiments -> RESULTS.md
+```
+
+Two figure routines are the exception. `research/figures/frb_panel.py` and `frb_spotcheck.py` read the **CHIME/FRB Catalog 1 waterfalls**, a separate public download from the CANFAR archive (CISTI.CANFAR/21.0007) that is not part of this repository and is far too large to ship. They refuse, with instructions, if it is not configured — see [`research/supplemental/frb/README.md`](research/supplemental/frb/README.md) for the fetch and the one line of configuration. Everything else in the repository runs from a clean checkout.
 
 ## Contributing
 

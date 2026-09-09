@@ -6,7 +6,8 @@
   "creators": [
     {
       "name": "Sessford, Ikailo John",
-      "affiliation": "Ikailo Inc."
+      "affiliation": "Ikailo Inc.",
+      "orcid": "0009-0002-0150-4027"
     }
   ],
   "keywords": [
@@ -31,5 +32,5 @@
       "scheme": "doi"
     }
   ],
-  "version": "0.2.2"
+  "version": "0.2.3"
 }

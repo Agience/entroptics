@@ -6,7 +6,7 @@ eigenvalues, a mode count, ordered vs permuted structure, stationary vs regime-s
 a rank/bandwidth) and shows the corresponding read **recovers it**.  Everything is
 seeded and deterministic; regenerate with `python research/validation/run_all.py`.
 
-Scripts: `common.py` (seeded ground-truth generators), `exp1..exp18_*.py`.
+Scripts: `common.py` (seeded ground-truth generators), `exp1..exp19_*.py`.
 
 Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0.2.2 (numpy backend), numpy 2.4.4, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.12.10 on Windows AMD64.
 
@@ -19,7 +19,7 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 - **4. Coherence detects order and is null-calibrated** -- Ordered signals read z=26.7 (min 19.0) while the SAME rows permuted read z=-0.15 (~0); over 2000 iid-noise draws the null has mean 0.014, std 0.998, and P(z>2)=0.0265 (N(0,1) target 0.023).
 - **5. Mercer ratio rho as a stationarity diagnostic** -- Across sliding sub-windows the Mercer ratio rho is nearly constant for the stationary record (mean CV=0.062 over 12 seeds) but drifts/jumps 9x more for the regime switch (mean CV=0.584).
 - **6. Etendue / space-bandwidth <-> rank & bandwidth** -- Etendue and space-bandwidth rise monotonically with both the planted rank (Spearman etendue=1.000, SBW=1.000) and the planted feature bandwidth (etendue=1.000, SBW=1.000).
-- **7. The coupling recovers a planted sign against an exact null** -- Planted co-resolving and anti-resolving sides recover their sign in every draw (agreement 1.000) while independent sides resolve nothing; the closed-form permutation variance tr(C_a C_b)/(T-1) matches 100000 brute-force re-pairings to within 1.97%, the residual being the sampling error of a variance estimated from a non-normal permutation distribution (the worst case reads 1.029 at 20k draws and 1.006 at 200k); over 1600 independent pairs the null has mean 0.011, std 1.018 and fires at 0.049 (nominal 0.05).
+- **7. The coupling recovers a planted sign against an exact null** -- Planted co-resolving and anti-resolving sides recover their sign in every draw (agreement 1.000) while independent sides resolve nothing; the closed-form permutation variance tr(C_a C_b)/(T-1) matches 100000 brute-force re-pairings to within 1.97%, the residual being the sampling error of a variance estimated from a non-normal permutation distribution, which shrinks with the draw count (swept in research/supplemental/coupling/reproduce.py: worst case 1.029 at 20k, 1.020 at 100k, 1.009 at 200k); over 1600 independent pairs the null has mean 0.011, std 1.018 and fires at 0.049 (nominal 0.05).
 - **8. A fold needs continuity, not just concentration** -- Both families concentrate to a few effective channels (9.7 vs 3.1 of 64), so concentration alone folds both; the feature-axis adjacency z separates them cleanly (8.4 vs 0.03); and the fold can be undone on the continuous axis (residual 0.44) but not on the nominal one (residual 0.98 -- it recovers 2% of the signal), the residual falling monotonically as the axis is made smoother.
 - **9. The two-way screen: conservation and brightness** -- conservation holds to 2.0e-16 relative on all 12 crossings; radiance never rises (12/12), and is carried across exactly in every concentrating crossing (6/6).
 - **10. The observable lift: nonlinear trajectory to linear operator** -- in delay coordinates the operator forecasts the held-out tail at 0.0743 and 0.0395 of persistence, against 0.4924 and 0.5274 for the same trajectories in a random order -- a separation of 7x or better.
@@ -31,6 +31,7 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 - **16. The matched scale must be read before the whitening** -- On a planted line of known width, the scale read on the RAW frame folds in 9/9 cases (n_F tracking the line width) while the same read taken AFTER whitening folds in 0/9 -- it returns n_F = F every time. The mechanism is measured: the on-line channels hold 88.2% of the power before whitening and 9.6% after, because dividing each channel by its own scale lifts the noise-only channels to the amplitude of the line.
 - **17. K_signal against the standard rank selectors** -- On the exp3 planted signals at the same seeds, exact-count accuracy: K_signal 0.997 (36/36 cells), AIC 0.946 (27/36 cells), GD 0.935 (36/36 cells), MDL 0.889 (27/36 cells).  K_signal is the most accurate of the four.  AIC/MDL are undefined where the snapshot count does not exceed the variable count, and are reported n/a there rather than guessed.
 - **18. The nulls under coloured noise** -- On pure AR(1) noise with NO planted signal, the derived floor resolves a mode in 100.0% of draws at rho > 1 against 2.5% in the i.i.d. control (nominal alpha = 0.05); the worst cell is 100.0% at shape 200x200, rho = 2.  This is NOT specific to the derived floor: on the same records the standard selectors report K_signal 10.1, GD 22.9, MDL 19.0, AIC 44.7 spurious modes on average, so every iid-calibrated selector over-reads and K_signal over-reads the least.  The coherence read fires as it should -- adjacent rows genuinely are more alike than a re-ordering -- so the two must not be read as one number.
+- **19. A state with a hole in it is not a state** -- On a planted operator whose slowest rate is 0.0151, carrying the gaps leaves the read independent of how much was dropped (0.0195 at none, 0.0194 at half, a spread of 0.0009 across 0-50%), while substituting zero biases every rate upward and worsens monotonically -- 0.0195 at none to 0.4502 at 35%, a factor of 23. White noise acquires no persistent mode at any dropout.
 
 ---
 
@@ -501,6 +502,8 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 **Setup.** AR(1) rows at rho in [1.0, 2.0, 4.0, 8.0, 16.0, 32.0] (rho = 1 is the i.i.d. control), shapes [(200, 200), (300, 120), (40, 600)], 40 seeds each, NO planted signal. Projection(W).K_signal and .coherence.
 
+**(a) what each selector reports**
+
 | shape | rho | mean K_signal | P(K_signal > 0) | mean GD | mean MDL | mean AIC | mean coherence z |
 | --- | --- | --- | --- | --- | --- | --- | --- |
 | 200x200 | 1 | 0.03 | 0.025 | 0 | n/a | n/a | 0.19 |
@@ -522,4 +525,40 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 | 40x600 | 16 | 5.38 | 1 | 12.3 | 17.9 | 26.3 | 18.13 |
 | 40x600 | 32 | 5.35 | 1 | 12.3 | 17.9 | 26.3 | 15.91 |
 
-**Conclusion.** A serially correlated field genuinely moves the bulk -- the singular values really do sit above the iid edge -- so this is a property of the null every one of these methods is calibrated against, not of any one estimator. What the comparison measures is how far each is wrong when the assumption is broken. The floor's calibration assumes independent rows and the ordered axis of a real record does not supply them. What this measures is how far the false-alarm rate moves when that assumption is broken deliberately, at correlation lengths spanning the range section 4 reads off real data. A rate at or near the i.i.d. control means the floor tolerates serial correlation at that shape; a rate above it is the floor counting correlation as signal, and the number is what a reader needs in order to judge whether it matters for their records.
+**(b) the raw spectrum, against the i.i.d. edge it is read at**
+
+| shape | rho | Bai-Yin edge | mean s_1 | mean # singular values above the edge |
+| --- | --- | --- | --- | --- |
+| 200x200 | 1 | 28.28 | 28 | 0.1 |
+| 200x200 | 2 | 28.28 | 37.5 | 13.3 |
+| 300x120 | 1 | 28.27 | 28 | 0.2 |
+| 300x120 | 2 | 28.27 | 35 | 9.6 |
+| 40x600 | 1 | 30.82 | 30.4 | 0.2 |
+| 40x600 | 2 | 30.82 | 50.7 | 8.2 |
+
+**Conclusion.** A serially correlated field genuinely moves the bulk -- the singular values really do sit above the iid edge -- so this is a property of the null every one of these methods is calibrated against, not of any one estimator. At 200x200 and rho = 2 the leading singular value of the raw field averages 37.5 against a Bai-Yin i.i.d. edge of 28.28, with 13.3 values above that edge. What the comparison measures is how far each is wrong when the assumption is broken. The floor's calibration assumes independent rows and the ordered axis of a real record does not supply them. What this measures is how far the false-alarm rate moves when that assumption is broken deliberately, at correlation lengths spanning the range section 4 reads off real data. A rate at or near the i.i.d. control means the floor tolerates serial correlation at that shape; a rate above it is the floor counting correlation as signal, and the number is what a reader needs in order to judge whether it matters for their records.
+
+
+## 19. A state with a hole in it is not a state
+
+**Setup.** A linear system with planted slow modes at magnitudes (0.985, 0.96), T=2000, F=12, process noise 0.1; cells dropped at ['0%', '5%', '20%', '35%', '50%'] and read two ways -- carried (NaN, the library's own fill) and zeroed. Control: white noise at (1500, 12).
+
+**(a) the same record, two ways of treating the hole**
+
+| dropped | slowest rate (carried) | slowest rate (zeroed) | carried / truth | zeroed / truth |
+| --- | --- | --- | --- | --- |
+| 0% | 0.0195 | 0.0195 | 1.292 | 1.292 |
+| 5% | 0.0197 | 0.0726 | 1.301 | 4.803 |
+| 20% | 0.0204 | 0.2374 | 1.349 | 15.71 |
+| 35% | 0.0201 | 0.4502 | 1.327 | 29.79 |
+| 50% | 0.0194 | 0.6804 | 1.286 | 45.02 |
+
+**(b) the control: white noise must not acquire a mode**
+
+| dropped | slowest rate | mode magnitude | persistent mode? |
+| --- | --- | --- | --- |
+| 0% | 2.15 | 0.1165 | no |
+| 20% | 1.85 | 0.1573 | no |
+| 50% | 1.488 | 0.2257 | no |
+
+**Conclusion.** Substituting zero for an unobserved cell is not a neutral choice: it asserts that the system was AT zero, and a transition into zero reads as decay. The bias is one-sided and grows with the fraction dropped, so it cannot be corrected by reweighting the accumulated sums -- the pairs are wrong, not the weights. Carrying the gap with the record's own operator removes the dependence on the dropped fraction, and the noise control shows it does not manufacture a mode where none exists.

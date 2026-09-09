@@ -1,0 +1,5 @@
+event,n_F_read,wfall_min,wfall_max,span_raw,span_read,span_ratio,n_saturating,worst_offset_sigma,worst_offset_frac_raw_span,worst_offset_frac_read_span,worst_ch_raw_median,worst_ch_read_median,worst_ch_resid_median,worst_ch_resid_sd_from_panel_median
+FRB20190425A,5949,-0.57,6.95,1.085,0.875,1.24,0,0.73,0.10,0.13,+0.137,+0.115,+0.004,0.053
+FRB20190106B,10972,-0.88,3.63,0.482,0.116,4.14,1,0.89,0.27,1.13,+0.134,+0.126,+0.006,0.045
+FRB20190227A,10727,-0.89,2.52,0.519,0.254,2.04,3,3.28,0.94,1.92,+0.032,+0.489,-0.456,3.042
+FRB20190323B,10550,-0.76,0.95,0.492,0.188,2.61,1,1.75,0.53,1.38,+0.340,+0.260,+0.083,0.566

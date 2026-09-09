@@ -109,8 +109,11 @@ def _agreement(wf, read, live, idx, n_F, mod):
     fold does and nothing the read does.
 
     And every series is scored with its PER-CHANNEL BASELINE REMOVED, because ``model_wfall`` has
-    none: its per-channel median is exactly 0 in every channel, so it is a statement about the
-    burst and not about each channel's standing level.  Correlating a series that carries a
+    none: its per-channel median is numerically zero (at most 3.9e-06 over these four events,
+    against model maxima of 0.108-0.506), so it is a statement about the burst and not about each
+    channel's standing level.  Numerically zero and not exactly zero -- the model is a strictly
+    positive smooth surface, so it has no exact zero anywhere; the bound is what matters and
+    ``research/supplemental/frb/reproduce.py`` measures it per event.  Correlating a series that carries a
     baseline against one that does not scores the baseline as disagreement.  It applies to all
     four or none -- centring the read while the raw and rebinned references keep their baselines
     would hand the read a comparison the references never got, and inflate its agreement."""
@@ -132,6 +135,57 @@ def _agreement(wf, read, live, idx, n_F, mod):
 
     m = np.isfinite(read) & np.isfinite(rebin) & np.isfinite(wf) & np.isfinite(mod)
     return _c(wf, mod, m), _c(rebin, mod, m), _c(read, mod, m)
+
+
+def _display_diagnostics(wf, read, n_F):
+    """The numbers behind the paper's account of ONE visual artifact in Figure 2.
+
+    A channel whose standing level sits off its neighbours shows as a horizontal line in the
+    reconstruction panel and not in the raw one.  That looks like the read inventing structure and
+    it is the opposite: the read REPRODUCES a level that is really in the record, and the raw panel
+    merely hides it, because each panel is stretched against its own range and the read's range is
+    much narrower once the noise is gone.
+
+    Every definition here is the one the figure actually uses, pinned so the claim is checkable:
+
+      span        the contrast stretch ``_show`` applies -- 99.7th percentile minus median.
+      offset      a channel's median in the reconstruction, minus the reconstruction's frame
+                  median.  This is the standing level, on the panel it is displayed in.
+      sigma       1.4826 x MAD of the raw waterfall: the frame's own noise scale.
+      saturating  channels whose offset exceeds the reconstruction's span, i.e. those that
+                  actually clip against the stretch and draw a line.
+    """
+    def span(a):
+        f = a[np.isfinite(a)]
+        lo, hi = np.percentile(f, [50, 99.7])
+        return float(hi - lo)
+
+    s_raw, s_read = span(wf), span(read)
+    med = np.nanmedian(read, axis=1)
+    offset = med - np.nanmedian(read)
+    finite = offset[np.isfinite(offset)]
+    worst = float(np.nanmax(finite)) if finite.size else float("nan")
+    ch = int(np.nanargmax(np.where(np.isfinite(offset), offset, -np.inf)))
+    sigma = float(1.4826 * np.nanmedian(np.abs(wf - np.nanmedian(wf))))
+    resid = wf - read
+    rs = np.nanstd(resid)
+    return {
+        "n_F_read": n_F,
+        "wfall_min": f"{np.nanmin(wf):.2f}",
+        "wfall_max": f"{np.nanmax(wf):.2f}",
+        "span_raw": f"{s_raw:.3f}",
+        "span_read": f"{s_read:.3f}",
+        "span_ratio": f"{s_raw / s_read:.2f}",
+        "n_saturating": int(np.sum(finite > s_read)),
+        "worst_offset_sigma": f"{worst / sigma:.2f}",
+        "worst_offset_frac_raw_span": f"{worst / s_raw:.2f}",
+        "worst_offset_frac_read_span": f"{worst / s_read:.2f}",
+        "worst_ch_raw_median": f"{np.nanmedian(wf[ch]):+.3f}",
+        "worst_ch_read_median": f"{np.nanmedian(read[ch]):+.3f}",
+        "worst_ch_resid_median": f"{np.nanmedian(resid[ch]):+.3f}",
+        "worst_ch_resid_sd_from_panel_median":
+            f"{abs(np.nanmedian(resid[ch]) - np.nanmedian(resid)) / rs:.3f}",
+    }
 
 
 def _show(ax, arr, ext, title=None, xlabel=None):
@@ -192,10 +246,12 @@ def main():
         w.writerow(["event", "dm", "T", "F_recorded", "n_live", "n_F_read", "K_signal",
                     "contrast", "coherence_z", "n_kept", "n_dropped",
                     "corr_raw_model", "corr_rebinned_model", "corr_read_model"])
+        corrs = []
         for event, path in rows:
             wf, mod, ext, dm = _load(path)
             read, info, nlive, n_F, live, idx = _entroptics(wf)
             c_raw, c_reb, c_read = _agreement(wf, read, live, idx, n_F, mod)
+            corrs.append((c_raw, c_reb, c_read))
             w.writerow([event, f"{dm:.1f}", wf.shape[1], wf.shape[0], nlive, n_F,
                         info["K_signal"], f"{info['contrast']:.2f}",
                         f"{info['coherence']:.1f}", info["n_kept"], info["n_dropped"],
@@ -204,7 +260,31 @@ def main():
                   f"contrast={info['contrast']:6.1f}x  z={info['coherence']:6.1f}  "
                   f"kept={info['n_kept']} dropped={info['n_dropped']}  "
                   f"corr raw/rebin/read = {c_raw:.3f}/{c_reb:.3f}/{c_read:.3f}")
+        # The paper quotes the MEAN of each correlation column; emit it rather than leaving the
+        # reader (and the checker) to recompute it from four printed values.
+        if corrs:
+            w.writerow(["mean", "", "", "", "", "", "", "", "", "", "",
+                        f"{np.mean([c[0] for c in corrs]):.3f}",
+                        f"{np.mean([c[1] for c in corrs]):.3f}",
+                        f"{np.mean([c[2] for c in corrs]):.3f}"])
     print(f"wrote {dat}")
+
+    # the display diagnostics behind the paper's account of the saturating-channel artifact
+    dis = Path(__file__).resolve().parent / "frb_display.csv"
+    rows_d = []
+    for event, path in rows:
+        wf, mod, ext, dm = _load(path)
+        read, info, nlive, n_F, live, idx = _entroptics(wf)
+        rows_d.append({"event": event, **_display_diagnostics(wf, read, n_F)})
+    with open(dis, "w", newline="") as fh:
+        w = csv.DictWriter(fh, fieldnames=list(rows_d[0].keys()))
+        w.writeheader()
+        w.writerows(rows_d)
+        for r in rows_d:
+            print(f"  {r['event']:14s} span {r['span_raw']}/{r['span_read']} "
+                  f"= {r['span_ratio']}x  saturating {r['n_saturating']}  "
+                  f"worst {r['worst_offset_sigma']} sigma")
+    print(f"wrote {dis}")
 
 
 if __name__ == "__main__":

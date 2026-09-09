@@ -1392,7 +1392,7 @@ def mercer_certificate(W, mask=None) -> MercerCertificate:
 
 
 def rayleigh_shape_factor(profile) -> float:
-    """The Rayleigh SHAPE FACTOR g = xi * a_delta (the paper's "shape factor g", section 10)
+    """The Rayleigh SHAPE FACTOR g = xi * a_delta (the paper's "shape factor g", Prop 4.5)
     -- the integral correlation length times the entropy-width diffraction limit.  A scale-
     invariant, dimensionless shape functional (~O(1)) that reports the decay profile's SHAPE,
     from two SAME-domain (lag) length scales.  DISTINCT from ``shape_factor`` below, which is
@@ -1415,7 +1415,7 @@ def shape_factor(W, profile, mask=None) -> float:
     """The Abbe RESOLUTION FACTOR c = a_delta / phi_F (Rayleigh / Abbe:
     resolution = factor / aperture) -- the screen's own "1.22", read per-signal, not a
     universal constant.  DISTINCT from ``rayleigh_shape_factor`` (the Rayleigh shape factor
-    g = xi * a_delta of section 10); this is the a_delta-to-aperture ratio.  ``profile``: a
+    g = xi * a_delta of Prop 4.5); this is the a_delta-to-aperture ratio.  ``profile``: a
     1-D decay C(tau)."""
     pf = phi_F(W, mask)
     ad = diffraction_limit(np.asarray(profile, float)).a_delta
