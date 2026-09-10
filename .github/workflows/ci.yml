@@ -51,6 +51,47 @@ jobs:
       - run: python -m pip install -e ".[dev]"   # torch already satisfied by the CPU wheel
       - run: pytest
 
+  # `version` was bumped to 0.2.3 on main and pushed, but the tag was never cut. The Release
+  # workflow fires on `tags: ["v*"]`, so nothing ran: PyPI stayed at 0.2.2, Zenodo stayed at
+  # 0.2.2, and CITATION.cff claimed a 0.2.3 that no archive contained. A reader following the
+  # DOI got the version WITH the scale defects that 0.2.3 fixes. Nothing caught it because
+  # nothing was looking.
+  release-consistency:
+    name: version is tagged and self-consistent
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v7
+        with:
+          fetch-depth: 0        # tags, not just the tip
+      - uses: actions/setup-python@v7
+        with:
+          python-version: "3.12"
+      - name: pyproject and CITATION.cff agree
+        run: |
+          python - <<'EOF'
+          import re, sys, tomllib, pathlib
+          pv = tomllib.load(open("pyproject.toml", "rb"))["project"]["version"]
+          cff = pathlib.Path("CITATION.cff").read_text(encoding="utf-8")
+          m = re.search(r"^version:\s*\"?([^\"\s]+)\"?\s*$", cff, re.M)
+          cv = m.group(1) if m else None
+          print(f"pyproject={pv}  CITATION.cff={cv}")
+          if pv != cv:
+              print(f"::error::pyproject version {pv} != CITATION.cff version {cv}")
+              sys.exit(1)
+          EOF
+      - name: the released version has a tag
+        run: |
+          ver="$(python -c "import tomllib; print(tomllib.load(open('pyproject.toml','rb'))['project']['version'])")"
+          if git rev-parse -q --verify "refs/tags/v$ver" >/dev/null; then
+            echo "v$ver is tagged"
+          else
+            echo "::error::pyproject is at $ver but there is no v$ver tag. The Release workflow"
+            echo "::error::fires on tags only, so PyPI and Zenodo are still on the previous"
+            echo "::error::version while CITATION.cff advertises this one. Cut the tag:"
+            echo "::error::  git tag -a v$ver -m 'v$ver' && git push origin v$ver"
+            exit 1
+          fi
+
   # The Lean development is part of the paper's claim (Sec 15) and drifted from it once already:
   # its docstrings were numbered against a superseded draft because nothing built them in CI.
   lean:
