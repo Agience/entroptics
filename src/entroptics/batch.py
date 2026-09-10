@@ -65,7 +65,7 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import environment as _env
-from .entropy import MAD_SCALE
+from .entropy import MAD_SCALE, macheps
 from .projection import fold_target_batch, normalize_batch, project_batch
 from .null_providers import debias_denominator, screen_floor_sq, apply_floor
 
@@ -171,7 +171,8 @@ def _floor_batch(xp, screen, N, Fe, far, null, seed):
     or a caller ``null`` provider applied per frame.  Returns ``(Bg,)`` on ``xp``."""
     if null is None:
         row_energy = _env.sum_ax(xp, xp.abs(screen) ** 2, 2)                 # (Bg, N)
-        sigma2 = _env.median_ax(xp, row_energy, 1) / debias_denominator(N, Fe) + 1e-30
+        sigma2 = ((_env.median_ax(xp, row_energy, 1) + _env.sum_ax(xp, row_energy, 1) * macheps(xp, screen))
+                  / debias_denominator(N, Fe))
         return xp.sqrt(screen_floor_sq(sigma2, N, Fe, far))                  # (Bg,)
     # a caller-suppliable provider is the occasional path -> per frame, in numpy (needs the spectrum)
     scr = np.asarray(_env.to_numpy(screen))
@@ -646,7 +647,8 @@ class ResolvedScreen:
         (``sqrt`` of the eigenvalues) as its sample, which is what it thresholds against."""
         re = _env.cat0(xp, self._rowen) if self._rowen else _env.zeros(xp, (1,), ref=self._C)
         if self.null is None:
-            sigma2 = _env.median1d(xp, re) / debias_denominator(self.T, self.F) + 1e-30
+            sigma2 = ((_env.median1d(xp, re) + float(_env.sum_ax(xp, re)) * macheps(xp, re))
+                      / debias_denominator(self.T, self.F))
             return screen_floor_sq(sigma2, self.T, self.F, self.far)
         spectrum = np.sqrt(np.asarray(_env.to_numpy(_env.clampmin(xp, self._eval, 0.0))))
         fl = apply_floor(self.null, spectrum=spectrum, data=None,
@@ -806,7 +808,8 @@ class ResolvedScreenBatch:
             xp = _env.ns(self._C)
             re = _cat_tokens(xp, self._rowen) if self._rowen else _env.zeros(xp, (self.B, 1), ref=self._C)
             if self.null is None:
-                sigma2 = _env.median_ax(xp, re, 1) / debias_denominator(self.T, self.F) + 1e-30   # (B,)
+                sigma2 = ((_env.median_ax(xp, re, 1) + _env.sum_ax(xp, re, 1) * macheps(xp, re))
+                          / debias_denominator(self.T, self.F))                                  # (B,)
                 floor2 = screen_floor_sq(sigma2, self.T, self.F, self.far)                        # (B,) squared
             else:
                 # A caller provider is the occasional path, so it runs per screen in numpy on

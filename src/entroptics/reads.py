@@ -473,7 +473,15 @@ def _spectral_from_cov(xp, Cov, T: int, N: int, *, null=None, far: float = 0.05,
                               noise_floor=float("inf"), attenuation=0.0, phase=0.0,
                               dispersion=0.0, resolved_power=0.0, dominance=0.0,
                               eigenvalues=np.zeros(int(N)))
-    d = xp.sqrt(_env.clampmin(xp, xp.real(xp.diag(Cov)), 1e-30))
+    # RELATIVE floor: these are variances used to normalise `Cov` to a unit-diagonal
+    # CORRELATION matrix, so they scale as the square of the data.  An absolute `1e-30`
+    # replaces the true variance for anything below ~1e-15 in magnitude, the diagonal
+    # stops being 1, and every downstream eigenvalue is wrong -- `resolved_modes` read 0
+    # on a screen with resolved structure once it was scaled to 1e-30.
+    _dg = xp.real(xp.diag(Cov))
+    _top = float(_env.to_numpy(xp.max(_dg))) if int(_dg.shape[0]) else 0.0
+    d = xp.sqrt(_env.clampmin(xp, _dg, _top * macheps(xp, Cov)))
+    d = xp.where(d == 0, xp.ones_like(d), d)      # an all-zero screen leaves the origin alone
     Cmat = Cov / xp.outer(d, d)                          # exact correlation matrix (unit diagonal)
     evals, evecs = xp.linalg.eigh(Cmat)
     order = _env.argsort_desc(xp, xp.real(evals))
@@ -547,7 +555,19 @@ def spectral_optics(data: np.ndarray, mask: np.ndarray | None = None,
     ``null_providers.permutation()`` (the distribution-free null -- the correct floor for
     correlated data where ``mp`` conflates bulk correlation with signal, deterministic per
     ``seed``), or your OWN provider (a local reference / physics null).  ``far`` is the
-    significance level (5%)."""
+    significance level (5%).
+
+    **``resolved_modes`` counts modes standing clear of a NOISE floor.  It is not a matrix rank
+    and it is not a model-order selector.**  A mode that is real but small beside the leading one
+    sits under the floor and is not counted -- the floor's question is "signal or sea", not "is
+    this there at all".  Measured on the Hankel embedding of a sum of decaying exponentials --
+    the standard system-identification setting, where the wanted answer is the number of
+    exponentials -- this read returns ``1`` for true order 2 and 3 at ZERO noise, while the same
+    matrix has exact numerical rank 2 and 3 and singular values an order of magnitude apart
+    (5.42 and 0.46 at order 2).  ``top_share`` is 0.994 to 0.996 on those cases, which is the
+    mechanism rather than a floor set wrong: the modes are real and wildly unequal, and this read
+    asks which of them clear noise.  For rank or model order, take the singular values directly
+    and own the cut.  Pinned by ``tests/test_resolved_modes_is_not_a_rank.py``."""
     xp = _ns(data)
     nd = len(data.shape)
     if nd != 2:
@@ -621,7 +641,15 @@ def principal_directions(data: np.ndarray, mask: np.ndarray | None = None,
     # was taken in is the order the columns are returned in.
     Xc = _centred(xp, data)                                   # the one centring
     Cov = Xc.conj().T @ Xc
-    d = xp.sqrt(_env.clampmin(xp, xp.real(xp.diag(Cov)), 1e-30))
+    # RELATIVE floor: these are variances used to normalise `Cov` to a unit-diagonal
+    # CORRELATION matrix, so they scale as the square of the data.  An absolute `1e-30`
+    # replaces the true variance for anything below ~1e-15 in magnitude, the diagonal
+    # stops being 1, and every downstream eigenvalue is wrong -- `resolved_modes` read 0
+    # on a screen with resolved structure once it was scaled to 1e-30.
+    _dg = xp.real(xp.diag(Cov))
+    _top = float(_env.to_numpy(xp.max(_dg))) if int(_dg.shape[0]) else 0.0
+    d = xp.sqrt(_env.clampmin(xp, _dg, _top * macheps(xp, Cov)))
+    d = xp.where(d == 0, xp.ones_like(d), d)      # an all-zero screen leaves the origin alone
     Cmat = Cov / xp.outer(d, d)                               # exact correlation matrix (unit diagonal)
     evals, evecs = xp.linalg.eigh(Cmat)
     order = _env.argsort_desc(xp, xp.real(evals))
@@ -960,6 +988,21 @@ def coupling(a, b, *, far: float = 0.05) -> Coupling:
     ``A~^H B~`` in ``(0, 1]``: ``-> 1`` the two sides are locked through ONE mode (tight,
     lawful); ``-> 0`` the shared variance is spread over many modes (loose, statistical,
     many mediators).  It is defined on every pair.
+
+    **At ``D = 1`` this read IS Pearson's r, and saying so is not a concession.**  With one
+    shared coordinate the two frames are two columns, ``S`` is their centred inner product and
+    the norms are their centred norms, so ``strength`` is the sample correlation (agreeing to
+    8.9e-16) and ``z`` is exactly ``r * sqrt(T - 1)`` (1.4e-14) -- the Pitman-Hoeffding variance
+    collapses to ``|A~|^2 |B~|^2 / (T - 1)``.  What the read adds over ``numpy.corrcoef`` there
+    is the DECISION layer, and only that: ``resolved`` at the two-sided ``far``, with
+    ``strength`` returned as exactly ``0.0`` below it, so an unresolved r of 0.042 reports as no
+    coupling rather than as a small one.  A caller who wants the raw correlation at ``D = 1``
+    should read ``z`` (never zeroed) or call ``corrcoef`` and own the threshold.
+
+    Above ``D = 1`` the reduction stops.  ``strength`` is the ONE signed cosine of the two
+    centred frames -- a single number for the whole shared basis, not a per-coordinate
+    correlation and not their average -- and its null carries the cross-Gram ``tr(C_a C_b)``,
+    which a column-by-column r does not see.
 
     Deterministic and backend-agnostic; ``O(T D^2 + D^3)``.
     """

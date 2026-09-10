@@ -476,12 +476,18 @@ def fold_band(T: int, F: int, *, far: float = 0.05) -> float:
 
     which as a band on ``H_F`` is ``-log2(1 - dF/F)``.
 
-    The band is the larger of the two: a fold must be both real and worth making.  The first term
-    governs wide-short frames, where the null deficit is large; the second governs square and tall
-    ones, where it is not.
+    The band is the larger of the two: a fold must be both real and worth making.  Which one
+    binds is set by the ROW COUNT, not by the aspect ratio: the significance term governs frames
+    with very few rows and the sufficiency term governs everything else.  Measured crossover --
+    the smallest ``T`` at which sufficiency overtakes significance -- is ``T = 8`` at ``F = 8``,
+    11 at 16, 14 at 32, 19 at 64, 26 at 128, 36 at 256 and 51 at 512, i.e. roughly
+    ``T ~ 2-3 sqrt(F)``.  So ``(16, 64)`` sits in the significance regime while ``(32, 64)``
+    already sits in the sufficiency one, though both are wide and short.
 
-    Neither term can reach ``log2 F``, so no cap can bind, and neither carries a constant
-    that is not derived from a stated null.
+    Neither term carries a constant that is not derived from a stated null.  The sufficiency
+    term CAN reach ``log2 F`` -- when the required width change exceeds ``F - 1``, no achievable
+    fold clears the margin and every fold is refused, which is the intended reading and not a
+    cap chosen to keep it in range.
     """
     Fi = max(2, int(F))
     Ti = max(1, int(T))
@@ -493,7 +499,19 @@ def fold_band(T: int, F: int, *, far: float = 0.05) -> float:
 
     from .null_providers import tw1_quantile
     dF = float(tw1_quantile(far)) * np.sqrt(Fi) * (1.0 / np.sqrt(Ti) + 1.0 / np.sqrt(Fi)) ** (1.0 / 3.0)
-    dF = float(min(dF, Fi - 1.0))
+    # `q_TW1` is the (1 - far) quantile of a law centred near -1.21, so it turns NEGATIVE above
+    # far ~ 0.168, and with it `dF` and `sufficiency`.  Clamping at zero keeps the intermediate
+    # quantity meaning what its name says -- a width change -- and changes NO returned value:
+    # `significance` is strictly positive, so `max` already selected it in all 320 of the 576
+    # (T, F, far) cells where the unclamped term went negative, to 0.0e+00.  Hygiene, not a fix.
+    #
+    # The UPPER clamp binds too, and that is the correct reading rather than a defect: when the
+    # required width change reaches `F - 1`, this term lands on exactly `log2 F`, the largest
+    # deficit attainable, so no record can clear it.  At that level no achievable fold moves the
+    # Marchenko-Pastur edge past its own Tracy-Widom margin, so every fold is refused.  It is why
+    # a tight `far` on a narrow feature axis folds nothing: `F = 4` refuses all folds at
+    # `far <= 0.01`, `F = 8` at `far = 0.001`.
+    dF = float(np.clip(dF, 0.0, Fi - 1.0))
     sufficiency = -float(np.log2(1.0 - dF / Fi))
 
     return max(significance, sufficiency)

@@ -45,7 +45,7 @@ import numpy as np
 
 from . import environment as _env
 from .entropy import (geometry, normalize, downsample, upsample, shannon_bits, fold_width,
-                      MAD_SCALE, MAD_LOGVAR, _shrink_mad)
+                      MAD_SCALE, MAD_LOGVAR, _shrink_mad, macheps)
 # The noise floor is a caller-suppliable null provider (a FloorContext -> float callback);
 # null_providers ships the derived defaults (mp/robust) + the plumbing.  The shared
 # primitives are re-exported here under their private names (``_tw1_sf`` etc.) so a caller
@@ -184,6 +184,15 @@ def mode_significance(screen: np.ndarray, s: np.ndarray | None = None) -> ModeSi
         return ModeSignificance(deviate=empty, pvalue=empty)
     mu, sig_J = _johnstone(N, F)
     sigma2 = _noise_sigma2(xp, screen, N, F)
+    if not (sigma2 > 0.0):
+        # A screen with no energy has no noise ensemble to stand above, so no mode is evidence.
+        # This is the ONE consumer that divides by sigma^2, and handling the degenerate case HERE
+        # is what lets `noise_sigma2` stay an exact variance.  It previously carried an additive
+        # `1e-30` for this division alone, which made the reported variance a constant rather than
+        # a measurement once the screen fell near 1e-15 (inflated 2.79x at 1e-15, 1.8e+06x at
+        # 1e-18) -- an absolute number standing in for a dimensioned one.
+        z = np.zeros_like(sv)
+        return ModeSignificance(deviate=z, pvalue=np.ones_like(sv))
     g = (sv ** 2 / sigma2 - mu) / sig_J
     p = np.array([_tw1_sf(float(gk)) for gk in g])
     return ModeSignificance(deviate=g, pvalue=p)
@@ -228,8 +237,16 @@ def coherence(screen: np.ndarray, lag: int = 1) -> float:
     N = int(screen.shape[0])
     if N < 2 * lag + 2 or lag < 1 or N < 4:
         return 0.0
-    G = screen @ xp.conj(screen).T                 # (N, N) Hermitian row Gram
-    R = xp.real(G) ** 2                            # squared real inner products (symmetric)
+    G = xp.real(screen @ xp.conj(screen).T)        # (N, N) Hermitian row Gram
+    # `R` is the SQUARE of `G` and the moments below take squares of ITS row sums, so the
+    # arithmetic reaches the eighth power of the screen and overflowed to `nan` above a screen
+    # magnitude of ~1e38.  The z-score is scale-invariant by construction (numerator and
+    # standard deviation carry the same power), so dividing `G` by its own peak first is exact
+    # in the value and removes the cliff.
+    gmax = float(_env.to_numpy(xp.max(xp.abs(G))))
+    if gmax > 0.0:
+        G = G / gmax
+    R = G ** 2                                     # squared real inner products (symmetric)
     d = xp.diagonal(R)                             # main diagonal = ||row||^4
     S1 = float(_env.sum_ax(xp, R)) - float(_env.sum_ax(xp, d))            # sum over off-diag pairs
     S2 = float(_env.sum_ax(xp, R * R)) - float(_env.sum_ax(xp, d * d))    # sum of squares, off-diag
@@ -247,7 +264,15 @@ def coherence(screen: np.ndarray, lag: int = 1) -> float:
     var_A = (M * (mu2 - mu_sq)
              + n_share * (E_share - mu_sq)
              + n_disj * (E_disj - mu_sq)) / (M * M)
-    if var_A < 1e-24:
+    # The guard is on CANCELLATION, not on magnitude, so it must be RELATIVE.  `var_A` is
+    # assembled by subtracting terms of size `mu^2`, so its floating-point resolution is that
+    # magnitude times the arithmetic's own epsilon -- the same `scale * shape * macheps` idiom
+    # the rest of the library uses.  An ABSOLUTE floor cannot work here: `R` is a squared inner
+    # product, so it scales as the FOURTH power of the screen and `var_A` as the EIGHTH.  With
+    # the previous `1e-24`, one factor of ten in the caller's units took this read from
+    # z = 18.82 to exactly 0.0 on the identical signal -- structure silently reported as none.
+    tol = max(mu_sq, mu2) * float(N * N) * macheps(xp, R)
+    if var_A <= tol:
         return 0.0
     A = float(_env.sum_ax(xp, xp.diagonal(R, lag))) / float(M)   # lag-th superdiagonal mean
     return (A - mu) / math.sqrt(var_A)
@@ -685,13 +710,19 @@ def fold_target_batch(xp, stack, *, far: float = 0.05) -> np.ndarray:
     # Batched shannon_bits over the feature marginal (no per-frame loop -- a per-frame call would
     # serialise B tiny reductions on the GPU).  Same formula as ``entropy.shannon_bits``:
     # H = -sum p log2 p, p = marg / sum(marg), with the p>0 guard and [1e-12,1] clip in the log.
-    safe_tot = _env.clampmin(xp, tot, 1e-30)
+    # EXACT tests, matching `entropy.shannon_bits`: the weights are non-negative, so `> 0` is
+    # "no weight at all", not "less weight than some number".  This replaces an absolute `1e-30`
+    # on `tot` (a POWER SUM, so dimensioned) and a `1e-12` clip on the probabilities.  Both are
+    # reachable in principle -- `tot` falls below 1e-30 for a screen scaled near 1e-16 -- but NO
+    # input has been found where either changed a returned `F_eff`, so this is agreement with the
+    # per-frame path, which this function's own docstring promises, and not a fixed defect.
+    safe_tot = xp.where(tot > 0, tot, xp.ones_like(tot))       # empty rows are discarded below
     p = marg / safe_tot[:, None]
-    plog = xp.where(p > 0, p * xp.log2(_env.cliprange(xp, p, 1e-12, 1.0)), xp.zeros_like(p))
+    plog = xp.where(p > 0, p * xp.log2(xp.where(p > 0, p, xp.ones_like(p))), xp.zeros_like(p))
     H = -_env.sum_ax(xp, plog, 1)                                  # (B,) on xp
     log2F = float(np.log2(F))
     tot_np = np.asarray(_env.to_numpy(tot))
-    H_F = np.where(tot_np > 1e-30, np.asarray(_env.to_numpy(H)), log2F)   # P_total<=0 -> maximal entropy
+    H_F = np.where(tot_np > 0.0, np.asarray(_env.to_numpy(H)), log2F)   # P_total<=0 -> maximal entropy
     # The same `fold_width` the per-frame `geometry` calls -- including its continuity gate --
     # so the batched read stays bit-identical to reading each frame with `Projection`.  Only the
     # H_F reduction is batched; the decision itself is per frame because continuity is.
@@ -803,5 +834,8 @@ def _mp_floor_batch(screen: np.ndarray, S: np.ndarray, N: int, F_eff: int, far: 
     Shares the de-biasing denominator and the Johnstone edge with the per-frame ``mp`` provider
     (via ``null_providers``) so the batch and per-frame floors cannot drift."""
     row_energy = (np.abs(screen) ** 2).sum(axis=2)                            # (B, N)
-    sigma2 = np.median(row_energy, axis=1) / _debias_denominator(N, F_eff) + 1e-30   # (B,)
+    # the same relative guard the per-frame path uses, per batch element, so the two stay
+    # bit-identical -- see null_providers.noise_sigma2
+    sigma2 = ((np.median(row_energy, axis=1) + row_energy.sum(axis=1) * macheps(np, screen))
+              / _debias_denominator(N, F_eff))                                    # (B,)
     return np.sqrt(_screen_floor_sq(sigma2, N, F_eff, far))

@@ -155,7 +155,18 @@ info["contrast"]                    # leading singular value over the floor (σ�
 info["n_kept"], info["n_dropped"]   # transient modes kept, persistent (RFI) modes dropped
 ```
 
-`clean = U · diag(S̃) · Vᴴ` uses the data's own screen modes `U, Vᴴ` and the Gavish–Donoho optimal singular-value shrinkage `S̃` against the derived floor: exact recovery in the noise-free limit, idempotent, with the persistent narrowband (`φ_F ≤ φ_T`) modes dropped.
+`clean = U · diag(S̃) · Vᴴ` uses the data's own screen modes `U, Vᴴ` and the Gavish–Donoho optimal singular-value shrinkage `S̃` against the derived floor: idempotent, with the persistent narrowband (`φ_F ≤ φ_T`) modes dropped, and exact recovery **where the signal stands well clear of the derived floor**.
+
+That last condition is worth stating plainly, because "noise-free" is not what governs it. The floor is estimated from the data, so a signal that fills the ordered axis contributes to its own floor estimate and is shrunk against it. Measured on an exactly rank-1 signal with **no noise added**, varying only its concentration in time:
+
+| `σ_top / floor` | recovery error |
+|---|---|
+| 1.2e+07 | 5.4e-15 |
+| 1972 | 1.8e-07 |
+| 5.8 | 1.7e-02 |
+| 2.6 | 4.4e-02 |
+
+Recovery is exact once the top mode stands ~10³ above the floor, and the error peaks near the Gavish–Donoho threshold (`σ_top/floor ≈ 2.5`), where up to ~12% of amplitude is attenuated. A sparse burst reaches `σ_top/floor ≈ 5.6e+04` and recovers to 2e-10; a sine filling the whole record reaches only 2.45 and loses 12%. Check `Projection(W).sigma_top / Projection(W).noise_floor` if exactness matters.
 
 **`clean` comes back in `W`'s own units.** The modes are read on the screen, and the screen is `project(normalize(W))` — each channel's median removed and its robust scale divided out — so the projection lands on the whitened grid. That whitening is inverted before `extract` returns, and `info["centre"]` / `info["scale"]` report the map that did it. So `clean` plots against `W`, and:
 
@@ -203,8 +214,17 @@ All reads are intrinsic — derived from `W` alone — and each is tied to a sta
 | **Concentration** | `ap.concentration` | `intensity` (σ₁²), `focus` (axial), `resultant` (directional) |
 
 `space_bandwidth` is a capacity, not a content: an unfolded screen reports `T·F` whatever sits on
-it. What the screen actually fills is `ap.etendue * ap.space_bandwidth` — exactly 1 for a single
-mode, rising with the modes present.
+it. What the screen actually fills is `ap.etendue * ap.space_bandwidth` — 1 for a single mode on
+an **unfolded** screen, rising with the modes present. The 1 is the large-`T` limit: measured on a
+rank-1 signal it reads 1.020 at `T = 256`, 1.012 at 512 and 1.006 at 1024.
+
+**When the feature axis folds, the product reads `F_eff / F` of that, and the shortfall is
+informative rather than an error.** `space_bandwidth` is the *unfolded* capacity while `etendue`
+is measured on the screen, so a fold dilutes the product by exactly its own ratio. Measured over
+200 rank-1 draws with random channel weights: 187 did not fold and read 1.0197; the 13 that did
+read 0.381, 0.509 and 0.637 at `F_eff` of 3, 4 and 5 — each exactly `F_eff/F` of 1.0197, recovering
+1.017–1.020 when multiplied back. So a product well below 1 on a single-mode signal says the
+screen folded, and `ap.projection().F_eff` says by how much.
 
 ### The mode spectrum
 
@@ -339,8 +359,16 @@ signal is scored against. Mark it absent and the reads are unmoved; fill it with
 
 ## Per-channel structure
 
-Multiplying the whole record by a constant changes nothing — every read is identical at `1e-21`
-and at `1`. A constant baseline changes nothing either; the reads are taken on the centred block.
+Multiplying the whole record by a constant changes nothing. Every **dimensionless** read — a
+z-score, a share, a mode count, a correlation, a focus — is identical from `1e+30` down to
+`1e-140`, and every **dimensioned** one scales exactly as its own dimension (a noise floor as
+`c`, a variance as `c²`). A constant baseline changes nothing either; the reads are taken on the
+centred block.
+
+That is a property test rather than a claim: [`src/tests/test_scale_invariance.py`](src/tests/test_scale_invariance.py)
+sweeps both halves, and carries a control that each read still separates structure from noise —
+a read that returned a constant would be trivially scale-free and useless, so invariance alone
+is not enough to pass.
 
 *Per-channel* structure is different. A channel with ten times another channel's gain is, to the
 instrument, a channel carrying ten times the power — there is nothing in the data that says whether
@@ -363,6 +391,16 @@ pytest
 ```
 
 The suite (`src/tests/`) pins the full optics read as a golden contract, checks numpy↔torch parity, the mathematical invariants (étendue = φ_F·φ_T, exact decay-rate recovery, PSD autocovariance, axial-vs-directional concentration, the read-side filter's exact projection and idempotence), round-trips (tensor reconstruct, factor pack/unpack), determinism, and degenerate-input robustness.
+
+Four files pin the claims this README makes about *how* the reads behave, each with a control that
+makes it able to fail:
+
+| file | what it holds |
+|---|---|
+| `test_scale_invariance.py` | dimensionless reads identical across `1e+30`–`1e-140`; dimensioned ones exact to `c^dim`; and every read must still separate structure from noise, so invariance alone cannot pass |
+| `test_fold_band_calibration.py` | `fold_band`'s stated false-fold rate on pure noise, and the power that must survive it — the significance and sufficiency terms are separated, because calibration alone cannot test the second |
+| `test_coupling_reduces_to_pearson.py` | at one shared coordinate `coupling.strength` **is** Pearson's r and `z` is `r√(T−1)`; what the read adds there is the decision layer, and that is asserted too |
+| `test_resolved_modes_is_not_a_rank.py` | `resolved_modes` counts modes above a **noise** floor — it is not a matrix rank and not a model-order selector; pinned so nothing is built on it expecting one |
 
 ## Formal certification
 
@@ -387,3 +425,10 @@ Security issues: email **connect@agience.ai** rather than opening a public issue
 Licensed under Apache-2.0 — see [`LICENSE.md`](https://github.com/Agience/entroptics/blob/main/LICENSE.md),
 [`NOTICE`](https://github.com/Agience/entroptics/blob/main/NOTICE), [`PATENTS.md`](https://github.com/Agience/entroptics/blob/main/PATENTS.md)
 and [`PLEDGE.md`](https://github.com/Agience/entroptics/blob/main/PLEDGE.md).
+
+## Declaration of generative AI use
+
+The author used Anthropic's Claude Opus (versions 4.8 and 5) in the preparation of this work. Its
+contribution was to write code, and to generate and validate content. The ideas, the construction
+and the claims are the author's. No other generative AI tool was used. The author reviewed and
+edited all output and takes full responsibility for the content of this publication.

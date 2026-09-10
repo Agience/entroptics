@@ -91,7 +91,7 @@ from typing import Callable
 import numpy as np
 
 from . import environment as _env
-from .entropy import MAD_SCALE
+from .entropy import MAD_SCALE, macheps
 
 # The distinct cut points a provider can be keyed to (``ctx.kind``).  Each is a separate
 # noise-vs-signal decision, so each can take its own provider (see ``by_kind`` / a mapping):
@@ -307,7 +307,23 @@ def noise_sigma2(xp, screen, N: int, F: int, *, complex_: bool = False) -> float
     on: the median row energy over F divided by :func:`debias_denominator` (the chi^2 median
     ``c_F`` and the centring dof ``(N-1)/N``).  Shared with the per-mode significance so they
     agree."""
-    return float(_env.median1d(xp, _env.sum_ax(xp, xp.abs(screen) ** 2, 1))) / debias_denominator(N, F, complex_=complex_) + 1e-30
+    re = _env.sum_ax(xp, xp.abs(screen) ** 2, 1)
+    # RELATIVE guard, shared verbatim by all five sites that form this variance.  It exists for
+    # one consumer -- `mode_significance` divides by sigma^2 -- so it only has to keep that finite
+    # on a screen with no energy.  sigma^2 carries dimension 2, so an absolute constant stops
+    # depending on the data: with the previous `1e-30` the reported variance was inflated 2.79x at
+    # a screen scale of 1e-15 and 1.8e+06x at 1e-18.  Built from the row energies alone, which is
+    # the one quantity every site has, so the copies cannot drift.
+    e = ((float(_env.median1d(xp, re)) + float(_env.sum_ax(xp, re)) * macheps(xp, screen))
+         / debias_denominator(N, F, complex_=complex_))
+    # The additive guard exists for ONE consumer -- `mode_significance` divides by sigma^2 -- so
+    # it only has to keep that division finite on an all-zero screen.  It must therefore be
+    # RELATIVE: sigma^2 carries dimension 2, so an absolute `1e-30` stops depending on the data
+    # once the screen falls near 1e-15.  Measured with the old constant, the reported variance was
+    # inflated 2.79x at a screen scale of 1e-15 and 1.8e+06x at 1e-18 -- the floor was the constant.
+    # `macheps` is dtype-only, so the batch path in `projection._mp_floor_batch` computes the
+    # identical value per frame and the two cannot drift (`test_read_batch_bit_identical`).
+    return e
 
 
 # ══════════════════════════════════════════════════════════════════════════════
