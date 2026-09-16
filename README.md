@@ -5,6 +5,7 @@
 [![License](https://img.shields.io/badge/license-Apache%202.0-blue)](https://github.com/Agience/entroptics/blob/main/LICENSE.md)
 [![CI](https://github.com/Agience/entroptics/actions/workflows/ci.yml/badge.svg)](https://github.com/Agience/entroptics/actions/workflows/ci.yml)
 [![Proofs](https://img.shields.io/badge/proofs-Lean%204%20%2F%20Mathlib-4B0082)](https://github.com/Agience/entroptics/tree/main/research/lean)
+[![Paper](https://img.shields.io/badge/paper-PDF-b31b1b)](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf)
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21273400-blue)](https://doi.org/10.5281/zenodo.21273400)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Agience-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Agience)
 
@@ -330,7 +331,7 @@ clean, info = Aperture(W[:, live], window=None).extract()        # everything do
 info["K_signal"], info["contrast"], info["coherence"]
 ```
 
-`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The read comes back on the waterfall's own amplitude scale, so the "Removed" panel is a plain `wf - clean` with nothing rescaled by hand. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §12.1 of [the paper](research/PAPER.md).
+`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The read comes back on the waterfall's own amplitude scale, so the "Removed" panel is a plain `wf - clean` with nothing rescaled by hand. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §12.1 of [the paper](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf).
 
 ## Why it's principled
 
@@ -421,7 +422,7 @@ The governing lemmas of the theory ([`research/PAPER.pdf`](https://github.com/Ag
 ## Documentation
 
 - **[API reference](docs/API.md)** — every public name, with its signature and what it does. Generated from the library itself by `python docs/generate_api.py`, so it cannot drift from the code.
-- **[`research/PAPER.md`](research/PAPER.md)** — the construction: definitions, proofs, and the provenance of every constant (§11.1).
+- **[`research/PAPER.pdf`](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf)** — the paper: definitions, proofs, and the provenance of every constant (§11.1). Typeset, with the mathematics rendered. Same text in Markdown: [`research/PAPER.md`](research/PAPER.md).
 - **[`research/validation/RESULTS.md`](research/validation/RESULTS.md)** — what each read recovers against a planted ground truth.
 - **[`research/supplemental/`](research/supplemental/)** — the applications and statistics papers, each with a `reproduce.py` and a `verify.py`.
 

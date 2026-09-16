@@ -46,9 +46,9 @@ reported and left in place.
 | Contribution guidelines | `CONTRIBUTING.md` — build, test, DCO sign-off, commit format, licensing |
 | Substantial scholarly effort | 19-experiment seeded validation suite, a Lean 4 / Mathlib certification, and three preprints |
 | Reproducibility of reported results | `research/validation/run_all.py` regenerates `RESULTS.md` byte-identically; each paper directory carries a `reproduce.py` and a `verify.py` |
-| Archive with a DOI | Zenodo `10.5281/zenodo.21273400` |
+| Archive with a DOI | Zenodo `10.5281/zenodo.22687899` (v0.2.3; concept DOI `10.5281/zenodo.21273400` resolves to the latest) |
 | Author ORCID | `0009-0002-0150-4027`, in the paper front matter, `CITATION.cff` and `.zenodo.json` |
-| Version consistency | `0.2.2` in `pyproject.toml`, `CITATION.cff` and `.zenodo.json`; the library reports it from installed distribution metadata rather than a literal |
+| Version consistency | `0.2.3` in `pyproject.toml`, `CITATION.cff` and `.zenodo.json`; the library reports it from installed distribution metadata rather than a literal |
 
 ## Gaps
 
