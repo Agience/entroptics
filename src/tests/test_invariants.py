@@ -427,3 +427,232 @@ def test_one_channel_has_nothing_to_disagree_with():
     to make and none is invented."""
     d = decay_scatter(np.random.default_rng(3).standard_normal((400, 1)))
     assert np.isnan(d.noise_share) and np.isnan(d.tail_share)
+
+
+# ── the PERIODIC decay: a lag read on an axis that closes ─────────────────────
+#
+# `decay(W, periodic=True)` reads the ordered axis as a ring.  Its defining property is an
+# EQUALITY, not an approximation -- C(tau) == C(T - tau) for every tau on every record -- so the
+# tests below assert it with `==` and not with `approx`.  The consumer is a correlator whose
+# target satisfies rho(d) = rho(n - d) as a theorem; a read that satisfied it only to within
+# round-off would be a different object from the one the theorem is about.
+
+
+def _circular_decay(X, level):
+    """C(tau) = (1/T) sum_i Re<Xc_i, Xc_{i+tau mod T}>, written the slow, obvious way -- an
+    independent statement of the definition, so the read is checked against the definition and
+    not against a rearrangement of itself."""
+    Xc = np.asarray(X) - level
+    T = Xc.shape[0]
+    return np.array([float((np.conj(Xc) * np.roll(Xc, -t, axis=0)).sum().real) / T
+                     for t in range(T)])
+
+
+@pytest.mark.parametrize("T", [2, 3, 4, 5, 16, 17])
+def test_periodic_decay_is_exactly_symmetric_in_the_lag(T):
+    """C(tau) == C(T - tau) EXACTLY: the two are the same sum walked the other way round the
+    ring, so the read computes one and mirrors it.  Bit equality, at every length, odd and even."""
+    X = np.random.default_rng(T).standard_normal((T, 5))
+    c = np.asarray(decay(X, periodic=True))
+    assert c.size == T
+    for t in range(1, T):
+        assert c[t] == c[T - t], f"T={T} lag {t}: {c[t]!r} != {c[T - t]!r}"
+
+
+def test_periodic_decay_is_exactly_symmetric_on_a_complex_record(Wc):
+    """Symmetry is a property of how the lag is counted, so it does not depend on the dtype."""
+    c = np.asarray(decay(Wc, periodic=True))
+    T = c.size
+    for t in range(1, T):
+        assert c[t] == c[T - t]
+
+
+def test_periodic_and_linear_disagree_where_the_axis_does_not_close():
+    """The two reads are different objects, and the negative control says so.  On this record the
+    linear read is [12.5, 0.5, -2.25, -4.5] and the periodic one [12.5, -4, -4.5, -4]: the linear
+    read averages lag 3 over the single pair that has a partner, the periodic one wraps and
+    averages it over all four."""
+    X = np.array([[1.0], [2.0], [3.0], [10.0]])
+    lin = np.asarray(decay(X))
+    per = np.asarray(decay(X, periodic=True))
+    assert lin == pytest.approx([12.5, 0.5, -2.25, -4.5], abs=1e-12)
+    assert per == pytest.approx([12.5, -4.0, -4.5, -4.0], abs=1e-12)
+    assert not np.allclose(lin, per)
+    assert lin[1] != lin[3]                      # the default read carries no such symmetry
+    assert per[1] == per[3]
+
+
+@pytest.mark.parametrize("seed", [0, 3, 9])
+def test_periodic_decay_is_the_circular_definition(seed):
+    """Against the definition itself, spelled out with np.roll -- a direct lag sum checked against
+    a direct lag sum, and no transform on either side.  Wiener-Khinchin licenses this read; it is
+    not a step the read or its test takes (see the module header and ``decay``'s docstring)."""
+    X = np.random.default_rng(seed).standard_normal((32, 6))
+    c = np.asarray(decay(X, periodic=True))
+    assert c == pytest.approx(_circular_decay(X, X.mean(0)), abs=1e-12)
+    # and the ring is genuinely closed: rolling the record does not move the correlator
+    rolled = np.asarray(decay(np.roll(X, 7, axis=0), periodic=True))
+    assert rolled == pytest.approx(c, abs=1e-12)
+
+
+def test_the_periodic_lag_sum_is_a_squared_magnitude_at_every_level():
+    """The lag sum telescopes: sum_tau C(tau) = (1/T)|sum_t (X_t - L)|^2 for EVERY level L.
+
+    So it is non-negative whatever L is, and the record's own mean is simply the L that attains
+    the floor of zero -- not a degeneracy that supplying a level repairs.  Pinned because the
+    opposite reading is easy to reach and would make ``sum_tau C(tau) > 0`` look like a fact
+    about correlation, when it only asks whether sum_t X_t differs from T*L."""
+    rng = np.random.default_rng(11)
+    for _ in range(50):
+        T, F = int(rng.integers(2, 12)), int(rng.integers(1, 5))
+        X = rng.standard_normal((T, F)) * float(10.0 ** rng.integers(-3, 4))
+        level = float(rng.standard_normal() * 10)
+        s = float(np.sum(np.asarray(decay(X, periodic=True, disconnected=level))))
+        assert s == pytest.approx(float(np.sum((X - level).sum(axis=0) ** 2) / T), rel=1e-9)
+        assert s >= 0.0
+    # and the own-mean case sits exactly on that floor
+    for seed in (0, 1, 2):
+        X = np.random.default_rng(seed).standard_normal((24, 4))
+        assert float(np.sum(np.asarray(decay(X, periodic=True)))) == pytest.approx(0.0, abs=1e-9)
+
+
+def test_a_supplied_level_is_the_one_removed():
+    """The caller's level lands: the read matches the definition taken at THAT level, and at a
+    level that is not the record's own it is a different correlator at every lag -- which is the
+    reason to pass one, the ensemble's level being what the target is defined with."""
+    rng = np.random.default_rng(5)
+    X = rng.standard_normal((24, 4)) + 3.0                 # sits well away from the given level
+    level = 2.5                                            # an "ensemble" level, not this record's
+    c = np.asarray(decay(X, periodic=True, disconnected=level))
+    assert c == pytest.approx(_circular_decay(X, level), abs=1e-12)
+    assert not np.allclose(c, np.asarray(decay(X, periodic=True)))   # a different object
+    for t in range(1, c.size):
+        assert c[t] == c[c.size - t]                       # still exactly symmetric
+
+
+def test_a_supplied_level_equal_to_the_mean_reproduces_the_default(W):
+    """The argument is not decorative: handing over exactly what the default computes returns
+    exactly what the default returns, on both the linear and the periodic path."""
+    mean = W.mean(0)
+    assert np.asarray(decay(W, disconnected=mean)) == pytest.approx(np.asarray(decay(W)), abs=1e-12)
+    assert (np.asarray(decay(W, periodic=True, disconnected=mean))
+            == pytest.approx(np.asarray(decay(W, periodic=True)), abs=1e-12))
+
+
+def test_a_per_channel_level_is_accepted_and_a_wrong_shape_is_refused(W):
+    """``(F,)`` and ``(1, F)`` are both accepted -- the second is what
+    ``ensemble.mean(0, keepdims=True)`` hands you, which is the natural way to produce an
+    ensemble level.  A term of any other shape or kind is refused rather than broadcast, so a
+    level that was meant to land cannot quietly fail to."""
+    F = W.shape[1]
+    T = W.shape[0]
+    assert np.asarray(decay(W, periodic=True, disconnected=np.zeros(F))).size == T
+    assert np.asarray(decay(W, periodic=True, disconnected=W.mean(0, keepdims=True))).size == T
+    assert (np.asarray(decay(W, periodic=True, disconnected=W.mean(0, keepdims=True)))
+            == pytest.approx(np.asarray(decay(W, periodic=True, disconnected=W.mean(0))),
+                             abs=1e-12))
+    for bad in (np.zeros(F + 1), np.zeros((2, F)), np.zeros((F, 1))):
+        with pytest.raises(ValueError, match="per LIVE feature channel"):
+            decay(W, periodic=True, disconnected=bad)
+    with pytest.raises(ValueError, match="complex"):
+        decay(W, periodic=True, disconnected=1.0 + 2.0j)
+
+
+def test_a_non_finite_level_is_refused(W):
+    """A NaN or inf level makes every lag NaN, and NaN != NaN -- so the exact C(tau) == C(T-tau)
+    symmetry this read exists for would silently stop holding.  The guarantee is unqualified, so
+    the input that would break it is refused."""
+    for bad in (np.nan, np.inf, -np.inf, np.full(W.shape[1], np.nan)):
+        with pytest.raises(ValueError, match="finite"):
+            decay(W, periodic=True, disconnected=bad)
+
+
+def test_a_boolean_level_is_refused(W):
+    """``disconnected=True`` would silently subtract 1.0.  A level is a number, not a flag."""
+    for bad in (True, False, np.bool_(True), np.array([True] * W.shape[1])):
+        with pytest.raises(ValueError, match="not a flag"):
+            decay(W, periodic=True, disconnected=bad)
+
+
+def test_the_periodic_read_refuses_a_record_with_a_dead_row():
+    """The ring's premise is that the last row neighbours the first.  ``live_view`` drops a
+    fully-dead row, which on the default read is one fewer sample but here splices two rows that
+    were never adjacent and returns a profile exactly symmetric about the WRONG period -- a wrong
+    answer nothing downstream can detect.  So it raises instead of repairing."""
+    X = np.random.default_rng(0).standard_normal((16, 3))
+    X[5, :] = np.nan
+    with pytest.raises(ValueError, match="periodic"):
+        decay(X, periodic=True)
+    assert np.asarray(decay(X)).size == 15            # the linear read has no such premise
+    # a dead COLUMN is fine -- the ring runs along the ordered axis, not the feature axis
+    Xc = np.random.default_rng(1).standard_normal((16, 3)); Xc[:, 1] = np.nan
+    assert np.asarray(decay(Xc, periodic=True)).size == 16
+    # so is a scattered gap: the row survives, imputed
+    Xg = np.random.default_rng(2).standard_normal((16, 3)); Xg[5, 1] = np.nan
+    assert np.asarray(decay(Xg, periodic=True)).size == 16
+    # and a MASK that kills a row is refused the same way -- the route in does not matter
+    Xm = np.random.default_rng(3).standard_normal((16, 3))
+    m = np.zeros((16, 3), bool)
+    m[7, :] = True
+    with pytest.raises(ValueError, match="periodic"):
+        decay(Xm, m, periodic=True)
+
+
+def test_a_record_with_nothing_observed_cannot_produce_a_profile():
+    """``live_view`` fills an unseen column with 0.0, which centres to 0 under the record's own
+    mean but against a SUPPLIED level reads as a constant deviation -- returning level^2 * F at
+    every lag from a record containing no data.  Emptiness is detected, not inferred."""
+    empty = np.full((8, 3), np.nan)
+    for kwargs in ({}, {"disconnected": 2.0}, {"disconnected": None},
+                   {"disconnected": np.zeros(3)}):
+        assert np.allclose(np.asarray(decay(empty, periodic=True, **kwargs)), 0.0), kwargs
+        assert np.allclose(np.asarray(decay(empty, **kwargs)), 0.0), kwargs
+    # fully masked is the same statement made a different way
+    live = np.random.default_rng(0).standard_normal((8, 3))
+    assert np.allclose(
+        np.asarray(decay(live, np.ones((8, 3), bool), periodic=True, disconnected=2.0)), 0.0)
+
+
+def test_an_unresolvable_record_is_zeroed_whoever_supplied_the_level():
+    """The round-off guard tests the RESIDUAL, so it covers a supplied level too.  A record with
+    no resolvable variation, held against a level that coincides with its mean, leaves only the
+    backward error of the subtraction -- which must not be returned as a decay."""
+    X = np.full((8, 3), 1e8)
+    X[0, 0] = np.nextafter(1e8, 2e8)                  # one ulp: below the arithmetic's resolution
+    for level in (X.mean(0), float(X.mean())):
+        c = np.asarray(decay(X, periodic=True, disconnected=level))
+        assert np.all(c == 0.0), c
+        assert float(np.sum(c)) == 0.0
+    # but the guard must NOT fire where the residual is real: a high-variance record whose mean
+    # happens to equal the supplied level is a perfectly good correlator
+    W2 = np.random.default_rng(4).standard_normal((32, 4)) * 5
+    assert not np.allclose(np.asarray(decay(W2, periodic=True, disconnected=W2.mean(0))), 0.0)
+
+
+def test_disconnected_none_subtracts_nothing(W):
+    """``None`` is a caller saying the record is already connected -- distinct from omitting the
+    argument, which is the record's own mean."""
+    c = np.asarray(decay(W, periodic=True, disconnected=None))
+    assert c == pytest.approx(_circular_decay(W, 0.0), abs=1e-12)
+    assert not np.allclose(c, np.asarray(decay(W, periodic=True)))
+
+
+def test_a_flat_record_against_a_supplied_level_is_not_zeroed():
+    """The round-off guard belongs to the record's OWN mean: subtracting it from a constant leaves
+    nothing but backward error.  Against a supplied level a constant record is a real, constant
+    deviation, and its correlator is that constant's power at every lag -- a measurement, which
+    the guard must not delete."""
+    X = np.full((8, 3), 4.0)
+    assert np.allclose(np.asarray(decay(X, periodic=True)), 0.0)          # own mean -> round-off
+    c = np.asarray(decay(X, periodic=True, disconnected=1.0))             # deviation of 3.0
+    assert c == pytest.approx(np.full(8, 3.0 * 3.0 * 3), abs=1e-12)       # 3 channels x 9
+
+
+def test_the_default_decay_is_untouched_by_the_new_options(W, Wc):
+    """One path, not two: the periodic read is an option on the existing lag read, and the read
+    every existing caller already makes must be the same arithmetic it was."""
+    for X in (W, Wc, np.array([[1.0], [2.0], [3.0], [10.0]])):
+        Xc = np.asarray(X) - np.asarray(X).mean(0)
+        T = Xc.shape[0]
+        lin = np.array([float((np.conj(Xc[:T - t]) * Xc[t:]).sum().real) / T for t in range(T)])
+        assert np.asarray(decay(X)) == pytest.approx(lin, abs=1e-10)

@@ -36,6 +36,27 @@ def test_decay_parity(W):
     assert np.max(np.abs(c_np - c_t)) < 1e-10
 
 
+def test_periodic_decay_parity(W):
+    """The periodic branch takes the lag modulo T and mirrors a half, which is four backend
+    primitives (``%``, a ``minlength`` bincount, a concatenate and a flip).  Parity across the
+    two, and the exact lag symmetry holding on torch and not only on numpy."""
+    c_np = np.asarray(decay(W, periodic=True))
+    c_t = decay(torch.as_tensor(W), periodic=True).cpu().numpy()
+    assert np.max(np.abs(c_np - c_t)) < 1e-10
+    T = c_t.size
+    for t in range(1, T):
+        assert c_t[t] == c_t[T - t]
+
+
+def test_supplied_disconnected_level_parity(W):
+    """A caller's level is a numpy object arriving at a torch record; it must land on the right
+    backend and device, as a scalar and as one value per channel."""
+    for level in (0.25, np.full(W.shape[1], 0.25)):
+        c_np = np.asarray(decay(W, periodic=True, disconnected=level))
+        c_t = decay(torch.as_tensor(W), periodic=True, disconnected=level).cpu().numpy()
+        assert np.max(np.abs(c_np - c_t)) < 1e-10
+
+
 def test_coherence_is_backend_identical(W):
     """Deterministic coherence -> bit-identical (no RNG divergence)."""
     sc_np = Projection(W)

@@ -35,10 +35,18 @@ Mode spectrum / propagation (from the correlation eigenspectrum):
   carriage(X, w)                      what the WEIGHTS of a weighted aggregation carry
                                       (exact permutation null; weights against samples).
 
-Diffraction limit -- from the signal's OWN decay (no external input):
+Diffraction limit -- from the signal's OWN decay (no external input, unless one is offered):
   decay(W)             the ordered-axis autocorrelation C(tau) = the OTF, as a
                        DIRECT lag average (coherent for signed/complex inputs,
                        incoherent |W|^2 for non-negative inputs).
+                       decay(W, periodic=True)   reads the ordered axis as a RING: the lag is
+                       taken modulo T, so C(tau) == C(T - tau) exactly, on every record.  For
+                       an axis that really closes (a lattice on a torus), where the target has
+                       that symmetry as a property rather than as an estimate.
+                       decay(W, disconnected=L)  removes the caller's level L instead of the
+                       record's own mean -- for a correlator whose disconnected part is an
+                       ENSEMBLE product, which one record cannot supply.  Both stay inside the
+                       direct lag sum: no transform is run on either path.
   diffraction_limit(C) a_delta = 1/2^{H}, H = entropy of C^2 (entropy width, primary), plus the
                        classical Abbe integral length 1/xi (secondary).
   mercer_certificate(W) the model-free check: a_delta read the temporal way (decay
@@ -1197,7 +1205,70 @@ def carriage(X, w, *, far: float = 0.05) -> Carriage:
 # Diffraction limit from a decay / correlation profile
 # ══════════════════════════════════════════════════════════════════════════════
 
-def decay(W, mask=None) -> np.ndarray:
+#: ``disconnected`` was not given, so :func:`decay` subtracts the record's OWN mean.  Distinct
+#: from an explicit ``disconnected=None``, which is a caller saying "this record is already
+#: connected, subtract nothing" outright.  A sentinel rather than ``None`` because the two must
+#: not collapse into one another: a caller who means to hand over an ensemble level, and whose
+#: term does not land, would be given the record's own mean back without being told -- and on the
+#: periodic read the record's own mean makes ``sum_tau C(tau)`` identically zero, so the failure
+#: arrives downstream as a vanished quantity rather than as an error here.
+_DISCONNECTED_UNSET = object()
+
+
+def _nothing_observed(W, mask) -> bool:
+    """True when NO cell of the record was observed -- every cell missing, non-finite or masked.
+
+    ``live_view`` fills an unseen column with 0.0, which is the right repair for a read that
+    then removes the record's own mean (0 centres to 0).  Against a SUPPLIED level those zeros
+    are not neutral: they read as a constant deviation of ``-level`` and the correlator comes
+    back at ``level^2 * F`` at every lag -- a confident profile from a record containing no
+    data.  So the emptiness is detected here rather than inferred from the filled values."""
+    xp = _ns(W)
+    bad = ~xp.isfinite(xp.abs(W))
+    if mask is not None:
+        bad = bad | mask
+    return bool(_env.to_numpy(bad.all()))
+
+
+def _disconnected_level(xp, X, level):
+    """The caller's disconnected LEVEL, brought onto ``X``'s backend/device and shaped to
+    broadcast over the ordered axis.  A scalar, ``(F,)`` or ``(1, F)`` -- one value per LIVE
+    feature channel, since ``mask`` and fully-dead columns are dropped by ``live_view`` before
+    this is reached.  A mismatch is refused rather than broadcast, so a level that was meant to
+    land cannot quietly fail to."""
+    F = int(X.shape[1]) if len(X.shape) > 1 else 1
+    arr = np.asarray(_env.to_numpy(level))
+    if arr.dtype == np.bool_:
+        raise ValueError(
+            "decay's `disconnected` is a level to SUBTRACT, not a flag; got a boolean, which "
+            "would silently subtract 1.0 or 0.0.  Pass the number you mean, or `None` to "
+            "subtract nothing.")
+    if arr.ndim == 0:
+        arr = np.full((1, F), arr[()])
+    elif arr.ndim == 1 and arr.size == F:
+        arr = arr.reshape(1, F)
+    elif arr.ndim == 2 and arr.shape == (1, F):
+        pass                       # what ``ensemble.mean(0, keepdims=True)`` hands you already
+    else:
+        raise ValueError(
+            "decay's `disconnected` is one level to subtract: a scalar, or one value per LIVE "
+            f"feature channel -- ({F},) or (1, {F}) -- after dead rows/columns are dropped; got "
+            f"shape {arr.shape}")
+    is_c = xp.is_complex(X) if _env.is_torch(xp) else np.iscomplexobj(X)
+    if np.iscomplexobj(arr) and not is_c:
+        raise ValueError(
+            "decay's `disconnected` is complex but the record is real; casting it would drop the "
+            "imaginary part silently.  Pass a real level, or pass a complex record.")
+    if not bool(np.isfinite(arr).all()):
+        raise ValueError(
+            "decay's `disconnected` must be finite.  A non-finite level makes every lag NaN, and "
+            "the exact C(tau) == C(T - tau) symmetry the periodic read is FOR does not survive "
+            "it -- NaN != NaN, so the read would silently stop having the property it promises.")
+    return _env.asdtype_of(X, arr)
+
+
+def decay(W, mask=None, *, periodic: bool = False,
+          disconnected=_DISCONNECTED_UNSET) -> np.ndarray:
     """The signal's OWN ordered-axis autocorrelation C(tau) -- its optical transfer
     function (OTF), by the Fourier-optics autocorrelation theorem (OTF = pupil
     autocorrelation).  Computed as the DIRECT lag average: C(tau) is the
@@ -1213,21 +1284,112 @@ def decay(W, mask=None) -> np.ndarray:
     pass the intensity -- ``decay(W ** 2)`` -- which states the modelling step where the caller
     can see it.
     Returns C(tau), tau = 0..T-1: C(0) is the zero-lag power (the peak, = variance)
-    and C decays as the ordered axis decorrelates.  Real- and complex-safe.  O(T^2 F)."""
-    W = live_view(W, mask)                # ignore fully-dead rows/cols; clean scattered gaps
+    and C decays as the ordered axis decorrelates.  Real- and complex-safe.  O(T^2 F).
+
+    ``periodic`` -- the ordered axis CLOSES.
+        The default read treats the record as a finite window cut out of a longer axis: lag tau
+        pairs the T - tau samples that have a partner, so late lags are averaged over fewer terms
+        and C(tau) carries no relation to C(T - tau).  ``periodic=True`` reads the axis as a ring
+        instead, taking the lag modulo T, so every lag is averaged over all T pairs and
+
+            C(tau) == C(T - tau)   EXACTLY, for every tau, on every record.
+
+        Exactly, and not to within round-off: the two are the SAME sum re-indexed, so only the
+        independent half is computed and the rest is its mirror.  No taper and no 1/(T - tau)
+        correction -- either would break that equality, which is the point of the read.  This is
+        the right read when the axis really is closed (a lattice on a torus, a phase-locked
+        record, anything whose target satisfies rho(d) = rho(n - d) as a property rather than as
+        an estimate), and the wrong one when it is not: it wraps the far end of the record onto
+        the near end, and on an open record that wrap IS the leakage the default read avoids.
+
+        REFUSES a record with a dead row.  ``live_view`` drops a fully-missing row, and on the
+        default read that is a reasonable repair -- one fewer sample.  Here it is not: the whole
+        premise is that index T-1 neighbours index 0, and dropping row 5 of 16 returns a ring of
+        15 that splices two rows which were never adjacent.  The profile is then exactly
+        symmetric about the WRONG period, so nothing downstream can tell.  A dropped row raises
+        rather than repairing.  Dead COLUMNS are fine -- the ring runs along the ordered axis.
+
+    ``disconnected`` -- WHOSE level is removed.
+        A correlation is about deviation, so a level is subtracted before the pairs are formed,
+        and its square is the disconnected part of the correlator.  Omit the argument and that
+        level is the record's OWN mean, which is the only non-arbitrary choice a lone record
+        offers.  It is not always the right one.  When the target's disconnected part is an
+        ENSEMBLE product -- <O>^2 over a distribution the record is one draw from -- the record's
+        own mean is a DIFFERENT NUMBER, and the correlator built from it is a different object at
+        every lag, not a noisier version of the same one.  That is the whole reason to pass a
+        level, and it is reason enough:
+
+            reads.decay(W, periodic=True, disconnected=P_bar)   # P_bar: the ensemble mean
+
+        What this does NOT do is recover a sign.  On the periodic read the lag sum telescopes,
+
+            sum_tau C(tau) = (1/T) |sum_t (X_t - L)|^2   >= 0   for EVERY level L,
+
+        a squared magnitude, so it is non-negative whatever L is, and the record's own mean is
+        simply the L that attains the floor of zero.  A test that ``sum_tau C(tau) > 0`` is
+        therefore not a statement about correlation at all -- it asks only whether ``sum_t X_t``
+        differs from ``T * L``.  Pass the ensemble level because the ensemble level is what the
+        target is defined with; do not pass it expecting an inequality to become available.
+
+        A scalar, ``(F,)`` or ``(1, F)``; finite, real for a real record, and not a bool.
+        ``disconnected=None`` says the record is already connected and subtracts nothing.  Any
+        value you pass takes effect; only omitting the argument falls back to the mean, and a
+        term of the wrong shape or kind is refused rather than broadcast.
+
+    Missing cells.  A SCATTERED gap (not a whole dead row or column) is imputed by ``live_view``
+    with that column's own mean over the observed cells.  That is the record's mean, not the
+    ensemble's -- the very confusion ``disconnected`` exists to remove -- so with a supplied
+    level an imputed cell is pulled toward the wrong reference.  Few gaps, small effect; but if
+    the record is heavily gapped, repair it against your ensemble before calling this."""
+    W_in = W
+    W = live_view(W_in, mask)             # ignore fully-dead rows/cols; clean scattered gaps
+    # ``live_view`` hands back the INPUT OBJECT when nothing was missing or masked, so this
+    # identity test is a free way to ask "was anything repaired?" and keeps both checks below
+    # off the hot path entirely.
+    dead_record = False
+    if W is not W_in:
+        if periodic and int(W.shape[0]) != int(W_in.shape[0]):
+            raise ValueError(
+                f"decay(periodic=True) was given {int(W_in.shape[0])} rows of which "
+                f"{int(W.shape[0])} are live.  A periodic read asserts that the last row "
+                "neighbours the first, so dropping a dead row does not shorten the record -- it "
+                "splices two rows that were never adjacent and returns a profile exactly "
+                "symmetric about the WRONG period, which no downstream check can detect.  Repair "
+                "or drop the record before reading it as a ring.  (The default linear read has "
+                "no such premise and accepts it.)")
+        dead_record = _nothing_observed(W_in, mask)
     xp = _ns(W)
     is_c = xp.is_complex(W) if _env.is_torch(xp) else np.iscomplexobj(W)
     X = _env.asnum(W, complex=True) if is_c else _env.asnum(W)   # the record, as given
     T = int(X.shape[0])
     if T < 2:
         return _env.ones(xp, 1, ref=X)
-    Xc = X - _env.mean0(xp, X)                               # connected (drop the disconnected mean)
+    own_mean = disconnected is _DISCONNECTED_UNSET
+    if own_mean:
+        Xc = X - _env.mean0(xp, X)                           # connected (drop the disconnected mean)
+    elif disconnected is None:
+        Xc = X                                               # the caller says: already connected
+    else:
+        Xc = X - _disconnected_level(xp, X, disconnected)     # the caller's level, not the record's
+    # After the level is validated, not before: the same call refuses the same bad argument
+    # whether or not this particular record happened to be empty.
+    if dead_record:                       # no cell was observed: no level can make that a decay
+        return _env.zeros(xp, T, ref=(X if _env.is_torch(xp) else None))
     # A record that never varied leaves only the round-off of subtracting its own mean, and that
     # is not a decay -- squared into a Gram it would be read as one.  Same rule as
     # ``entropy.resolution_floor``: measured against the record's OWN scale, at the resolution the
     # arithmetic has, so it follows the data and the dtype.  The
     # mean is a sum of T terms, so the residual it leaves carries that sum's backward error, T*eps
     # [Higham 2002, Thm 3.5] -- the same bound ``Screen.certify`` measures a round trip against.
+    #
+    # The test is on the RESIDUAL, so it covers a supplied level too and needs no separate rule.
+    # It fires exactly when the record sits within the arithmetic's own resolution of whatever
+    # level was removed -- the record's mean, or a caller's level that coincides with it -- which
+    # is the case where the residual is backward error and not signal.  It does NOT fire on a
+    # constant record held against a DIFFERENT level: that residual is a real constant deviation,
+    # and its correlator (the constant's power at every lag) is a measurement the guard must not
+    # delete.  Testing ``|mean(X) - L|`` instead would be wrong in exactly that second direction:
+    # a high-variance record whose mean happens to equal L would be zeroed.
     span = float(_env.to_numpy(xp.max(xp.abs(X))))
     if float(_env.to_numpy(xp.max(xp.abs(Xc)))) <= span * T * macheps(xp, Xc):
         return _env.zeros(xp, T, ref=(X if _env.is_torch(xp) else None))
@@ -1235,13 +1397,30 @@ def decay(W, mask=None) -> np.ndarray:
     G = xp.real(Xc.conj() @ Xc.T)                          # (T, T) real ordered Gram
     off = _env.arange_int(xp, T, ref=G)
     offset = off[None, :] - off[:, None]                   # (T, T): j - i (each entry's lag)
-    sel = offset >= 0
-    return xp.bincount(offset[sel], weights=G[sel], minlength=T) / T
+    if not periodic:
+        sel = offset >= 0
+        return xp.bincount(offset[sel], weights=G[sel], minlength=T) / T
+    # PERIODIC: the lag is read modulo T, so EVERY ordered pair carries one, and every lag is
+    # averaged over all T of them -- there is no short late lag to correct for, hence no taper and
+    # no 1/(T - tau).  C(tau) and C(T - tau) are then the same sum walked the other way round the
+    # ring, so only lags 0..T//2 are summed and the rest is the mirror of that half: equality by
+    # construction, exact in floating point, rather than two independent reductions that agree to
+    # within whatever order their accumulations happened to take.
+    h = T // 2
+    offset = offset % T
+    sel = offset <= h
+    half = xp.bincount(offset[sel], weights=G[sel], minlength=h + 1) / T
+    return _env.cat0(xp, [half, _env.flip(xp, half[1:T - h])])
 
 
 def _integral_length(cn: np.ndarray) -> float:
     """xi = sum of the normalized decay over its first positive lobe (up to the
-    first zero crossing) -- the classical integral correlation length."""
+    first zero crossing) -- the classical integral correlation length.
+
+    Assumes a ONE-SIDED profile, i.e. ``decay``'s default.  On a profile from
+    ``decay(..., periodic=True)`` the lobe is not the whole story: a mirrored profile falls to
+    its midpoint and RISES AGAIN, so "up to the first zero crossing" measures the near half and
+    silently ignores the returning image.  A ring's correlation length is not this integral."""
     below = np.where(cn <= 0.0)[0]
     end = int(below[0]) if below.size else len(cn)
     return float(np.sum(cn[:max(1, end)]))
@@ -1285,6 +1464,12 @@ def decay_scatter(W, mask=None) -> DecayScatter:
     terms (one FFT per channel -- cheaper than the lag sum ``decay`` itself takes) and reads their
     standard error.  ``sum_f C_f`` is ``decay(W)`` identically, which a test pins, so the two
     cannot drift apart.
+
+    The DEFAULT ``decay(W)`` -- the linear read with the record's own mean.  This measures that
+    profile and no other: the FFT here is zero-padded to >= 2T, which is what makes it linear, and
+    there is no ``periodic`` or ``disconnected`` to pass through.  A caller reading
+    ``decay(W, periodic=True)`` is holding a different profile, and this scatter does not describe
+    it.
 
     Returns shares of the decay's total power, both measured: see :class:`DecayScatter`."""
     L = live_view(W, mask)
@@ -1336,7 +1521,17 @@ def diffraction_limit(profile) -> DiffractionLimit:
     converges the same way from the same side.  It is consistent -- more channels, closer -- and
     the residual is the entropy estimator's own small-sample bias, not a property of the signal.
     Nothing here removes it: what the noise contributes could only be subtracted by assuming what
-    the decay would have been, which is a model, and this read reports the decay it measured."""
+    the decay would have been, which is a model, and this read reports the decay it measured.
+
+    Pass a ONE-SIDED profile -- ``decay``'s default.  Both reads here assume it, and a profile
+    from ``decay(..., periodic=True)`` breaks both.  The entropy width spreads the same power
+    over a mirrored profile, so ``H`` rises -- by 1.31 bits on an AR(1) at T=128, F=64, rho=0.9
+    (3.94 -> 5.25) -- and ``a_delta`` reads 0.40x what the same record's one-sided profile gives
+    (0.0652 -> 0.0263).  ``xi`` stops at the first zero crossing and so measures the near half
+    only, while the profile rises again behind it (see ``_integral_length``).  Neither is a small
+    correction.  A ring's diffraction limit is a
+    different derivation, and this function does not do it -- read the periodic profile itself,
+    or take the limit from the default read."""
     c = np.asarray(_env.to_numpy(profile), float)
     if c.size < 2 or not np.any(c):
         return DiffractionLimit(0.0, 0.0, 0.0, 0.0)
