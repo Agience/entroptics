@@ -116,8 +116,14 @@ theorem fill_fraction_entropy_bounds {n : ℕ} (hn : 0 < n) (q : Fin n → ℝ)
   refine ⟨h1, h2, ?_, (div_le_one hn0).mpr h2⟩
   gcongr
 
-/-- **Fill-reach duality** (`φ·δ = 1`): with fill `φ = x/y` and reach `δ = y/x` (`x = 2^H`, `y = n`),
-the product is `1`. -/
+/-- **The reciprocal identity**: `(x / y) * (y / x) = 1` for any two nonzero reals, by `field_simp`.
+
+Stated at arbitrary `x` and `y`, so it holds of every nonzero pair and says nothing about entropy on
+its own. `entropy_fill_bounds`, directly above, is where `2^H / n` is bounded.
+
+Where it is used: a fill `φ = x / y` and the reach `δ = y / x` built from the same two quantities are
+reciprocal, so fixing either one fixes the other. Reading `x = 2^H` and `y = n` makes that the
+fill-reach pairing of a read, and that reading is the caller's — the identity is prior to it. -/
 theorem aperture_duality (x y : ℝ) (hx : x ≠ 0) (hy : y ≠ 0) :
     (x / y) * (y / x) = 1 := by
   field_simp
