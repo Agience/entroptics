@@ -36,7 +36,7 @@ SEED_DEFAULT = 20260901
 
 
 def _entroptics(wf):
-    """The read-side path of frb_panel.py, unchanged: drop dead channels, front door, map back."""
+    """The read-side path of frb_panel.py, unchanged: drop dead channels, front door."""
     W = wf.T                                                     # (time, freq)
     live = np.isfinite(W).all(axis=0) & (np.nanstd(W, axis=0) > 0)
     clean, info = Aperture(W[:, live], window=None).extract()

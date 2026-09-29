@@ -1,0 +1,109 @@
+{"file": "/home/builder/entroptics-work/v023/src/entroptics/__init__.py", "source_sha256": "65e15d2f90ebc88daaa9b62fd9241690a950c2c528ee4c0643ab7c595283be44"}
+{"null": "gaussian", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.025}
+{"null": "gaussian", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.025}
+{"null": "gaussian", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.04}
+{"null": "gaussian", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.02}
+{"null": "gaussian", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.015}
+{"null": "gaussian", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.0}
+{"null": "gaussian, levels e^-1..e^1", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.165}
+{"null": "gaussian, levels e^-1..e^1", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.375}
+{"null": "gaussian, levels e^-1..e^1", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.735}
+{"null": "gaussian, levels e^-1..e^1", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.155}
+{"null": "gaussian, levels e^-1..e^1", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.035}
+{"null": "gaussian, levels e^-1..e^1", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.04}
+{"null": "gaussian, levels e^-2..e^2", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.1}
+{"null": "gaussian, levels e^-2..e^2", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.155}
+{"null": "gaussian, levels e^-2..e^2", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.5}
+{"null": "gaussian, levels e^-2..e^2", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.075}
+{"null": "gaussian, levels e^-2..e^2", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.04}
+{"null": "gaussian, levels e^-2..e^2", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.015}
+{"null": "complex gaussian, levels e^-1..e^1", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.155}
+{"null": "complex gaussian, levels e^-1..e^1", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.46}
+{"null": "complex gaussian, levels e^-1..e^1", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.73}
+{"null": "complex gaussian, levels e^-1..e^1", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.155}
+{"null": "complex gaussian, levels e^-1..e^1", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.045}
+{"null": "complex gaussian, levels e^-1..e^1", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.0}
+{"null": "student t (5)", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.915}
+{"null": "student t (5)", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.75}
+{"null": "student t (5)", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.96}
+{"null": "student t (5)", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.475}
+{"null": "student t (5)", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.345}
+{"null": "student t (5)", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.225}
+{"null": "exponential", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 1.0}
+{"null": "exponential", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "exponential", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "exponential", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 1.0}
+{"null": "exponential", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 1.0}
+{"null": "exponential", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal (sigma 1.5)", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal (sigma 1.5)", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal (sigma 1.5)", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal (sigma 1.5)", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal (sigma 1.5)", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 1.0}
+{"null": "lognormal (sigma 1.5)", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 1.0}
+{"null": "pareto (3)", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 1.0}
+{"null": "pareto (3)", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "pareto (3)", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "pareto (3)", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 1.0}
+{"null": "pareto (3)", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 1.0}
+{"null": "pareto (3)", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 1.0}
+{"null": "chi-square (1)", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 1.0}
+{"null": "chi-square (1)", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "chi-square (1)", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "chi-square (1)", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 1.0}
+{"null": "chi-square (1)", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 1.0}
+{"null": "chi-square (1)", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 1.0}
+{"null": "poisson (1)", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.525}
+{"null": "poisson (1)", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.195}
+{"null": "poisson (1)", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.205}
+{"null": "poisson (1)", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.035}
+{"null": "poisson (1)", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.025}
+{"null": "poisson (1)", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.005}
+{"null": "poisson (5)", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.975}
+{"null": "poisson (5)", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "poisson (5)", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "poisson (5)", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.73}
+{"null": "poisson (5)", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.025}
+{"null": "poisson (5)", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.0}
+{"null": "poisson (5), levels 1..20", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.985}
+{"null": "poisson (5), levels 1..20", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 1.0}
+{"null": "poisson (5), levels 1..20", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 1.0}
+{"null": "poisson (5), levels 1..20", "T": 64, "F": 128, "records": 200, "false_alarm_rate": 0.71}
+{"null": "poisson (5), levels 1..20", "T": 32, "F": 512, "records": 200, "false_alarm_rate": 0.125}
+{"null": "poisson (5), levels 1..20", "T": 20, "F": 1000, "records": 200, "false_alarm_rate": 0.04}
+{"detect": "persistent mode", "T": 256, "F": 32, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 1.0}
+{"detect": "persistent mode", "T": 256, "F": 32, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 1.0}
+{"detect": "persistent mode", "T": 1024, "F": 64, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 1.0}
+{"detect": "persistent mode", "T": 1024, "F": 64, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 0.9, "mean_K": 1.1}
+{"detect": "persistent mode", "T": 32, "F": 512, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 1.0}
+{"detect": "persistent mode", "T": 32, "F": 512, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 1.0}
+{"detect": "narrow broadband burst", "T": 256, "F": 32, "levels": "e^-0..e^0", "records": 100, "found_rate": 0.99, "exact_rate": 0.99, "mean_K": 0.99}
+{"detect": "narrow broadband burst", "T": 256, "F": 32, "levels": "e^-1..e^1", "records": 100, "found_rate": 0.99, "exact_rate": 0.75, "mean_K": 1.23}
+{"detect": "narrow broadband burst", "T": 1024, "F": 64, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 0.98, "mean_K": 1.02}
+{"detect": "narrow broadband burst", "T": 1024, "F": 64, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 0.21, "mean_K": 2.82}
+{"detect": "narrow broadband burst", "T": 32, "F": 512, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 1.0}
+{"detect": "narrow broadband burst", "T": 32, "F": 512, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 0.97, "mean_K": 1.03}
+{"detect": "narrowband line", "T": 256, "F": 32, "levels": "e^-0..e^0", "records": 100, "found_rate": 0.58, "exact_rate": 0.58, "mean_K": 0.58}
+{"detect": "narrowband line", "T": 256, "F": 32, "levels": "e^-1..e^1", "records": 100, "found_rate": 0.49, "exact_rate": 0.39, "mean_K": 0.59}
+{"detect": "narrowband line", "T": 1024, "F": 64, "levels": "e^-0..e^0", "records": 100, "found_rate": 0.96, "exact_rate": 0.96, "mean_K": 0.96}
+{"detect": "narrowband line", "T": 1024, "F": 64, "levels": "e^-1..e^1", "records": 100, "found_rate": 0.85, "exact_rate": 0.04, "mean_K": 2.54}
+{"detect": "narrowband line", "T": 32, "F": 512, "levels": "e^-0..e^0", "records": 100, "found_rate": 0.01, "exact_rate": 0.01, "mean_K": 0.01}
+{"detect": "narrowband line", "T": 32, "F": 512, "levels": "e^-1..e^1", "records": 100, "found_rate": 0.14, "exact_rate": 0.13, "mean_K": 0.15}
+{"detect": "three modes near the edge", "T": 256, "F": 32, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 3.0}
+{"detect": "three modes near the edge", "T": 256, "F": 32, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 0.83, "mean_K": 2.83}
+{"detect": "three modes near the edge", "T": 1024, "F": 64, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 3.0}
+{"detect": "three modes near the edge", "T": 1024, "F": 64, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 0.95, "mean_K": 3.05}
+{"detect": "three modes near the edge", "T": 32, "F": 512, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 3.0}
+{"detect": "three modes near the edge", "T": 32, "F": 512, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 3.0}
+{"detect": "two strong modes", "T": 256, "F": 32, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 2.0}
+{"detect": "two strong modes", "T": 256, "F": 32, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 2.0}
+{"detect": "two strong modes", "T": 1024, "F": 64, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 2.0}
+{"detect": "two strong modes", "T": 1024, "F": 64, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 2.0}
+{"detect": "two strong modes", "T": 32, "F": 512, "levels": "e^-0..e^0", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 2.0}
+{"detect": "two strong modes", "T": 32, "F": 512, "levels": "e^-1..e^1", "records": 100, "found_rate": 1.0, "exact_rate": 1.0, "mean_K": 2.0}

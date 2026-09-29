@@ -1,9 +1,9 @@
 """A read is a property of the signal, not of the units it was recorded in.
 
-Entroptics whitens every channel by its own robust scale, so a read must be invariant when the
+Entroptics whitens every channel by its own noise scale, so a read must be invariant when the
 whole record is multiplied by a constant: the same instrument, in volts or in microvolts, reports
 the same thing.  That invariance is only real if nothing in the path compares a DIMENSIONAL
-quantity against a fixed number.  A MAD carries the record's units; a fixed cut on one is a
+quantity against a fixed number.  A channel's scale carries the record's units; a fixed cut on one is a
 statement about units, and it silently reclassifies every channel of a record kept in small ones.
 
 The failure mode these tests watch for, stated first so they can fail:
@@ -13,14 +13,14 @@ The failure mode these tests watch for, stated first so they can fail:
   - a round trip that returns the surface to floating-point accuracy is reported as lossy,
     because the residual -- pure round-off -- is whitened up to unit amplitude and read.
 
-The floor separating "no spread" from "spread" is `resolution_floor`: the frame's own pooled MAD
-times the working dtype's epsilon.  Both sides are measured, so it follows the data and the backend.
+A channel has no scale when its successive differences are all exactly zero: it never moved.  No
+number stands between "no spread" and "spread", so nothing in the rule carries units.
 """
 import numpy as np
 import pytest
 
 from entroptics import Aperture, Projection, set_precision
-from entroptics.entropy import macheps, resolution_floor, normalize, shannon_bits
+from entroptics.entropy import macheps, normalize, shannon_bits, whiten_stats
 
 SCALES = [1e12, 1e6, 1.0, 1e-6, 1e-15, 1e-21, 1e-30]
 READS = ("phi", "phi_T", "phi_F", "etendue", "strehl", "a_delta", "focus")
@@ -79,15 +79,21 @@ def test_coarse_quantization_does_not_blow_up_the_floor():
         assert p.sigma_top < 10.0 * exact.sigma_top, f"{bits}-bit screen diverged"
 
 
-def test_the_resolution_floor_follows_the_dtype_and_the_data():
-    """Both sides are measured: the pooled MAD from the frame, the epsilon from the array."""
+def test_a_channel_has_no_scale_exactly_when_it_never_moved():
+    """The scale is zero iff every successive difference is zero, at any level and in any dtype;
+    one step of one ulp is a movement and gets a scale, which follows the data exactly."""
     assert macheps(np, np.zeros(1, np.float64)) == np.finfo(np.float64).eps
     assert macheps(np, np.zeros(1, np.float32)) == np.finfo(np.float32).eps
-    mad = np.ones(4)
-    f64 = resolution_floor(np, 2.0, mad.astype(np.float64))
-    f32 = resolution_floor(np, 2.0, mad.astype(np.float32))
-    assert f32 > f64                                   # coarser arithmetic, higher floor
-    assert resolution_floor(np, 2e-9, mad) == pytest.approx(1e-9 * f64, rel=1e-12)  # tracks the data
+    for dt in (np.float64, np.float32):
+        for level in (0.0, 3.25, 1e-30, 1e30):
+            X = np.full((50, 2), level, dt)
+            X[25:, 1] = np.nextafter(dt(level), dt(np.inf)) if level else np.finfo(dt).tiny
+            _, s = whiten_stats(np, X)
+            assert s[0] == 0.0 and s[1] > 0.0
+    X = np.random.default_rng(1).standard_normal((64, 3))
+    _, s1 = whiten_stats(np, X)
+    _, s2 = whiten_stats(np, X * 1e-9)
+    assert np.allclose(s2, s1 * 1e-9, rtol=1e-12)      # tracks the data
 
 
 def test_shannon_bits_is_scale_free():

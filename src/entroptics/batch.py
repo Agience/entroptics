@@ -28,7 +28,7 @@ Two backends, one exact answer (byte-identical K_signal)
                             (SVD / eigh / LDL) is ~1-2 s on CUDA.  Iterated to convergence
                             (``sign^2 = I``): no tuning, a numerical tolerance, not a knob.
 Both are exact, so ``K_signal`` (the integer resolved-mode count) and the resolved-mode set are
-byte-identical across CPU and GPU.  The continuous ``energy`` agrees to floating-point precision
+byte-identical across CPU and GPU.  The continuous ``energy`` agrees to the sign iteration's tolerance (``_NS_TOL``)
 (cuBLAS and MKL use different reduction orders, so continuous values match to floating-point
 precision across backends, not bit-for-bit).
 
@@ -65,9 +65,8 @@ from dataclasses import dataclass
 import numpy as np
 
 from . import environment as _env
-from .entropy import MAD_SCALE, macheps
 from .projection import fold_target_batch, normalize_batch, project_batch
-from .null_providers import debias_denominator, screen_floor_sq, apply_floor
+from .null_providers import screen_floor_sq, apply_floor, noise_sigma2_from_spectrum
 
 # Newton-Schulz matrix-sign convergence (the one numerical tolerance -- a convergence criterion,
 # not a substrate knob).  ``sign^2 = I`` at convergence; ``_NS_TOL`` on max|Y^2 - I| is well below
@@ -165,21 +164,27 @@ class ResolvedBatch:
 # The per-group compute core (one uniform folded screen -> the read)
 # ══════════════════════════════════════════════════════════════════════════════
 
-def _floor_batch(xp, screen, N, Fe, far, null, seed):
+def _floor_batch(xp, screen, N, Fe, far, null, seed, S=None):
     """The screen noise floor for a uniform ``(Bg, N, Fe)`` folded screen -- the derived ``mp``
-    edge batched via the shared primitives (:func:`debias_denominator` / :func:`screen_floor_sq`),
-    or a caller ``null`` provider applied per frame.  Returns ``(Bg,)`` on ``xp``."""
+    edge batched via the shared primitives (:func:`null_providers.noise_sigma2_from_spectrum` and
+    :func:`screen_floor_sq`), or a caller ``null`` provider applied per frame.  ``S`` is the
+    screens' singular values when the caller has them; otherwise the spectrum is read from the
+    ``Fe x Fe`` Grams on the host (exact, and small where a batch is on the GPU).  Returns ``(Bg,)``
+    on ``xp``."""
     if null is None:
-        row_energy = _env.sum_ax(xp, xp.abs(screen) ** 2, 2)                 # (Bg, N)
-        sigma2 = ((_env.median_ax(xp, row_energy, 1) + _env.sum_ax(xp, row_energy, 1) * macheps(xp, screen))
-                  / debias_denominator(N, Fe))
-        return xp.sqrt(screen_floor_sq(sigma2, N, Fe, far))                  # (Bg,)
+        if S is not None:
+            s2 = np.asarray(_env.to_numpy(S), dtype=np.float64) ** 2
+        else:
+            G = np.asarray(_env.to_numpy(_env.movedim(xp, screen, 1, 2).conj() @ screen))
+            s2 = np.clip(np.linalg.eigvalsh(G), 0.0, None)
+        sigma2 = noise_sigma2_from_spectrum(s2, N, Fe)
+        return _env.asdtype_of(screen.real, np.sqrt(screen_floor_sq(sigma2, N, Fe, far)))  # (Bg,)
     # a caller-suppliable provider is the occasional path -> per frame, in numpy (needs the spectrum)
     scr = np.asarray(_env.to_numpy(screen))
     sv = np.linalg.svd(scr, compute_uv=False)
     fl = np.array([apply_floor(null, spectrum=sv[j], data=scr[j], shape=(N, Fe),
                                far=far, kind="projection", seed=seed) for j in range(int(scr.shape[0]))])
-    return _env.asdtype_of(screen, fl.astype(float))
+    return _env.asdtype_of(screen.real, fl.astype(float))
 
 
 def _resolve_group(xp, screen, *, far, null, seed, want_energy, want_projector):
@@ -188,31 +193,35 @@ def _resolve_group(xp, screen, *, far, null, seed, want_energy, want_projector):
     off-CUDA (bit-identical to ``Projection``), the Fermi matrix-sign projector on CUDA (all cuBLAS
     matmuls, since batched dense cuSOLVER is ~1-2 s).  Both give the same exact ``K_signal``."""
     N, Fe = int(screen.shape[1]), int(screen.shape[2])
-    floor = _floor_batch(xp, screen, N, Fe, far, null, seed)
     if _env.is_cuda(screen):
+        floor = _floor_batch(xp, screen, N, Fe, far, null, seed)
         return _fermi_resolve(xp, screen, floor, want_energy=want_energy, want_projector=want_projector)
-    return _svd_resolve(xp, screen, floor, want_energy=want_energy, want_projector=want_projector)
+    return _svd_resolve(xp, screen, lambda S: _floor_batch(xp, screen, N, Fe, far, null, seed, S=S),
+                        want_energy=want_energy, want_projector=want_projector)
 
 
-def _svd_resolve(xp, screen, floor, *, want_energy, want_projector):
+def _svd_resolve(xp, screen, floor_of, *, want_energy, want_projector):
     """Exact resolved read via LAPACK SVD of the ``(Bg, N, Fe)`` screen (CPU / off-CUDA).  Tier 0
-    uses ``svdvals`` (bit-identical to ``Projection``); the projector/energy tier the full SVD."""
+    uses ``svdvals`` (bit-identical to ``Projection``); the projector/energy tier the full SVD.
+    ``floor_of(S)`` is the floor from the singular values, which the floor reads."""
     expensive = bool(want_energy or want_projector)
     if not expensive:
         S = xp.linalg.svdvals(screen)
+        floor = floor_of(S)
         keep = (S > floor[:, None])
         K = _env.sum_ax(xp, keep.astype(S.dtype) if not _env.is_torch(xp) else keep.to(S.dtype), 1)
         return dict(K=K, floor=floor, sigma_top=S[:, 0], energy=None, projector=None)
     U, S, Vh = xp.linalg.svd(screen, full_matrices=False)                  # (Bg,N,R)(Bg,R)(Bg,R,Fe)
+    floor = floor_of(S)
     keepf = (S > floor[:, None])
     keep = keepf.to(S.dtype) if _env.is_torch(xp) else keepf.astype(S.dtype)   # (Bg, R)
     K = _env.sum_ax(xp, keep, 1)
-    energy = _env.sum_ax(xp, (U ** 2) * (keep * S ** 2)[:, None, :], 2) if want_energy else None
+    energy = _env.sum_ax(xp, (xp.abs(U) ** 2) * (keep * S ** 2)[:, None, :], 2) if want_energy else None
     projector = None
     if want_projector:
-        V = _env.movedim(xp, Vh, 1, 2)                                     # (Bg, Fe, R)
+        V = _env.movedim(xp, Vh, 1, 2).conj()                              # (Bg, Fe, R): Vh^H
         Vk = V * keep[:, None, :]                                          # zero non-signal columns
-        projector = Vk @ _env.movedim(xp, V, 1, 2)                         # P = sum_signal v v^T
+        projector = Vk @ _env.movedim(xp, V, 1, 2).conj()                  # P = sum_signal v v^H
     return dict(K=K, floor=floor, sigma_top=S[:, 0], energy=energy, projector=projector)
 
 
@@ -270,7 +279,7 @@ def _fermi_sign_from_gram(xp, C, floor2):
         if _env.amax_abs(xp, Y2 - I) < _NS_TOL:                          # sign^2 = I at convergence
             break
         Y = 1.5 * Y - 0.5 * (Y2 @ Y)
-    tr = _env.sum_ax(xp, _env.diagonal(xp, Y), 1)                        # tr(sign) = 2K - F
+    tr = _env.sum_ax(xp, _env.diagonal(xp, Y), 1).real                   # tr(sign) = 2K - F (Hermitian: real)
     K = _env.round_int(xp, 0.5 * (F + tr))                               # (B,) exact integer count
     return K, Y
 
@@ -488,7 +497,12 @@ def resolved_batch(X, *, fold="auto", far: float = 0.05, null=None, seed: int = 
     energy_out = _env.zeros(xp, (B, T), ref=(Xt if _env.is_torch(xp) else None)) if energy else None
     proj_list: list = [None] * B
 
-    widths = [int(w) for w in np.unique(F_eff)]
+    # A frame with a channel the whitening could not scale leaves that channel out of its screen
+    # (Projection._flat_cols); it is read on its remaining channels below, as Projection reads it.
+    zero = _env.to_numpy(xp.all(data == 0, 1)) if _env.is_torch(xp) else np.all(data == 0, axis=1)
+    solo = np.asarray(zero).any(axis=1) & ~np.asarray(zero).all(axis=1)          # (B,)
+    F_eff = np.where(solo, -1, F_eff)
+    widths = [int(w) for w in np.unique(F_eff) if w >= 0]
 
     def _group(Fe):
         sel = np.where(F_eff == Fe)[0]
@@ -516,7 +530,33 @@ def resolved_batch(X, *, fold="auto", far: float = 0.05, null=None, seed: int = 
             for j, b in enumerate(sel):
                 proj_list[b] = r["projector"][j]
 
-    projector = _stack_or_list(xp, proj_list, len(widths) == 1) if basis else None
+    for b in np.flatnonzero(solo):
+        keep = ~np.asarray(zero)[b]
+        kk = xp.as_tensor(keep, device=Xt.device) if _env.is_torch(xp) else keep
+        sub = resolved_batch(Xt[int(b):int(b) + 1][:, :, kk], fold=fold, far=far, null=null,
+                             seed=seed, energy=energy, basis=basis, device=device,
+                             limits=limits, _allow_chunk=False)
+        K_signal[b] = int(np.asarray(_env.to_numpy(sub.K_signal))[0])
+        _scatter(xp, sigma_top, np.array([b]), xp.as_tensor(sub.sigma_top, device=Xt.device)
+                 if _env.is_torch(xp) else np.asarray(sub.sigma_top))
+        _scatter(xp, noise_floor, np.array([b]), xp.as_tensor(sub.noise_floor, device=Xt.device)
+                 if _env.is_torch(xp) else np.asarray(sub.noise_floor))
+        if energy:
+            _scatter(xp, energy_out, np.array([b]), xp.as_tensor(sub.energy, device=Xt.device)
+                     if _env.is_torch(xp) else np.asarray(sub.energy))
+        if basis:
+            Pb = sub.projector[0]
+            if int(Pb.shape[-1]) == int(keep.sum()):         # unfolded: embed at the kept channels
+                full = xp.zeros((int(keep.size),) * 2, dtype=Pb.dtype,
+                                **({"device": Pb.device} if _env.is_torch(xp) else {}))
+                ki = np.flatnonzero(keep)
+                ix = xp.as_tensor(ki, device=Pb.device) if _env.is_torch(xp) else ki
+                full[ix[:, None], ix[None, :]] = Pb          # a flat channel carries no energy
+                Pb = full
+            proj_list[b] = Pb
+    projector = (_stack_or_list(xp, proj_list, bool(proj_list) and all(
+                     p is not None and tuple(p.shape) == tuple(proj_list[0].shape) for p in proj_list))
+                 if basis else None)
 
     if moved and in_numpy:                               # offloaded from numpy -> return numpy
         sigma_top = _env.to_numpy(sigma_top)
@@ -541,13 +581,99 @@ def resolved_batch(X, *, fold="auto", far: float = 0.05, null=None, seed: int = 
 # caller keys ``{(session, layer, head) -> ResolvedScreen}`` and owns eviction / privacy, so there
 # is no cross-caller overlap by construction (ownership, not keying, is the isolation guarantee).
 
-def _frozen_whiten(xp, X):
-    """Per-channel robust MAD whiten stats (median, shrunk MAD) frozen from a warmup block ``X``
-    ``(N, F)`` -- the same math as ``entropy.normalize``, kept so a growing stream is whitened by a
-    stable per-channel scale (the median/MAD of a growing axis is not incrementally updatable)."""
-    from .entropy import mad_stats
-    med, mad_eff, _ = mad_stats(xp, _env.asnum(X))
-    return med, xp.where(mad_eff > 0.0, mad_eff, xp.ones_like(mad_eff))
+def _diag(xp, C):
+    """The diagonal of the last two axes of ``C`` (numpy / torch)."""
+    return (xp.diagonal(C, dim1=-2, dim2=-1) if _env.is_torch(xp)
+            else np.diagonal(C, axis1=-2, axis2=-1))
+
+
+class _Moments:
+    """The additive statistics a whitened Gram is formed from, for ``(..., k, F)`` row blocks: the
+    weight ``n``, the first moment ``s1 = sum x`` and the raw Gram ``G = sum x^T x``, each faded by
+    ``forgetting`` per ROW (a block of ``k`` rows fades what came before by ``forgetting**k`` and
+    weights its own rows as if appended one at a time, so the memory does not depend on how the
+    stream is blocked).  Complex rows take the Hermitian Gram.  Rows are taken relative to the first
+    row the screen saw (``shift``),
+    which is exact algebra and keeps ``G - n mu mu^T`` from cancelling at a large level; a channel
+    that never moved then has exactly zero moments.
+
+    :meth:`whitened` returns what :func:`entropy.normalize` would give the rows accumulated so far --
+    each channel centred on its mean and scaled by its RMS about it, the Gram of those columns -- and
+    the live width (channels that moved).  Mean and RMS are sums, so nothing is frozen: the read is
+    the batch read of the same rows at every refresh."""
+
+    def __init__(self, whiten: bool, forgetting: float):
+        self.whiten = bool(whiten)
+        self.lam = float(forgetting)
+        self.n = 0.0
+        self.shift = self.s1 = self.G = None
+
+    def _on(self, xp, R):
+        """Bring state loaded from numpy onto the rows' backend and device."""
+        if _env.is_torch(xp) and self.G is not None and not _env.is_torch(_env.ns(self.G)):
+            to = lambda a: xp.as_tensor(a, device=R.device)                   # noqa: E731
+            self.shift, self.s1, self.G = to(self.shift), to(self.s1), to(self.G)
+
+    def add(self, xp, R):
+        self._on(xp, R)
+        if self.shift is None:
+            self.shift = R[..., :1, :] * 1                                  # (..., 1, F)
+        X = R - self.shift if self.whiten else R
+        k = int(R.shape[-2])
+        w = self.lam ** np.arange(k - 1, -1, -1, dtype=np.float64)          # row i fades lam^(k-1-i)
+        wx = (xp.as_tensor(w, dtype=X.real.dtype, device=X.device) if _env.is_torch(xp)
+              else w.astype(np.asarray(X).real.dtype))
+        Xw = X * wx[:, None]
+        Xh = _env.movedim(xp, Xw, -2, -1)
+        G = (Xh.conj() if hasattr(Xh, "conj") else Xh) @ X                  # (..., F, F), Hermitian
+        s1 = _env.sum_ax(xp, Xw, -2)                                         # (..., F)
+        fade = self.lam ** k
+        if self.G is None:
+            self.G, self.s1, self.n = G, s1, float(w.sum())
+        else:
+            self.G = fade * self.G + G
+            self.s1 = fade * self.s1 + s1
+            self.n = fade * self.n + float(w.sum())
+
+    def whitened(self, xp):
+        """``(C, centre, inv_scale, live)``: the whitened Gram ``(..., F, F)``, each channel's centre
+        and inverse scale ``(..., F)`` (0 on a flat channel), and the live width per screen."""
+        if not self.whiten:
+            live = _diag(xp, self.G).real > 0
+            one = xp.ones_like(self.s1)
+            return self.G, xp.zeros_like(self.s1), xp.where(live, one, one * 0), live
+        mu = self.s1 / self.n                                                # (..., F)
+        Cc = self.G - self.n * (mu[..., :, None].conj() * mu[..., None, :])  # centred Gram
+        d2 = _diag(xp, Cc).real / self.n
+        live = d2 > 0
+        inv = xp.where(live, 1.0 / xp.sqrt(xp.where(live, d2, xp.ones_like(d2))), xp.zeros_like(d2))
+        C = inv[..., :, None] * Cc * inv[..., None, :]
+        return C, self.shift[..., 0, :] + mu, inv, live
+
+    def state(self) -> dict:
+        t = _env.to_numpy
+        return dict(n=self.n, shift=None if self.shift is None else t(self.shift),
+                    s1=None if self.s1 is None else t(self.s1), G=None if self.G is None else t(self.G))
+
+    def load(self, s: dict):
+        self.n = float(s["n"])
+        self.shift = None if s["shift"] is None else np.asarray(s["shift"])
+        self.s1 = None if s["s1"] is None else np.asarray(s["s1"])
+        self.G = None if s["G"] is None else np.asarray(s["G"])
+
+
+def _floor_sq_on(ev, T, live, far, null, seed):
+    """The squared floor for one screen from its whitened Gram's eigenvalues ``ev`` (numpy), at the
+    live width.  The derived ``mp`` edge, or a caller provider on the resolved spectrum, squared."""
+    F = int(live)
+    if F < 1:
+        return float("inf")
+    ev = np.sort(np.clip(np.asarray(ev, dtype=np.float64), 0.0, None))[::-1][:F]   # the live spectrum,
+    if null is None:                                                                 # descending
+        return float(screen_floor_sq(noise_sigma2_from_spectrum(ev, T, F), T, F, far))
+    fl = apply_floor(null, spectrum=np.sqrt(ev), data=None,
+                     shape=(T, F), far=far, kind="projection", seed=seed)
+    return float(fl) ** 2
 
 
 class ResolvedScreen:
@@ -555,107 +681,67 @@ class ResolvedScreen:
     across turns): append rows (tokens) incrementally, refresh the resolved basis lazily, and read
     ``K_signal`` / per-row ``energy`` without recomputing from scratch.
 
-    The feature Gram ``C = S^T S`` (whitened rows) is accumulated by rank-k updates; the eigenbasis
-    is refreshed every ``refresh_every`` appends (or on demand) -- the only expensive step, amortised
-    -- and the stale basis is reused for ``energy`` in between.  Whitening uses stats frozen from the
-    first ``warmup`` rows (a growing axis' median/MAD is not additive), so the read converges to the
-    batch :func:`resolved_batch` for a stationary stream; pass ``whiten=False`` if rows are already
-    normalised.  Native feature resolution only (``fold=False``:
-    the revisit case is unordered bases -- KV head_dim / embeddings).
+    The screen keeps additive statistics of the rows -- their count, sum and raw Gram -- so each
+    refresh forms exactly the whitened Gram :func:`resolved_batch` would read from the same rows (every
+    channel centred on its mean and scaled by its RMS about it; a channel that never moved leaves the
+    live width), and the read is the batch read.  The eigenbasis is refreshed every ``refresh_every``
+    appends (or on demand) -- the only expensive step, amortised -- and the stale basis is reused for
+    ``energy`` in between.  ``whiten=False`` reads the raw Gram of rows already normalised.  Native
+    feature resolution only (``fold=False``: the revisit case is unordered bases -- KV head_dim /
+    embeddings).
 
     Caller-owned: hold one per screen and key/evict them yourself; the library keeps no global state.
-    ``forgetting`` in (0,1] fades old rows (both the Gram and the floor's row-energy window) for a
-    non-stationary stream.  ``state()`` / :meth:`from_state` resume across sessions."""
+    ``forgetting`` in (0,1] fades old rows for a non-stationary stream.  ``state()`` /
+    :meth:`from_state` resume across sessions."""
 
     def __init__(self, F, *, far: float = 0.05, null=None, seed: int = 0,
-                 refresh_every: int = 32, warmup: int = 64, whiten: bool = True,
-                 forgetting: float = 1.0):
+                 refresh_every: int = 32, whiten: bool = True, forgetting: float = 1.0):
         self.F = int(F)
         self.far = float(far); self.null = null; self.seed = int(seed)
-        self.refresh_every = int(refresh_every); self.warmup = int(warmup)
+        self.refresh_every = int(refresh_every)
         self.whiten = bool(whiten); self.forgetting = float(forgetting)
         self.T = 0                       # rows accumulated
-        self._C = None                   # (F, F) whitened feature Gram
-        self._rowen = []                 # per-row whitened energies (for the screen-floor sigma2)
-        self._warm = []                  # warmup rows buffer (until whiten stats freeze)
-        self._med = self._mad = None     # frozen whiten stats
+        self._m = _Moments(whiten, forgetting)
         self._V = self._eval = self._keep = None   # cached resolved basis / eigenvalues / keep-mask
+        self._centre = self._inv = None            # the whitening the basis was read under
         self._since = 0                  # appends since the last basis refresh
         self._lock = threading.RLock()   # guard concurrent update/refresh/read on one instance
 
-    # ── whiten (frozen stats) ─────────────────────────────────────────────────
-    def _ensure_stats(self, xp, rows):
-        if not self.whiten or self._med is not None:
-            return
-        self._warm.append(rows)
-        if sum(int(r.shape[0]) for r in self._warm) >= self.warmup:
-            X = _env.cat0(xp, self._warm)
-            self._med, self._mad = _frozen_whiten(xp, X)
-            self._warm = []
-
-    def _apply_whiten(self, xp, rows):
-        if not self.whiten or self._med is None:
-            return rows
-        return (rows - self._med[None, :]) / self._mad[None, :]
-
-    # ── streaming update ──────────────────────────────────────────────────────
     def update(self, rows):
-        """Append ``rows`` ``(k, F)`` (new tokens) -- a rank-k Gram update; refreshes the basis
-        every ``refresh_every`` appends.  Backend-agnostic (torch rows stay on-device).  Thread-safe:
-        an internal lock serialises concurrent ``update`` / ``refresh`` / reads on one instance, so
-        two parallel appends cannot clobber the Gram (the batch functions are separately pure)."""
+        """Append ``rows`` ``(k, F)`` (new tokens) -- a rank-k update of the statistics; refreshes
+        the basis every ``refresh_every`` appends.  Backend-agnostic (torch rows stay on-device).
+        Thread-safe: an internal lock serialises concurrent ``update`` / ``refresh`` / reads on one
+        instance, so two parallel appends cannot clobber the statistics."""
         xp = _env.ns(rows)
         R = _env.asnum(rows)
         if R.ndim == 1:
             R = R[None, :]
         with self._lock:
-            self._ensure_stats(xp, R)
-            Sw = self._apply_whiten(xp, R)
-            G = Sw.T @ Sw                                        # (F, F) rank-k Gram update
-            lam = self.forgetting
-            self._C = G if self._C is None else (lam * self._C + G)
-            re = _env.sum_ax(xp, Sw ** 2, 1)                      # (k,) per-row energies
-            self._rowen.append(re)
-            self.T = int(round(lam * self.T)) + int(R.shape[0])
+            self._m.add(xp, R)
+            self.T = int(round(self._m.n))                       # the rows the Gram weighs
             self._since += int(R.shape[0])
             if self._since >= self.refresh_every:
                 self.refresh()
         return self
 
     def refresh(self):
-        """Recompute the resolved basis from the current Gram (the amortised expensive step)."""
+        """Recompute the resolved basis from the current statistics (the amortised expensive step)."""
         with self._lock:
-            if self._C is None:
+            if self._m.G is None:
                 return self
-            xp = _env.ns(self._C)
-            w, V = xp.linalg.eigh(self._C)
+            xp = _env.ns(self._m.G)
+            C, self._centre, self._inv, live = self._m.whitened(xp)
+            w, V = xp.linalg.eigh(C)
             w = _env.flip2(xp, w); V = _env.flip2(xp, V)         # descending
             self._eval = _env.clampmin(xp, w, 0.0)
             self._V = V
-            floor_sq = self._floor_sq(xp)
-            self._keep = (self._eval > floor_sq)
+            ev = np.asarray(_env.to_numpy(self._eval), dtype=np.float64)
+            F_live = int(np.asarray(_env.to_numpy(live)).sum())
+            fl2 = _floor_sq_on(ev, self.T, F_live, self.far, self.null, self.seed)
+            self._keep = (self._eval > _env.asdtype_of(self._eval, np.asarray(fl2)))
             self._since = 0
         return self
 
-    def _floor_sq(self, xp):
-        """The screen noise floor SQUARED (correlation units, to threshold the eigenvalues).
-
-        ``null=None`` is the derived ``mp`` screen edge off the tracked row energies.  A caller
-        provider is evaluated through :func:`apply_floor` on the cut point it thresholds, then
-        squared -- a provider scores in singular-value units, the Gram is read in their squares.
-        The revisited screen keeps no rows, so the provider is handed the resolved spectrum
-        (``sqrt`` of the eigenvalues) as its sample, which is what it thresholds against."""
-        re = _env.cat0(xp, self._rowen) if self._rowen else _env.zeros(xp, (1,), ref=self._C)
-        if self.null is None:
-            sigma2 = ((_env.median1d(xp, re) + float(_env.sum_ax(xp, re)) * macheps(xp, re))
-                      / debias_denominator(self.T, self.F))
-            return screen_floor_sq(sigma2, self.T, self.F, self.far)
-        spectrum = np.sqrt(np.asarray(_env.to_numpy(_env.clampmin(xp, self._eval, 0.0))))
-        fl = apply_floor(self.null, spectrum=spectrum, data=None,
-                         shape=(self.T, self.F), far=self.far, kind="projection", seed=self.seed)
-        return _env.asdtype_of(self._C, np.asarray(float(fl) ** 2))
-
-    # ── reads ─────────────────────────────────────────────────────────────────
     def _fresh(self):
         with self._lock:
             if self._V is None:
@@ -673,65 +759,33 @@ class ResolvedScreen:
 
     def energy(self, rows):
         """Per-row resolved-subspace energy of ``rows`` ``(k, F)`` against the current basis --
-        ``energy[t] = sum_{k<K} (S.v_k)^2[t]`` -- reusing the (lazily-refreshed) basis, no resolve."""
+        ``energy[t] = sum_{k<K} (s.v_k)^2[t]``, the rows whitened as the basis was read -- reusing the
+        (lazily-refreshed) basis, no resolve."""
         self._fresh()
         xp = _env.ns(rows)
         R = _env.asnum(rows)
         if R.ndim == 1:
             R = R[None, :]
-        Sw = self._apply_whiten(xp, R)
-        keep = (self._keep.to(Sw.dtype) if _env.is_torch(xp) else self._keep.astype(Sw.dtype))
-        P = Sw @ self._V                                          # (k, F) projections S.v
-        return _env.sum_ax(xp, (P ** 2) * keep[None, :], 1)       # (k,)
+        Sw = (R - self._centre[None, :]) * self._inv[None, :]
+        keep = (self._keep.to(Sw.real.dtype) if _env.is_torch(xp) else self._keep.astype(Sw.real.dtype))
+        P = Sw @ self._V                                          # (k, F) projections s.v
+        return _env.sum_ax(xp, (xp.abs(P) ** 2) * keep[None, :], 1)   # (k,)
 
     def state(self) -> dict:
         """Export the full state (resume/splice across sessions)."""
         return dict(F=self.F, far=self.far, seed=self.seed, refresh_every=self.refresh_every,
-                    warmup=self.warmup, whiten=self.whiten, forgetting=self.forgetting,
-                    T=self.T, C=_env.to_numpy(self._C) if self._C is not None else None,
-                    rowen=[_env.to_numpy(r) for r in self._rowen],
-                    med=_env.to_numpy(self._med) if self._med is not None else None,
-                    mad=_env.to_numpy(self._mad) if self._mad is not None else None)
+                    whiten=self.whiten, forgetting=self.forgetting, T=self.T,
+                    moments=self._m.state())
 
     @classmethod
     def from_state(cls, s: dict) -> "ResolvedScreen":
         """Resume a :class:`ResolvedScreen` from :meth:`state` (numpy; move to a device by feeding
         the next ``update`` a torch tensor)."""
         obj = cls(s["F"], far=s["far"], seed=s["seed"], refresh_every=s["refresh_every"],
-                  warmup=s["warmup"], whiten=s["whiten"], forgetting=s["forgetting"])
+                  whiten=s["whiten"], forgetting=s["forgetting"])
         obj.T = int(s["T"])
-        obj._C = None if s["C"] is None else np.asarray(s["C"])
-        obj._rowen = [np.asarray(r) for r in s["rowen"]]
-        obj._med = None if s["med"] is None else np.asarray(s["med"])
-        obj._mad = None if s["mad"] is None else np.asarray(s["mad"])
+        obj._m.load(s["moments"])
         return obj
-
-
-def _cat_tokens(xp, parts):
-    """Concatenate ``(B, k_i, ...)`` blocks along the token axis (1)."""
-    return xp.cat(parts, dim=1) if _env.is_torch(xp) else np.concatenate(parts, axis=1)
-
-
-def _frozen_whiten_batch(xp, X):
-    """Per-screen robust MAD whiten stats (median, shrunk MAD) frozen from a warmup block ``X``
-    ``(B, W, F)`` -- the batched, per-screen form of :func:`_frozen_whiten` (James-Stein shrink of
-    each screen's per-channel MAD toward its pooled scale)."""
-    from .entropy import MAD_LOGVAR, resolution_floor
-    data = _env.asnum(X)
-    med = _env.median_ax(xp, data, 1)                                   # (B, F)
-    mad = _env.median_ax(xp, xp.abs(data - med[:, None, :]), 1) * MAD_SCALE   # (B, F)
-    N = int(data.shape[1])
-    typ = _env.median_ax(xp, mad, 1)                                    # (B,) per-screen pooled scale
-    pos = mad > resolution_floor(xp, typ, mad)[:, None]                 # (B, F) -- see mad_stats
-    lm = xp.log(xp.where(pos, mad, xp.ones_like(mad)))
-    lm0 = xp.log(xp.where(typ > 0.0, typ, xp.ones_like(typ)))
-    V = _env.std_ax(xp, lm, 1) ** 2                                     # (B,)
-    ratio = (MAD_LOGVAR / max(N, 1)) / _env.clampmin(xp, V, 1e-300)
-    w = _env.cliprange(xp, 1.0 - ratio, 0.0, 1.0)
-    w = xp.where(V > 0.0, w, xp.zeros_like(w))
-    mad_eff = xp.where(pos, xp.exp(lm0[:, None] + w[:, None] * (lm - lm0[:, None])),
-                       xp.zeros_like(mad))                             # (B, F)
-    return med, xp.where(mad_eff > 0.0, mad_eff, xp.ones_like(mad_eff))
 
 
 class ResolvedScreenBatch:
@@ -743,86 +797,67 @@ class ResolvedScreenBatch:
     batched dense cuSOLVER is ~1-2 s).
 
     Append ``(B, k, F)`` blocks (``k`` new tokens for each of the ``B`` screens) with :meth:`update`;
-    the Grams accumulate by a batched rank-``k`` update, the projector refreshes every
-    ``refresh_every`` appends, and :attr:`K_signal` / :meth:`energy` read all ``B`` at once.  Whitening
-    uses per-screen stats frozen from the first ``warmup`` rows (a growing axis' median/MAD is not
-    additive); ``whiten=False`` if rows are pre-normalised.  Caller-owned; thread-safe (one lock).
-    ``forgetting`` in (0,1] fades old rows."""
+    the statistics accumulate by a batched rank-``k`` update, the projector refreshes every
+    ``refresh_every`` appends, and :attr:`K_signal` / :meth:`energy` read all ``B`` at once.  Each
+    refresh forms every screen's whitened Gram from its count, sum and raw Gram, exactly as
+    :class:`ResolvedScreen` does, so the read is the batch read of the same rows; ``whiten=False``
+    reads rows already normalised.  Caller-owned; thread-safe (one lock).  ``forgetting`` in (0,1]
+    fades old rows."""
 
     def __init__(self, B, F, *, far: float = 0.05, null=None, seed: int = 0,
-                 refresh_every: int = 32, warmup: int = 64,
-                 whiten: bool = True, forgetting: float = 1.0):
+                 refresh_every: int = 32, whiten: bool = True, forgetting: float = 1.0):
         self.B = int(B); self.F = int(F); self.far = float(far)
         self.null = null; self.seed = int(seed)
-        self.refresh_every = int(refresh_every); self.warmup = int(warmup)
+        self.refresh_every = int(refresh_every)
         self.whiten = bool(whiten); self.forgetting = float(forgetting)
         self.T = 0                       # rows accumulated per screen (uniform)
-        self._C = None                   # (B, F, F) whitened feature Grams
-        self._rowen = []                 # list of (B, k) per-row whitened energies (floor sigma2)
-        self._warm = []                  # warmup row blocks (B, k, F) until whiten stats freeze
-        self._med = self._mad = None     # (B, F) frozen whiten stats
+        self._m = _Moments(whiten, forgetting)
         self._K = self._P = None         # cached batched K_signal (B,) / projector (B, F, F)
+        self._centre = self._inv = None  # the whitening the projector was read under, (B, F)
         self._since = 0
         self._lock = threading.RLock()
 
-    def _ensure_stats(self, xp, rows):
-        if not self.whiten or self._med is not None:
-            return
-        self._warm.append(rows)
-        if sum(int(r.shape[1]) for r in self._warm) >= self.warmup:
-            self._med, self._mad = _frozen_whiten_batch(xp, _cat_tokens(xp, self._warm))
-            self._warm = []
-
-    def _apply_whiten(self, xp, rows):
-        if not self.whiten or self._med is None:
-            return rows
-        return (rows - self._med[:, None, :]) / self._mad[:, None, :]
-
     def update(self, rows) -> "ResolvedScreenBatch":
         """Append ``rows`` ``(B, k, F)`` -- ``k`` new tokens for each of the ``B`` screens -- as a
-        batched rank-``k`` Gram update; refreshes the projector every ``refresh_every`` appends.
+        batched rank-``k`` update; refreshes the projector every ``refresh_every`` appends.
         Backend-agnostic (torch rows stay on-device).  Thread-safe."""
         xp = _env.ns(rows)
         R = _env.asnum(rows)
         if R.ndim == 2:                                          # (B, F) -> one token per screen
             R = R[:, None, :]
         with self._lock:
-            self._ensure_stats(xp, R)
-            Sw = self._apply_whiten(xp, R)                       # (B, k, F)
-            G = _env.movedim(xp, Sw, 1, 2) @ Sw                  # (B, F, F) batched rank-k update
-            lam = self.forgetting
-            self._C = G if self._C is None else (lam * self._C + G)
-            self._rowen.append(_env.sum_ax(xp, Sw ** 2, 2))      # (B, k) per-row energies
-            self.T = int(round(lam * self.T)) + int(R.shape[1])
+            self._m.add(xp, R)
+            self.T = int(round(self._m.n))                       # the rows the Gram weighs
             self._since += int(R.shape[1])
             if self._since >= self.refresh_every:
                 self.refresh()
         return self
 
     def refresh(self) -> "ResolvedScreenBatch":
-        """Recompute the batched projector + K_signal from the current Grams (amortised expensive
-        step) -- one batched Fermi matrix-sign solve over all ``B`` screens."""
+        """Recompute the batched projector + K_signal from the current statistics (amortised
+        expensive step) -- one batched Fermi matrix-sign solve over all ``B`` screens."""
         with self._lock:
-            if self._C is None:
+            if self._m.G is None:
                 return self
-            xp = _env.ns(self._C)
-            re = _cat_tokens(xp, self._rowen) if self._rowen else _env.zeros(xp, (self.B, 1), ref=self._C)
-            if self.null is None:
-                sigma2 = ((_env.median_ax(xp, re, 1) + _env.sum_ax(xp, re, 1) * macheps(xp, re))
-                          / debias_denominator(self.T, self.F))                                  # (B,)
-                floor2 = screen_floor_sq(sigma2, self.T, self.F, self.far)                        # (B,) squared
-            else:
-                # A caller provider is the occasional path, so it runs per screen in numpy on
-                # that screen's own resolved spectrum -- the same contract `_floor_batch` and
-                # `ResolvedScreen` honour, squared into the Gram's units.
-                ev = np.asarray(_env.to_numpy(_env.clampmin(xp, xp.linalg.eigvalsh(self._C), 0.0)))
-                fl = np.array([apply_floor(self.null, spectrum=np.sqrt(ev[j][::-1]), data=None,
-                                           shape=(self.T, self.F), far=self.far,
-                                           kind="projection", seed=self.seed) ** 2
-                               for j in range(self.B)])
-                floor2 = _env.asdtype_of(self._C, fl.astype(float))
-            self._K, sign = _fermi_sign_from_gram(xp, self._C, floor2)
-            self._P = 0.5 * (_env.eye(xp, self.F, ref=self._C) + sign)
+            xp = _env.ns(self._m.G)
+            C, self._centre, self._inv, live = self._m.whitened(xp)
+            ev = np.clip(np.asarray(_env.to_numpy(xp.linalg.eigvalsh(C)), dtype=np.float64),
+                         0.0, None)                                                              # (B, F)
+            F_live = np.asarray(_env.to_numpy(live)).sum(axis=1)
+            fl = np.array([_floor_sq_on(ev[j], self.T, F_live[j], self.far, self.null, self.seed)
+                           for j in range(self.B)])
+            # A screen with no live channel has nothing to resolve: K = 0 and a zero projector.
+            # Its floor is infinite, which the sign iteration cannot take, so it is left out of it.
+            on = np.flatnonzero(np.isfinite(fl))
+            K = np.zeros(self.B, dtype=np.int64)
+            P = C * 0
+            if on.size:
+                idx = xp.as_tensor(on, device=C.device) if _env.is_torch(xp) else on
+                floor2 = _env.asdtype_of(C.real if hasattr(C, "real") else C, fl[on])             # squared
+                Kon, sign = _fermi_sign_from_gram(xp, C[idx], floor2)
+                K[on] = np.asarray(_env.to_numpy(Kon)).astype(np.int64)
+                P[idx] = 0.5 * (_env.eye(xp, self.F, ref=C) + sign)
+            self._K, self._P = K, P
             self._since = 0
         return self
 
@@ -841,33 +876,29 @@ class ResolvedScreenBatch:
 
     def energy(self, rows):
         """Per-row resolved-subspace energy of query ``rows`` ``(B, k, F)`` against the current
-        batched projector -- ``energy[b,t] = s_t P_b s_t^T`` -- returned ``(B, k)`` on the backend."""
+        batched projector -- ``energy[b,t] = s_t P_b s_t^T``, the rows whitened as the projector was
+        read -- returned ``(B, k)`` on the backend."""
         self._fresh()
         xp = _env.ns(rows)
         R = _env.asnum(rows)
         if R.ndim == 2:
             R = R[:, None, :]
-        Sw = self._apply_whiten(xp, R)
-        return _env.sum_ax(xp, (Sw @ self._P) * Sw, 2)          # (B, k)
+        Sw = (R - self._centre[:, None, :]) * self._inv[:, None, :]
+        e = _env.sum_ax(xp, (Sw @ self._P) * (Sw.conj() if hasattr(Sw, "conj") else Sw), 2)
+        return e.real if (hasattr(e, "is_complex") and e.is_complex()) or np.iscomplexobj(e) else e  # (B, k)
 
     def state(self) -> dict:
         """Export the full batched state (resume across sessions; numpy)."""
-        return dict(B=self.B, F=self.F, far=self.far, refresh_every=self.refresh_every,
-                    warmup=self.warmup, whiten=self.whiten, forgetting=self.forgetting, T=self.T,
-                    C=_env.to_numpy(self._C) if self._C is not None else None,
-                    rowen=[_env.to_numpy(r) for r in self._rowen],
-                    med=_env.to_numpy(self._med) if self._med is not None else None,
-                    mad=_env.to_numpy(self._mad) if self._mad is not None else None)
+        return dict(B=self.B, F=self.F, far=self.far, seed=self.seed,
+                    refresh_every=self.refresh_every, whiten=self.whiten,
+                    forgetting=self.forgetting, T=self.T, moments=self._m.state())
 
     @classmethod
     def from_state(cls, s: dict) -> "ResolvedScreenBatch":
-        obj = cls(s["B"], s["F"], far=s["far"], refresh_every=s["refresh_every"],
-                  warmup=s["warmup"], whiten=s["whiten"], forgetting=s["forgetting"])
+        obj = cls(s["B"], s["F"], far=s["far"], seed=s["seed"], refresh_every=s["refresh_every"],
+                  whiten=s["whiten"], forgetting=s["forgetting"])
         obj.T = int(s["T"])
-        obj._C = None if s["C"] is None else np.asarray(s["C"])
-        obj._rowen = [np.asarray(r) for r in s["rowen"]]
-        obj._med = None if s["med"] is None else np.asarray(s["med"])
-        obj._mad = None if s["mad"] is None else np.asarray(s["mad"])
+        obj._m.load(s["moments"])
         return obj
 
 

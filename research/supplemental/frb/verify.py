@@ -73,9 +73,9 @@ check("box-average control, range", 0.427, hi)
 check("box-average control, mean", 0.214, means["corr_rebinned_model"], 5e-4)
 
 lo, hi = _rng(agreement, "corr_read_model")
-check("the read, range", 0.515, lo)
-check("the read, range", 0.609, hi)
-check("the read, mean", 0.560, means["corr_read_model"], 5e-4)
+check("the read, range", 0.421, lo)
+check("the read, range", 0.533, hi)
+check("the read, mean", 0.470, means["corr_read_model"], 5e-4)
 
 # -- section 3.3: the premise of the baseline removal -------------------------------------
 check("model per-channel baseline, worst (1e-6)", 3.9,
@@ -97,16 +97,16 @@ check("fold-resolution ceiling, mean", 0.994, means["ref_fold_ceiling"], 5e-4)
 
 # -- section 4, quantities derived in the prose ------------------------------------------
 check("on-burst raw, mean", 0.297, means["corr_raw_model_onburst"], 5e-4)
-check("on-burst read, mean", 0.468, means["corr_read_model_onburst"], 5e-4)
-check("read / raw, full frame", 2.8,
+check("on-burst read, mean", 0.394, means["corr_read_model_onburst"], 5e-4)
+check("read / raw, full frame", 2.4,
       means["corr_read_model"] / means["corr_raw_model"], 0.05)
-check("read / raw, on-burst", 1.6,
+check("read / raw, on-burst", 1.3,
       means["corr_read_model_onburst"] / means["corr_raw_model_onburst"], 0.05)
 check("fold cost, worst event (%)", 1.5, 100 * (1 - min(_col(agreement, "ref_fold_ceiling"))), 0.05)
 check("fold cost, best event (%)", 0.1, 100 * (1 - max(_col(agreement, "ref_fold_ceiling"))), 0.05)
 _gain = means["corr_read_model"] - means["corr_raw_model"]
 _fold = means["corr_rebinned_model"] - means["corr_raw_model"]
-check("fold's share of the gain (%)", 4.6, 100 * _fold / _gain, 0.05)
+check("smoothing's share of the gain (%)", 6.1, 100 * _fold / _gain, 0.05)
 
 # -- section 3.1, table 1: the per-burst reads -------------------------------------------
 lo, hi = _rng(events, "n_live")
@@ -116,8 +116,8 @@ lo, hi = _rng(events, "n_F_read")
 check("width read at, range", 5949, lo, 0.5)
 check("width read at, range", 10972, hi, 0.5)
 lo, hi = _rng(events, "contrast")
-check("four-event contrast, range", 1.30, lo)
-check("four-event contrast, range", 4.22, hi)
+check("four-event contrast, range", 1.17, lo)
+check("four-event contrast, range", 2.02, hi)
 lo, hi = _rng(events, "T")
 check("four-event T, range", 19, lo, 0.5)
 check("four-event T, range", 38, hi, 0.5)
@@ -127,10 +127,10 @@ check("four events on the figure", 4, len(events), 0.5)
 resolved = [r for r in spot if int(r["K_signal"]) >= 1]
 blank = [r for r in spot if int(r["K_signal"]) == 0]
 check("waterfalls drawn", 12, len(spot), 0.5)
-check("resolved K_signal >= 1", 8, len(resolved), 0.5)
+check("resolved K_signal >= 1", 7, len(resolved), 0.5)
 lo, hi = _rng(blank, "contrast")
-check("unresolved contrast, range", 0.98, lo)
-check("unresolved contrast, range", 0.99, hi)
+check("unresolved contrast, range", 0.99, lo)
+check("unresolved contrast, range", 1.00, hi)
 lo, hi = _rng(blank, "T")
 check("unresolved T, range", 19, lo, 0.5)
 check("unresolved T, range", 57, hi, 0.5)

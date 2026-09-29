@@ -27,6 +27,7 @@ GPU (torch tensors stay on-device).  Real- and complex-safe.
   Dynamics(F)                  -- the streaming operator; .update(x) per frame from frame 0.
   Dynamics.rates()             -- DecayRates: long_range / short_range / dominant + spectrum.
   Dynamics.reconstruct_decay(L)-- C(tau) rebuilt from the spectrum (exact, extrapolatable).
+  Dynamics.modes()             -- ModePowers: each mode's power P_k in that C(tau), largest first.
   Dynamics.state()/from_state()-- export/import the full state (splice / resume).
   Dynamics.merge(other)        -- splice two segments (exact at forgetting=1).
   Dynamics.tensors()           -- extract the full (complex) operator tensors.
@@ -141,6 +142,51 @@ class DecayRates:
     dominant:    float    # decay rate of the |mu|-largest (dominant) mode
     n_modes:     int      # number of resolved modes
     n_frames:    int      # frames seen so far
+
+
+@dataclass
+class ModePowers:
+    """Each connected mode's power in the decay C(tau) = sum_k P_k mu_k^tau -- the same computation
+    as ``Dynamics.reconstruct_decay`` -- sorted by power, largest first.
+    Arrays are in the operator's backend (numpy or torch, on-device)."""
+    mu:     object   # eigenvalues mu_k of the connected propagator
+    alpha:  object   # decay rate per mode = -log|mu_k|
+    beta:   object   # frequency per mode  = arg(mu_k)  (rad/step)
+    power:  object   # P_k >= 0: the mode's contribution to C(0), in the accumulator's units (a sum over frames)
+    share:  object   # P_k / sum_k P_k
+
+    def spectrum(self, f) -> np.ndarray:
+        """The Fourier view of the operator: the power spectral density at frequencies ``f``
+        (cycles per step, any values, any resolution) of the decay these modes describe,
+
+            S(f) = sum_k P_k (L_k(f) + L_k(-f)) / 2,
+            L_k(f) = (1 - r_k^2) / |1 - r_k e^{i (beta_k - 2 pi f)}|^2,   r_k = exp(-|alpha_k|).
+
+        It is the transform of ``C(tau) = Re sum_k P_k mu_k^|tau|`` -- the decay
+        ``Dynamics.reconstruct_decay`` rebuilds -- so it is even in ``f`` and integrates over one
+        period to ``sum_k P_k = C(0)``.  Evaluated from the modes, not from samples, so it has no
+        bins and no leakage, and each line's width is its decay rate ``alpha_k``.
+
+        A mode on or outside the unit circle (``|mu_k| >= 1``) has no decaying correlation to
+        transform; it is drawn at the reflected radius ``exp(-|alpha_k|)``, a line whose width is
+        ``|alpha_k|``, so the view is continuous in ``|mu_k|`` across the circle.  A mode exactly on
+        the circle is a line of zero width: 0 away from its frequency, NaN on it."""
+        f = np.asarray(f, dtype=float)
+        mu = np.asarray(to_numpy(self.mu)).astype(complex).ravel()
+        P = np.asarray(to_numpy(self.power), float).ravel()
+        if mu.size == 0:
+            return np.zeros(f.shape)
+        with np.errstate(divide="ignore"):
+            r = np.exp(-np.abs(np.log(np.abs(mu))))[:, None]                  # mu = 0 -> r = 0
+        b = np.angle(mu)[:, None]
+        w = 2.0 * np.pi * f.ravel()[None, :]
+
+        def lorentz(sign):
+            with np.errstate(divide="ignore", invalid="ignore"):
+                return (1.0 - r ** 2) / np.abs(1.0 - r * np.exp(1j * (b - sign * w))) ** 2
+
+        S = P @ (0.5 * (lorentz(1.0) + lorentz(-1.0)))
+        return S.reshape(f.shape)
 
 
 @dataclass
@@ -610,22 +656,55 @@ class Dynamics:
             dominant=float(alpha[0]), n_modes=int(mu.shape[0]), n_frames=self.n_frames,
         )
 
-    # ── decay reconstruction (exact, extrapolatable to any lag) ───────────────
-    def reconstruct_decay(self, max_lag: int):
-        """Rebuild C(tau) = sum_k P_k mu_k^tau from the operator spectrum for
-        tau = 0..max_lag-1 -- extrapolates beyond the observed window.  Normalised
-        so C(0) = 1.  Returned in the operator's backend."""
+    # ── modal power: the P_k of C(tau) = sum_k P_k mu_k^tau ───────────────────
+    def _modal_power(self):
+        """The connected modes mu_k and their powers P_k >= 0 in the section-4 decay
+        C(tau) = sum_k P_k mu_k^tau, or None before the first pair."""
         b = self._b
         if b is None:
-            return np.ones(1)
+            return None
         xp = b.xp
         A_tilde, _, wr = self._reduced_c()          # connected decay (matches section-4 C(tau))
         if int(A_tilde.shape[0]) == 0:
-            return b.zeros(1) + 1.0
+            return None
         mu, T = xp.linalg.eig(A_tilde)
         Tinv = xp.linalg.pinv(T)
         cov_modal = Tinv @ b.astype(xp.diag(wr), True) @ Tinv.conj().T
         P = b.clampmin(b.real(xp.diag(cov_modal)), 0.0)         # modal power (real)
+        return mu, P
+
+    def modes(self) -> ModePowers:
+        """Each connected mode's power P_k in the decay C(tau) = sum_k P_k mu_k^tau -- the
+        same computation as ``reconstruct_decay`` -- sorted by power, largest first, with its
+        share P_k / sum P, rate alpha_k = -log|mu_k| and frequency beta_k = arg(mu_k).  Ranking
+        by power puts the record's own signal modes first; how many modes are signal is the
+        count's job, not this one's."""
+        mp = self._modal_power()
+        if mp is None:
+            z = np.zeros(0) if self._b is None else self._b.zeros(0)
+            return ModePowers(z, z, z, z, z)
+        b = self._b
+        xp = b.xp
+        mu, P = mp
+        order = b.argsort_desc(P)
+        mu, P = mu[order], P[order]
+        total = float(P.sum())
+        share = P / total if total > 0 else P * 0.0
+        return ModePowers(mu=mu, alpha=-xp.log(b.clampmin(xp.abs(mu), 1e-300)),
+                          beta=xp.angle(mu), power=P, share=share)
+
+    # ── decay reconstruction (exact, extrapolatable to any lag) ───────────────
+    def reconstruct_decay(self, max_lag: int):
+        """Rebuild C(tau) = sum_k P_k mu_k^tau from the operator spectrum for
+        tau = 0..max_lag-1 -- extrapolates beyond the observed window.  Normalised
+        so C(0) = 1.  Returned in the operator's backend.  The P_k are ``modes().power``."""
+        b = self._b
+        if b is None:
+            return np.ones(1)
+        mp = self._modal_power()
+        if mp is None:
+            return b.zeros(1) + 1.0
+        mu, P = mp
         taus = b.arange(int(max_lag))                          # real lags 0,1,2,...
         powers = mu[None, :] ** taus[:, None]                  # complex ** real -> (L, r)
         C = b.real(powers @ b.astype(P, True))
@@ -956,7 +1035,7 @@ class HankelSpectrum:
         return -float(np.log(lam)) if 0.0 < lam < 1.0 else float("nan")
 
 
-def hankel_spectrum(c, n: int, *, rcond: float = 1e-6) -> HankelSpectrum:
+def hankel_spectrum(c, n: int, *, rcond: float | None = None) -> HankelSpectrum:
     """The transfer-operator spectrum of a real correlation sequence via the reflection-positive
     moment pencil (a.k.a. Prony / Hankel-DMD / matrix pencil).
 
@@ -978,7 +1057,9 @@ def hankel_spectrum(c, n: int, *, rcond: float = 1e-6) -> HankelSpectrum:
 
     Scanning ``n`` exposes the moment-order systematic: a well-isolated leading mode is stable in
     ``n`` while ``psd`` stays positive.  Report the band across ``n``; do not pick one favourable
-    order.  (See :func:`jackknife` for an error bar, since the pencil has no closed-form interval.)"""
+    order.  (See :func:`jackknife` for an error bar, since the pencil has no closed-form interval.)
+    ``rcond``: see :func:`matrix_pencil` -- by default H0's directions are cut where the record's own
+    noise shows."""
     c = np.asarray(c, dtype=float).ravel()
     if n < 1:
         raise ValueError("moment order n must be >= 1")
@@ -987,46 +1068,152 @@ def hankel_spectrum(c, n: int, *, rcond: float = 1e-6) -> HankelSpectrum:
     if c[0] != 0:
         c = c / c[0]                                   # normalise C(0)=1 (the pencil is ratio-invariant)
     idx = np.add.outer(np.arange(n + 1), np.arange(n + 1))
-    H0 = c[idx]
-    H1 = c[idx + 1]
-    w, V = np.linalg.eigh(0.5 * (H0 + H0.T))
-    wmax = float(w.max()) if w.size else 0.0
-    keep = w > rcond * wmax
-    if not bool(keep.any()):
+    mp = matrix_pencil(c[idx], c[idx + 1], rcond=rcond)
+    if mp.evals.size == 0:
         return HankelSpectrum(evals=np.zeros(0), isolation=float("nan"), psd=0.0, n=n)
-    Vr = V[:, keep] / np.sqrt(w[keep])
-    M = Vr.T @ H1 @ Vr
-    ev = np.sort(np.linalg.eigvalsh(0.5 * (M + M.T)))[::-1]
+    ev = mp.evals
     iso = float(ev[0] / ev[1]) if ev.size > 1 and ev[1] > 0 else float("inf")
+    return HankelSpectrum(evals=ev, isolation=iso, psd=mp.psd, n=n)
+
+
+@dataclass
+class MatrixPencil:
+    """The generalised eigenproblem ``C1 v = lambda C0 v`` of a correlator matrix pair."""
+    evals:   np.ndarray   # transfer eigenvalues, descending
+    vectors: np.ndarray   # (n, k) generalised eigenvectors, columns in the order of evals
+    psd:     float        # C0 conditioning, min/max eigenvalue: >= 0 iff PSD (< 0: lost positivity)
+
+
+def matrix_pencil(C0, C1, *, rcond: float | None = None) -> MatrixPencil:
+    """The generalised eigenproblem of a measured pair of correlator matrices, ``C1 v = lambda C0 v``
+    -- the same construction as :func:`hankel_spectrum`, which calls this on its Hankel moments.
+    Both matrices are read through their symmetric parts: a correlator matrix of a time-reversal
+    symmetric measurement is symmetric, and finite statistics break that only by noise.  For a
+    ``C1`` that is not symmetric the eigenvalues are those of ``(C1 + C1^T)/2`` against ``C0``, not
+    of ``C1`` itself.  Real matrices only; a complex pair is refused.
+
+    ``C0`` (the zero-step correlator matrix, symmetrised) is whitened on the part of its spectrum
+    the measurement resolves.  ``C0`` is positive semidefinite in the limit, and finite statistics
+    break that only by noise, so its most negative eigenvalue is the size of the noise the record
+    itself shows: directions with eigenvalue at or below ``|min(w, 0)|`` -- or below round-off,
+    ``max(w) n eps``, when ``C0`` is positive -- cannot be told from that noise and are dropped.
+    Nothing is chosen: the cut is read off ``C0``.  A caller who knows the noise may pass ``rcond``
+    and cut at ``rcond * max(w)`` instead.  With ``V_r = V_keep / sqrt(w_keep)``,
+    ``M = V_r^T C1 V_r`` (symmetrised) is eigen-decomposed; the eigenvalues are the transfer
+    eigenvalues, descending, and ``V_r y`` the generalised eigenvectors (a Ritz / variational vector
+    per level).  ``psd`` is ``C0``'s min/max eigenvalue: negative when finite statistics have lost
+    positivity, and the directions that carried it are the ones dropped."""
+    if np.iscomplexobj(C0) or np.iscomplexobj(C1):
+        raise ValueError("matrix_pencil reads real correlator matrices; got a complex one")
+    C0 = np.asarray(C0, dtype=float)
+    C1 = np.asarray(C1, dtype=float)
+    if C0.ndim != 2 or C0.shape[0] != C0.shape[1] or C1.shape != C0.shape:
+        raise ValueError(f"C0 and C1 must be square and the same shape; got {C0.shape}, {C1.shape}")
+    w, V = np.linalg.eigh(0.5 * (C0 + C0.T))
+    wmax = float(w.max()) if w.size else 0.0
+    if rcond is None:
+        cut = max(-min(float(w.min()), 0.0), wmax * w.size * np.finfo(float).eps) if w.size else 0.0
+    else:
+        cut = float(rcond) * wmax
+    keep = w > cut
+    if not bool(keep.any()):
+        return MatrixPencil(evals=np.zeros(0), vectors=np.zeros((C0.shape[0], 0)), psd=0.0)
+    Vr = V[:, keep] / np.sqrt(w[keep])
+    M = Vr.T @ C1 @ Vr
+    Ms = 0.5 * (M + M.T)
+    ev = np.sort(np.linalg.eigvalsh(Ms))[::-1]             # the moment pencil's own eigenvalue path
+    lam, Y = np.linalg.eigh(Ms)
     psd = float(w.min() / wmax) if wmax > 0 else 0.0
-    return HankelSpectrum(evals=ev, isolation=iso, psd=psd, n=n)
+    return MatrixPencil(evals=ev, vectors=Vr @ Y[:, np.argsort(lam)[::-1]], psd=psd)
 
 
-def jackknife(samples, read, *, n_bins: int | None = None):
-    """Delete-one(-bin) jackknife point estimate and standard error of a scalar ``read``.
+def jackknife(samples, read, *, n_bins: int | None = None, groups=None):
+    """Delete-one(-group) jackknife point estimate and standard error of a ``read``.
 
-    ``samples``: an ``(N, ...)`` array or length-``N`` sequence.  ``read``: ``callable(subset) -> float``,
-    evaluated on the full set and on each delete-one(-bin) subset (the subset is passed in the same
-    form as ``samples``).  With ``n_bins`` the ``N`` samples are split into that many contiguous bins,
-    each deleted in turn (delete-one-bin, cheaper for large ``N``); without it, delete-one-sample.
-    Returns ``(estimate_on_full, se)`` with
+    ``samples``: an ``(N, ...)`` array or length-``N`` sequence.  ``read``: ``callable(subset)``,
+    evaluated on the full set and on each delete-one-group subset (the subset is passed in the same
+    form as ``samples``, rows in their original order).  The groups are, in order of precedence:
+    ``groups`` -- explicit index arrays (independent streams, Markov chains, blocks; unequal sizes and
+    non-contiguous membership allowed; a sample in no group is never deleted); ``n_bins`` -- that
+    many contiguous bins; neither -- delete-one-sample.  Returns ``(estimate_on_full, se)`` with
 
         se = sqrt( (G-1)/G * sum_g (theta_(g) - mean_g)^2 ),   G = number of groups.
 
+    A scalar read returns floats.  A read returning an array is resampled element-wise, and
+    ``estimate_on_full`` and ``se`` come back with its shape (a correlator profile gets one SE per
+    lag).  A non-finite replicate makes that element's ``se`` non-finite; nothing is dropped.
     Domain-agnostic resampling for reads with no closed-form interval (e.g. :func:`hankel_spectrum`)."""
     is_arr = hasattr(samples, "shape")
     arr = samples if is_arr else list(samples)
     N = int(arr.shape[0]) if is_arr else len(arr)
     if N < 2:
         raise ValueError("jackknife needs >= 2 samples")
-    G = N if n_bins is None else min(int(n_bins), N)
-    groups = np.array_split(np.arange(N), G)
+    if groups is not None and n_bins is not None:
+        raise ValueError("jackknife takes groups or n_bins, not both")
+    if groups is None:
+        G = N if n_bins is None else min(int(n_bins), N)
+        groups = np.array_split(np.arange(N), G)
+    else:
+        groups = [np.asarray(g, dtype=int).ravel() for g in groups]
+        G = len(groups)
+        if G < 2:
+            raise ValueError("jackknife needs >= 2 groups")
+        if any(g.size == 0 for g in groups):
+            raise ValueError("jackknife groups must not be empty")
+        members = np.concatenate(groups)
+        if members.min() < 0 or members.max() >= N:
+            raise ValueError("jackknife group index out of range")
+        if np.unique(members).size != members.size:
+            raise ValueError("jackknife groups must not share or repeat an index")
 
     def _sub(drop):
         keep = np.setdiff1d(np.arange(N), drop)
         return arr[keep] if is_arr else [arr[i] for i in keep]
 
-    full = float(read(arr))
-    theta = np.array([float(read(_sub(g))) for g in groups])
-    se = float(np.sqrt((G - 1) / G * np.sum((theta - theta.mean()) ** 2)))
+    first = read(arr)
+    if np.ndim(first) == 0:
+        full = float(first)
+        theta = np.array([float(read(_sub(g))) for g in groups])
+        se = float(np.sqrt((G - 1) / G * np.sum((theta - theta.mean()) ** 2)))
+        return full, se
+    full = np.asarray(first)
+    theta = np.stack([np.asarray(read(_sub(g))) for g in groups])
+    se = np.sqrt((G - 1) / G * np.sum(np.abs(theta - theta.mean(axis=0)) ** 2, axis=0))
     return full, se
+
+
+def bootstrap(samples, read, *, draws: int | None = None, rng=0, indices=None) -> np.ndarray:
+    """Resampling with replacement: the replicates of ``read`` on resamples of ``samples``.
+
+    ``samples``: an ``(N, ...)`` array or length-``N`` sequence (a list of planes works).  ``read``:
+    ``callable(subset) -> float or array``, given each resample in the same form as ``samples``.
+    ``draws``: the number of replicates -- the caller's choice; the library has no default.
+    ``rng``: a ``numpy.random.Generator``, used as is so a caller's stream continues across calls,
+    or a seed.  For ``b = 0 .. draws-1``, in order, ``idx = rng.integers(0, N, N)`` and
+    ``theta_b = read(samples[idx])``: that draw pattern is part of the contract, so a caller's
+    hand loop over the same stream gives the same replicates bit for bit.  ``indices``: prebuilt
+    index arrays, one per replicate, for callers that share one set of draws across several reads;
+    it replaces ``draws`` and ``rng``.
+
+    Returns the replicates, shape ``(draws,)`` for a scalar read or ``(draws, *shape)`` for an array
+    read.  The caller takes their spread or quantiles: the library supplies no level."""
+    is_arr = hasattr(samples, "shape")
+    arr = samples if is_arr else list(samples)
+    N = int(arr.shape[0]) if is_arr else len(arr)
+    if N < 1:
+        raise ValueError("bootstrap needs at least one sample")
+    if (draws is None) == (indices is None):
+        raise ValueError("bootstrap takes exactly one of draws or indices")
+    if indices is None:
+        if int(draws) < 1:
+            raise ValueError("bootstrap needs draws >= 1")
+        gen = rng if isinstance(rng, np.random.Generator) else np.random.default_rng(rng)
+        indices = (gen.integers(0, N, N) for _ in range(int(draws)))
+
+    def _take(idx):
+        return arr[idx] if is_arr else [arr[i] for i in idx]
+
+    reps = [np.asarray(read(_take(np.asarray(idx)))) for idx in indices]
+    if not reps:
+        raise ValueError("bootstrap needs at least one replicate")
+    return np.stack(reps)

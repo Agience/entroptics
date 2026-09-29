@@ -29,6 +29,7 @@ Mode spectrum / propagation (from the correlation eigenspectrum):
                      attenuation constant alpha, the phase constant beta, dispersion.
   attenuation_interval(W, band=...)   a certified interval for alpha.
   concentration_band(...)             the a-priori spectral-norm band from samples.
+  empirical_bernstein(x, delta, span=) the empirical-Bernstein interval on a mean (a-priori width).
   concentration(rows)                 focus of a vector stack on its dominant axis.
   coupling(a, b)                      the SIGNED coupling between two sides of a screen
                                       (exact permutation null; the two-way screen's read).
@@ -49,6 +50,14 @@ Diffraction limit -- from the signal's OWN decay (no external input, unless one 
                        direct lag sum: no transform is run on either path.
   diffraction_limit(C) a_delta = 1/2^{H}, H = entropy of C^2 (entropy width, primary), plus the
                        classical Abbe integral length 1/xi (secondary).
+  decay_scatter(W)     the sampling scatter behind decay, from the channels' own disagreement
+                       (shares of the decay's power and a per-lag standard error).
+  cross_covariance(X, Y, lags)  the lagged covariance of two records, decay's conventions.
+  effective_rates(C)   the local decay rate log(c[t]/c[t+1]) of a profile.
+  crossing_lag(C, v)   the lag where a profile first falls to v.
+  integrated_autocorrelation(x)  a chain's tau_int over decay's positive lobe, the error of its
+                       mean, and the error of both.  spread_over_chains(v): the error of a mean
+                       over independent chains.
   mercer_certificate(W) the model-free check: a_delta read the temporal way (decay
                        entropy) and the spectral way (stationary eigenspectrum) --
                        they must coincide (Mercer).
@@ -296,15 +305,25 @@ def _corr_evals(M: np.ndarray, mask=None) -> np.ndarray:
     xp = _ns(M)
     M = _env.asnum(M)
     Xc = M - _env.mean0(xp, M)
-    C = Xc.conj().T @ Xc
     # A channel that was measured and never varied has zero variance AND exactly-zero covariance
     # with every other channel, so its row of C is exactly 0 and the correlation is 0/0.  Divide it
     # by 1: the quotient is 0 either way, which is the standard convention (a constant correlates
     # with nothing) and reaches it without putting a small number in the denominator.
-    dg = xp.real(xp.diag(C))                  # a sum of squared magnitudes: exactly >= 0
+    dg = _env.sum_ax(xp, xp.abs(Xc) ** 2, 0)  # each column's squared norm: the Gram's diagonal
     d = xp.where(dg > 0, xp.sqrt(dg), xp.ones_like(dg))
-    C = C / xp.outer(d, d)
-    ev = _env.clampmin(xp, xp.real(xp.linalg.eigvalsh(C)), 0.0)
+    Y = Xc / d[None, :]
+    # The correlation is R = Y^H Y (n_vars x n_vars).  Its nonzero eigenvalues are exactly those of
+    # Y Y^H (n_samples x n_samples) and the rest are zeros, so the spectrum is read on whichever
+    # Gram is smaller: O(n_samples n_vars^2) becomes O(n_vars n_samples^2) when the variables
+    # outnumber the samples (the ordered axis of a tall frame).  Zeros add nothing to an entropy or
+    # a trace, so every read built on the spectrum is unchanged.
+    n, m = int(Y.shape[0]), int(Y.shape[1])
+    if n < m:
+        small = xp.real(xp.linalg.eigvalsh(Y @ Y.conj().T))
+        ev = _env.cat0(xp, [_env.zeros(xp, (m - n,), ref=small), small])
+    else:
+        ev = xp.real(xp.linalg.eigvalsh(Y.conj().T @ Y))
+    ev = _env.clampmin(xp, ev, 0.0)
     return _env.flip(xp, ev)              # descending
 
 
@@ -792,6 +811,56 @@ def concentration_band(n_rows: int, n_cols: int, *, spec_norm: float = 1.0,
     return c_conc * float(spec_norm) * r
 
 
+@dataclass
+class EmpiricalBernstein:
+    """An empirical-Bernstein interval on a mean: ``lo = mean - radius``, ``hi = mean + radius``.
+    Each endpoint is one-sided at ``1 - delta``; the pair ``[lo, hi]`` holds at ``1 - 2 delta``."""
+    mean:   float
+    radius: float
+    n:      int
+
+    @property
+    def lo(self) -> float:
+        return self.mean - self.radius
+
+    @property
+    def hi(self) -> float:
+        return self.mean + self.radius
+
+
+def empirical_bernstein(samples, delta: float, *, span: float) -> EmpiricalBernstein:
+    """The empirical-Bernstein interval on the mean of ``samples`` (Maurer & Pontil 2009, Thm 4,
+    the sample-variance form).  With ``n`` samples, mean ``m``, sample variance ``v`` and
+    ``L = log(2/delta)``,
+
+        radius = sqrt(2 v L / n) + 7 span L / (3 (n - 1)).
+
+    What the theorem guarantees, and on what: for ``n`` i.i.d. samples whose support lies in an
+    interval of width ``span`` fixed IN ADVANCE, ``E[x] <= m + radius`` with probability at least
+    ``1 - delta``, and ``E[x] >= m - radius`` likewise (the theorem applied to ``-x``).  Each
+    endpoint is ONE-SIDED at ``1 - delta``; the two-sided interval ``[lo, hi]`` holds at
+    ``1 - 2 delta``.  ``span`` is required, because the theorem needs a width known before the
+    samples are seen: the samples' own range is not a substitute (it understates the support
+    whenever the extremes were not sampled), so no plug-in is offered, and a ``span`` narrower than
+    the observed range is refused, since the samples then show the premise false.  Independence is
+    the caller's to justify.  ``delta`` is the caller's level; the library supplies none."""
+    x = np.asarray(samples, dtype=float).ravel()
+    n = int(x.size)
+    if n < 2:
+        raise ValueError("empirical_bernstein needs >= 2 samples (a sample variance)")
+    if not np.all(np.isfinite(x)):
+        raise ValueError("samples must be finite")
+    if not 0.0 < float(delta) < 1.0:
+        raise ValueError(f"delta must be in (0, 1); got {delta!r}")
+    m = x.mean(); v = x.var(ddof=1); R = x.max() - x.min(); Lc = math.log(2.0 / delta)
+    if not span >= R:
+        raise ValueError(f"span={span!r} is narrower than the samples' own range {R!r}: the "
+                         "theorem's premise (every sample within a width-span interval) is false")
+    R = span
+    return EmpiricalBernstein(mean=float(m), radius=float(math.sqrt(2 * v * Lc / n) + 7 * R * Lc / (3 * (n - 1))),
+                              n=n)
+
+
 class SpectralAccumulator:
     """Pool the feature correlation over intact 2-D planes and/or an ensemble into ONE
     spectrum.  The feature-side analogue of ``Dynamics.merge``: where the dynamical operator
@@ -810,12 +879,12 @@ class SpectralAccumulator:
         self.F = int(n_features)     # number of variables (columns), fixed across planes
         self.T = 0                   # total pooled samples (rows) accumulated
         self._cov = None             # (F, F) running column-covariance; dtype follows the data
-        self.whiten = bool(whiten)   # per-channel robust (MAD) whitening before accumulation
+        self.whiten = bool(whiten)   # per-channel whitening (entropy.normalize) before accumulation
 
     def add(self, plane) -> "SpectralAccumulator":
         """Accumulate one intact 2-D plane ``(T_p samples, F features)``: de-meaned per plane
-        (the connected read; with ``whiten=True`` each channel is first robust-normalised by
-        the library's MAD whitening, the screen's per-channel scale removal), its
+        (the connected read; with ``whiten=True`` each channel is first whitened by
+        the library's per-channel mean and RMS, the screen's own scale removal), its
         column-covariance summed in."""
         X = np.asarray(_env.to_numpy(plane))
         if X.ndim != 2:
@@ -1376,8 +1445,8 @@ def decay(W, mask=None, *, periodic: bool = False,
     if dead_record:                       # no cell was observed: no level can make that a decay
         return _env.zeros(xp, T, ref=(X if _env.is_torch(xp) else None))
     # A record that never varied leaves only the round-off of subtracting its own mean, and that
-    # is not a decay -- squared into a Gram it would be read as one.  Same rule as
-    # ``entropy.resolution_floor``: measured against the record's OWN scale, at the resolution the
+    # is not a decay -- squared into a Gram it would be read as one.  The rule is
+    # measured against the record's OWN scale, at the resolution the
     # arithmetic has, so it follows the data and the dtype.  The
     # mean is a sum of T terms, so the residual it leaves carries that sum's backward error, T*eps
     # [Higham 2002, Thm 3.5] -- the same bound ``Screen.certify`` measures a round trip against.
@@ -1411,6 +1480,57 @@ def decay(W, mask=None, *, periodic: bool = False,
     sel = offset <= h
     half = xp.bincount(offset[sel], weights=G[sel], minlength=h + 1) / T
     return _env.cat0(xp, [half, _env.flip(xp, half[1:T - h])])
+
+
+def cross_covariance(X, Y, lags, *, periodic: bool = False,
+                     disconnected=_DISCONNECTED_UNSET) -> np.ndarray:
+    """The lagged covariance of two records along their ordered axis, summed over channels,
+
+        C_xy(tau) = (1/T) Re sum_t conj(X_t - L) (Y_{t+tau} - L),
+
+    for each integer ``tau`` in ``lags`` (negative lags allowed, ``|tau| < T``).  The conventions
+    are :func:`decay`'s, so ``cross_covariance(X, X, range(T))`` is ``decay(X)``: the biased ``1/T``
+    normalisation (a late lag sums fewer pairs and is not re-weighted), ``periodic`` taking the lag
+    modulo ``T`` so every lag pairs all ``T`` rows, and ``disconnected`` choosing the level removed,
+    exactly as in :func:`decay` -- omitted, each record's own per-channel mean; ``None``, nothing; a
+    level (a scalar or one per channel, validated as in :func:`decay`) removed from both records.
+    Two records with different levels are passed with their levels already removed and
+    ``disconnected=None``.  ``X`` and ``Y`` must have the same shape and be finite: a gap in one
+    record has no partner to pair with, and nothing is imputed."""
+    X = np.asarray(_env.to_numpy(X)); Y = np.asarray(_env.to_numpy(Y))
+    if X.ndim == 1:
+        X = X[:, None]
+    if Y.ndim == 1:
+        Y = Y[:, None]
+    if X.shape != Y.shape:
+        raise ValueError(f"X and Y must have the same shape; got {X.shape} and {Y.shape}")
+    if not (np.all(np.isfinite(X)) and np.all(np.isfinite(Y))):
+        raise ValueError("X and Y must be finite; a missing cell has no partner and nothing is imputed")
+    T = int(X.shape[0])
+    raw = np.atleast_1d(np.asarray(lags))
+    if raw.dtype == bool or not np.all(np.mod(raw, 1) == 0):
+        raise ValueError(f"lags must be integers; got {lags!r}")
+    lags = [int(t) for t in raw]
+    if any(abs(t) >= T for t in lags):
+        raise ValueError(f"every lag must satisfy |tau| < T = {T}")
+    if disconnected is _DISCONNECTED_UNSET:
+        Xc = X - X.mean(axis=0, keepdims=True)
+        Yc = Y - Y.mean(axis=0, keepdims=True)
+    elif disconnected is None:
+        Xc, Yc = X, Y
+    else:
+        Xc = X - np.asarray(_env.to_numpy(_disconnected_level(np, X, disconnected)))
+        Yc = Y - np.asarray(_env.to_numpy(_disconnected_level(np, Y, disconnected)))
+    out = np.empty(len(lags))
+    for i, tau in enumerate(lags):
+        if periodic:
+            p = Xc.conj() * np.roll(Yc, -tau, axis=0)
+        elif tau >= 0:
+            p = Xc[:T - tau].conj() * Yc[tau:]
+        else:
+            p = Xc[-tau:].conj() * Yc[:T + tau]
+        out[i] = float(np.real(np.sum(p))) / T
+    return out
 
 
 def _integral_length(cn: np.ndarray) -> float:
@@ -1455,48 +1575,54 @@ class DecayScatter:
     noise_share: float   # sum_tau SE(tau)^2 / sum_tau C(tau)^2 -- what the channel scatter carries
     tail_share:  float   # sum_{tau>0} C(tau)^2 / sum_tau C(tau)^2 -- what sits away from zero lag
     channels:    int     # replicates the scatter was measured over (the live feature width)
+    se:          object = None   # (T,) standard error of C(tau) = sum_f C_f(tau), per lag
 
 
-def decay_scatter(W, mask=None) -> DecayScatter:
+def decay_scatter(W, mask=None, *, periodic: bool = False,
+                  disconnected=_DISCONNECTED_UNSET) -> DecayScatter:
     """Measure the sampling scatter behind :func:`decay`, from the channels' own disagreement.
 
-    ``decay`` is a sum over per-channel biased autocovariances, so this recomputes those channel
-    terms (one FFT per channel -- cheaper than the lag sum ``decay`` itself takes) and reads their
-    standard error.  ``sum_f C_f`` is ``decay(W)`` identically, which a test pins, so the two
-    cannot drift apart.
+    ``decay`` is a sum over per-channel biased autocovariances, so this forms those channel terms
+    -- the same lag products ``decay`` sums, with the same level and the same ring -- and reads
+    their standard error.  ``sum_f C_f`` is ``decay(W, periodic=, disconnected=)``, which a test
+    pins for every mode, so the two cannot drift apart.  ``periodic`` and ``disconnected`` mean
+    exactly what they mean in :func:`decay`, and the same arguments are refused: ``decay`` itself
+    validates them first.
 
-    The DEFAULT ``decay(W)`` -- the linear read with the record's own mean.  This measures that
-    profile and no other: the FFT here is zero-padded to >= 2T, which is what makes it linear, and
-    there is no ``periodic`` or ``disconnected`` to pass through.  A caller reading
-    ``decay(W, periodic=True)`` is holding a different profile, and this scatter does not describe
-    it.
-
-    Returns shares of the decay's total power, both measured: see :class:`DecayScatter`."""
+    Returns shares of the decay's total power, both measured, and the per-lag standard error
+    ``se[tau]`` of ``sum_f C_f(tau)``: see :class:`DecayScatter`."""
+    C = np.asarray(_env.to_numpy(decay(W, mask, periodic=periodic, disconnected=disconnected)), float)
     L = live_view(W, mask)
-    xp = _ns(L)
-    is_c = xp.is_complex(L) if _env.is_torch(xp) else np.iscomplexobj(L)
-    X = _env.asnum(L, complex=True) if is_c else _env.asnum(L)
+    X = np.asarray(_env.to_numpy(L))
     T = int(X.shape[0])
-    F = int(X.shape[1]) if len(X.shape) > 1 else 1
+    F = int(X.shape[1]) if X.ndim > 1 else 1
+    nan_se = np.full(T, np.nan)
     if T < 2 or F < 2:
-        return DecayScatter(float("nan"), float("nan"), F)   # one channel has nothing to disagree
-    Xc = X - _env.mean0(xp, X)
-    n = 1
-    while n < 2 * T:
-        n <<= 1
-    spec = xp.fft.fft(Xc, n=n, axis=0)                       # per channel, both backends
-    Cf = xp.real(xp.fft.ifft(spec * xp.conj(spec), axis=0))[:T] / T    # (T, F) each channel's C
-    C = _env.sum_ax(xp, Cf, 1) if hasattr(_env, "sum_ax") else Cf.sum(1)
-    Cn = np.asarray(_env.to_numpy(C), float)
-    Cfn = np.asarray(_env.to_numpy(Cf), float)
-    total = float((Cn ** 2).sum())
+        return DecayScatter(float("nan"), float("nan"), F, nan_se)   # one channel has nothing to disagree
+    if disconnected is _DISCONNECTED_UNSET:
+        Xc = X - X.mean(axis=0, keepdims=True)
+    elif disconnected is None:
+        Xc = X
+    else:
+        Xc = X - np.asarray(_env.to_numpy(_disconnected_level(np, X, disconnected)))
+    total = float((C ** 2).sum())
     if not total > 0.0:
-        return DecayScatter(float("nan"), float("nan"), F)
+        return DecayScatter(float("nan"), float("nan"), F, nan_se)
+    # each channel's own C_f(tau) = (1/T) Re sum_i conj(Xc[i, f]) Xc[i + tau, f] -- decay's lag sum
+    Cf = np.empty((T, F))
+    if not periodic:
+        for tau in range(T):
+            Cf[tau] = np.real(np.sum(Xc[:T - tau].conj() * Xc[tau:], axis=0)) / T
+    else:
+        h = T // 2
+        for tau in range(h + 1):
+            Cf[tau] = np.real(np.sum(Xc.conj() * np.roll(Xc, -tau, axis=0), axis=0)) / T
+        Cf[h + 1:] = Cf[1:T - h][::-1]                       # the ring's mirror, as decay takes it
     # the channels are replicates of ONE decay: their standard error is the read's own uncertainty
-    sem2 = Cfn.var(axis=1, ddof=1) * F                       # Var of the SUM = F * Var of a channel
+    sem2 = Cf.var(axis=1, ddof=1) * F                        # Var of the SUM = F * Var of a channel
     return DecayScatter(noise_share=float(sem2.sum() / total),
-                        tail_share=float((Cn[1:] ** 2).sum() / total),
-                        channels=F)
+                        tail_share=float((C[1:] ** 2).sum() / total),
+                        channels=F, se=np.sqrt(sem2))
 
 
 def diffraction_limit(profile) -> DiffractionLimit:
@@ -1541,6 +1667,132 @@ def diffraction_limit(profile) -> DiffractionLimit:
     xi = _integral_length(c / c0)
     a_delta_abbe = 1.0 / xi if xi > 0 else float("inf")
     return DiffractionLimit(a_delta=a_delta, xi=xi, a_delta_abbe=a_delta_abbe, H=H)
+
+
+def effective_rates(profile) -> np.ndarray:
+    """The lag-local decay rate of a profile, ``m[t] = log(c[t] / c[t+1])`` -- length
+    ``len(profile) - 1``.
+
+    It is the one-step transfer eigenvalue read from two adjacent lags: the order-0 case of
+    :func:`dynamics.hankel_spectrum`, which separates several modes where this reads their blend
+    (a rate falling toward the slowest mode as the lag grows).  Defined only where both lags are
+    positive: a sign change has no rate, and the log of a ratio of two negatives is finite but is
+    not one, so both are NaN.  A negative rate -- a rise between two positive lags -- is returned
+    as measured."""
+    c = np.asarray(_env.to_numpy(profile), float).ravel()
+    out = np.full(max(c.size - 1, 0), np.nan)
+    if c.size < 2:
+        return out
+    a, b = c[:-1], c[1:]
+    ok = (a > 0) & (b > 0)
+    out[ok] = np.log(a[ok] / b[ok])
+    return out
+
+
+def crossing_lag(profile, level: float) -> float:
+    """Where a decay first falls below ``level``, in lags, interpolated between the bracketing lags.
+
+    The walk is ``t = 1, 2, ...`` to the first lag with ``profile[t] < level``; with
+    ``a = profile[t-1]`` and ``b = profile[t]`` the crossing is ``t - 1 + log(a/level) / log(a/b)``
+    (log-linear, exact on an exponential) when ``b > 0``, and ``t - 1 + (a - level) / (a - b)``
+    (linear) otherwise, since the log of a non-positive value does not exist.  A profile that starts
+    at or below the level returns ``0``.  NaN if the profile never falls below ``level`` inside the
+    record -- censored, not "at the last lag".  ``level`` is the caller's; the library supplies none."""
+    c = np.asarray(_env.to_numpy(profile), float).ravel()
+    level = float(level)
+    if c.size and c[0] <= level:
+        return 0.0
+    below = np.flatnonzero(c[1:] < level)
+    if below.size == 0:
+        return float("nan")
+    t = int(below[0]) + 1
+    a, b = float(c[t - 1]), float(c[t])
+    if a <= level:                                       # a lag that sits exactly on the level
+        return float(t - 1)
+    if b > 0:
+        return (t - 1) + math.log(a / level) / math.log(a / b)
+    return (t - 1) + (a - level) / (a - b)
+
+
+@dataclass
+class IntegratedAutocorrelation:
+    """The integrated autocorrelation time of one chain and the error of its mean, with the
+    statistical error of each.  A ``tau_se`` comparable to ``tau_int`` says the record does not
+    resolve its own correlation time: a drift, or a chain shorter than its memory.  The mean's
+    error ``sem`` is then as uncertain, and ``sem_se`` says so."""
+    tau_int: float   # 1/2 + sum_{tau=1}^{window} C(tau)/C(0)
+    window:  int     # the last lag summed
+    tau_se:  float   # tau_int * sqrt(2 (2 window + 1) / T) -- the Madras-Sokal variance of tau_int
+    sem:     float   # sqrt(C(0) 2 tau_int / T) -- the standard error of the chain's mean
+    sem_se:  float   # sem * tau_se / (2 tau_int) -- tau_se carried through sem ~ sqrt(tau_int)
+    n:       int     # T, the chain's length
+
+
+def integrated_autocorrelation(x, *, window="first_nonpositive") -> IntegratedAutocorrelation:
+    """The integrated autocorrelation time of a chain ``x`` (1-D, one sample per step) and the
+    standard error of its mean,
+
+        tau_int = 1/2 + sum_{tau=1}^{W} C(tau)/C(0),      sem = sqrt(C(0) 2 tau_int / T),
+
+    with ``C = decay(x)``, the chain's own mean removed (only the lags summed are formed).  The default window ends at the last lag
+    before ``C`` first reaches zero or below: the positive lobe the record itself shows, the same
+    lobe :func:`diffraction_limit` integrates (``tau_int = xi - 1/2``).  An integer ``window`` sums
+    exactly that many lags.
+
+    The result carries each read's own error (:class:`IntegratedAutocorrelation`), so a record that
+    does not resolve its correlation time is visible from the numbers rather than cut at a chosen
+    lag.  With the mean removed, the lags of a chain sum to zero over the whole record; a drift keeps
+    ``C`` positive until that forces it down, the window closes on a sizeable fraction of ``T``, and
+    ``tau_se`` grows to the size of ``tau_int``.
+
+    Refuses a record that is not 1-D and finite, and a record with no variance."""
+    a = np.asarray(_env.to_numpy(x), float)
+    if a.ndim != 1:
+        raise ValueError(f"x must be one chain, a 1-D record; got shape {a.shape}")
+    if not np.all(np.isfinite(a)):
+        raise ValueError("x must be finite")
+    T = int(a.size)
+    if T < 2:
+        raise ValueError("a chain needs at least two samples")
+    # decay's lag products, formed only up to the lags summed: O(T W) and no T x T Gram
+    ac = a - a.mean()
+    C0 = float(ac @ ac) / T
+    if not C0 > 0.0:
+        raise ValueError("x has no variance")
+    if isinstance(window, str):
+        if window != "first_nonpositive":
+            raise ValueError(f"window must be 'first_nonpositive' or a lag count; got {window!r}")
+        total, W = 0.0, 0
+        for lag in range(1, T):
+            c = float(ac[:T - lag] @ ac[lag:]) / T
+            if c <= 0.0:
+                break
+            total, W = total + c, lag
+    else:
+        if (window is None or isinstance(window, (bool, np.bool_))
+                or not isinstance(window, (int, float, np.integer, np.floating))
+                or int(window) != window or not 0 <= int(window) < T):
+            raise ValueError(f"window must be an integer lag count in [0, {T}); got {window!r}")
+        W = int(window)
+        total = sum(float(ac[:T - lag] @ ac[lag:]) / T for lag in range(1, W + 1))
+    tau = 0.5 + total / C0
+    tau_se = abs(tau) * math.sqrt(2.0 * (2 * W + 1) / T)
+    sem = math.sqrt(C0 * 2.0 * tau / T) if tau > 0.0 else float("nan")
+    sem_se = sem * tau_se / (2.0 * tau) if tau > 0.0 else float("nan")
+    return IntegratedAutocorrelation(tau_int=tau, window=W, tau_se=tau_se, sem=sem, sem_se=sem_se, n=T)
+
+
+def spread_over_chains(values) -> float:
+    """The standard error of a mean taken over independent chains, from their spread:
+    ``std(values, ddof=1) / sqrt(n)``.  Each value is one chain's estimate; independence of the
+    chains is what makes the spread the error, and no autocorrelation enters.  Refuses fewer than
+    two chains and non-finite values."""
+    v = np.asarray(_env.to_numpy(values), float).ravel()
+    if v.size < 2:
+        raise ValueError("the spread over chains needs at least two chains")
+    if not np.all(np.isfinite(v)):
+        raise ValueError("values must be finite")
+    return float(v.std(ddof=1) / math.sqrt(v.size))
 
 
 @dataclass
@@ -1760,6 +2012,7 @@ __all__ = [
     # spectrum / propagation
     "spectral_optics", "SpectralOptics",
     "attenuation_interval", "CertifiedInterval", "concentration_band",
+    "empirical_bernstein", "EmpiricalBernstein",
     "resolved_dimension_interval", "CertifiedCount", "SpectralAccumulator",
     "concentration", "Concentration",
     # coupling between two sides of a screen (signed, exact-permutation null)
@@ -1767,7 +2020,8 @@ __all__ = [
     # what the WEIGHTS of a weighted aggregation carry (exact permutation null)
     "carriage", "Carriage",
     # decay (OTF) + diffraction limit + Mercer certificate
-    "decay", "diffraction_limit", "DiffractionLimit",
+    "decay", "diffraction_limit", "DiffractionLimit", "effective_rates", "crossing_lag",
+    "cross_covariance", "integrated_autocorrelation", "IntegratedAutocorrelation", "spread_over_chains",
     "mercer_certificate", "MercerCertificate",
     "rayleigh_shape_factor", "fresnel_number", "shape_factor",
     "optics", "assemble_optics",

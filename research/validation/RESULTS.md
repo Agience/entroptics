@@ -8,29 +8,29 @@ seeded and deterministic; regenerate with `python research/validation/run_all.py
 
 Scripts: `common.py` (seeded ground-truth generators), `exp1..exp19_*.py`.
 
-Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0.2.2 (numpy backend), numpy 2.4.4, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.12.10 on Windows AMD64.
+Produced 2026-09-29 by `python research/validation/run_all.py` with entroptics at source sha256 b0f77e48d88dac2f5ae81809db41c9d7b9a393d3c8faf924e58c5e5397f3bde3 (numpy backend), numpy 2.5.3, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.14.4 on Linux x86_64.
 
 
 ## Headline numbers
 
 - **1. Correlation length <-> diffraction limit** -- a_delta and 1/xi are perfectly monotone in 1/rho (Spearman = 1.000 and 1.000); xi ~ rho with log-log slope 0.890 (R^2=0.9982), and a_delta ~ 1/rho with slope 0.994 (R^2=0.9992).
-- **2. Exact DMD recovery (Theorem 9.2)** -- At zero noise the recovered decay rates and frequencies match ground truth to machine precision (max |alpha err|=4.5e-16, |beta err|=4.4e-16, |mu err|=7.1e-16); error then grows smoothly and monotonically as SNR drops.
-- **3. Planted low-rank modes <-> K_signal** -- For planted K>=1, K_signal recovers the exact true count with mean accuracy 1.000 at snr=1 and 1.000 at snr=2 across all four shapes; at snr=0.5 (modes inside the bulk) it drops to 0.125.  K=0 specificity (no false modes) is 0.950 overall.
-- **4. Coherence detects order and is null-calibrated** -- Ordered signals read z=26.7 (min 19.0) while the SAME rows permuted read z=-0.15 (~0); over 2000 iid-noise draws the null has mean 0.014, std 0.998, and P(z>2)=0.0265 (N(0,1) target 0.023).
+- **2. Exact DMD recovery (Theorem 9.2)** -- At zero noise the recovered decay rates and frequencies match ground truth to machine precision (max |alpha err|=1.7e-15, |beta err|=4.4e-16, |mu err|=1.6e-15); error then grows smoothly and monotonically as SNR drops.
+- **3. Planted low-rank modes <-> K_signal** -- For planted K>=1, K_signal recovers the exact true count with mean accuracy 1.000 at snr=1 and 1.000 at snr=2 across all four shapes; at snr=0.5 (modes inside the bulk) it drops to 0.078.  K=0 specificity (no false modes) is 0.975 overall.
+- **4. Coherence detects order and is null-calibrated** -- Ordered signals read z=27.3 (min 23.2) while the SAME rows permuted read z=-0.11 (~0); over 2000 iid-noise draws the null has mean 0.018, std 1.005, and P(z>2)=0.0295 (N(0,1) target 0.023).
 - **5. Mercer ratio rho as a stationarity diagnostic** -- Across sliding sub-windows the Mercer ratio rho is nearly constant for the stationary record (mean CV=0.062 over 12 seeds) but drifts/jumps 9x more for the regime switch (mean CV=0.584).
 - **6. Etendue / space-bandwidth <-> rank & bandwidth** -- Etendue and space-bandwidth rise monotonically with both the planted rank (Spearman etendue=1.000, SBW=1.000) and the planted feature bandwidth (etendue=1.000, SBW=1.000).
 - **7. The coupling recovers a planted sign against an exact null** -- Planted co-resolving and anti-resolving sides recover their sign in every draw (agreement 1.000) while independent sides resolve nothing; the closed-form permutation variance tr(C_a C_b)/(T-1) matches 100000 brute-force re-pairings to within 1.97%, the residual being the sampling error of a variance estimated from a non-normal permutation distribution, which shrinks with the draw count (swept in research/supplemental/coupling/reproduce.py: worst case 1.029 at 20k, 1.020 at 100k, 1.009 at 200k); over 1600 independent pairs the null has mean 0.011, std 1.018 and fires at 0.049 (nominal 0.05).
 - **8. A fold needs continuity, not just concentration** -- Both families concentrate to a few effective channels (9.7 vs 3.1 of 64), so concentration alone folds both; the feature-axis adjacency z separates them cleanly (8.4 vs 0.03); and the fold can be undone on the continuous axis (residual 0.44) but not on the nominal one (residual 0.98 -- it recovers 2% of the signal), the residual falling monotonically as the axis is made smoother.
-- **9. The two-way screen: conservation and brightness** -- conservation holds to 2.0e-16 relative on all 12 crossings; radiance never rises (12/12), and is carried across exactly in every concentrating crossing (6/6).
+- **9. The two-way screen: conservation and brightness** -- conservation holds to 0.0e+00 relative on all 12 crossings; radiance never rises (12/12), and is carried across exactly in every concentrating crossing (6/6).
 - **10. The observable lift: nonlinear trajectory to linear operator** -- in delay coordinates the operator forecasts the held-out tail at 0.0743 and 0.0395 of persistence, against 0.4924 and 0.5274 for the same trajectories in a random order -- a separation of 7x or better.
 - **11. Symbol sequences: order detection and the saturation bound** -- an i.i.d. sequence reads |z|=2.14 against its own permutation ensemble; at repeat probability 0.95 the same read gives |z|=2219, with H_1 unchanged throughout.
-- **12. Scale profile: structure versus observation window** -- the resolved window tracks the planted period across [16, 32, 64, 128] (Spearman +1.00, monotone: True); a window shorter than the structure resolves nothing.
-- **13. The reads divide by the measured extent, and a mask is not a zero** -- Across 5 blanking fractions and 20 draws each, every read (phi_F, phi_T, phi, etendue, strehl) taken through NaN or through a mask matches the deleted-channel ground truth to 2.8e-16 -- floating-point equality, on frames whose nominal width is up to 10x their measured extent. Substituting 0 for the same channels moves phi_F by 0.137 at 90% blanked, rising monotonically with the fraction blanked.
-- **14. A read is a property of the signal, not of the units it was recorded in** -- Across 8 recording scales spanning 42 orders of magnitude, all 9 reads are invariant to 1e-14 relative -- K_signal holds at 3 and the coherence at 0.404 at strain scale (1e-21) exactly as at unit scale. Replacing that derived floor with a fixed absolute one -- its own value at unit scale -- breaks the read at 7 of 8 scales, reading K_signal = 0 against a true 3 at the smallest scale and 64 at the largest. Under uniform quantization from 16 bits down to 2 the derived floor stays within a factor of 1.69 of the unquantized floor at every depth.
+- **12. Scale profile: structure versus observation window** -- the resolved windows for planted periods [16, 32, 64, 128] are [12, 8, 17, 25] (Spearman +0.80, monotone: False); 4 of 4 resolve in a window shorter than their period, since a partial period shared across 24 channels is already a mode at this amplitude.
+- **13. The reads divide by the measured extent, and a mask is not a zero** -- Across 5 blanking fractions and 20 draws each, every read (phi_F, phi_T, phi, etendue, strehl) taken through NaN or through a mask matches the deleted-channel ground truth to 3.3e-16 -- floating-point equality, on frames whose nominal width is up to 10x their measured extent. Substituting 0 for the same channels moves phi_F by 0.137 at 90% blanked, rising monotonically with the fraction blanked.
+- **14. A read is a property of the signal, not of the units it was recorded in** -- Across 8 recording scales spanning 42 orders of magnitude, all 9 reads are invariant to 9e-15 relative -- K_signal holds at 3 and the coherence at 0.343 at strain scale (1e-21) exactly as at unit scale. Replacing that derived floor with a fixed absolute one -- its own value at unit scale -- breaks the read at 7 of 8 scales, reading K_signal = 0 against a true 3 at the smallest scale and 64 at the largest. Under uniform quantization from 16 bits down to 2 the derived floor stays within a factor of 1.00 of the unquantized floor at every depth.
 - **15. Channel scatter separates a decay that is structure from one that is noise** -- On an uncorrelated record the noise and tail shares coincide at every width (ratio 0.88-1.05): all of the power away from zero lag is channel disagreement. With a correlation length of 8 planted they separate by up to 227x (ratio 0.237 down to 0.0044), so the same tail is read as structure. The scatter falls monotonically with F in both families (0.113->0.0020 and 0.193->0.0035), and the uncorrelated a_delta closes on its answer of 1 from below as it does (0.36->0.97).
-- **16. The matched scale must be read before the whitening** -- On a planted line of known width, the scale read on the RAW frame folds in 9/9 cases (n_F tracking the line width) while the same read taken AFTER whitening folds in 0/9 -- it returns n_F = F every time. The mechanism is measured: the on-line channels hold 88.2% of the power before whitening and 9.6% after, because dividing each channel by its own scale lifts the noise-only channels to the amplitude of the line.
-- **17. K_signal against the standard rank selectors** -- On the exp3 planted signals at the same seeds, exact-count accuracy: K_signal 0.997 (36/36 cells), AIC 0.946 (27/36 cells), GD 0.935 (36/36 cells), MDL 0.889 (27/36 cells).  K_signal is the most accurate of the four.  AIC/MDL are undefined where the snapshot count does not exceed the variable count, and are reported n/a there rather than guessed.
-- **18. The nulls under coloured noise** -- On pure AR(1) noise with NO planted signal, the derived floor resolves a mode in 100.0% of draws at rho > 1 against 2.5% in the i.i.d. control (nominal alpha = 0.05); the worst cell is 100.0% at shape 200x200, rho = 2.  This is NOT specific to the derived floor: on the same records the standard selectors report K_signal 10.1, GD 22.9, MDL 19.0, AIC 44.7 spurious modes on average, so every iid-calibrated selector over-reads and K_signal over-reads the least.  The coherence read fires as it should -- adjacent rows genuinely are more alike than a re-ordering -- so the two must not be read as one number.
+- **16. The matched scale must be read before the whitening** -- On a planted line of known width, the scale read on the RAW frame folds in 9/9 cases (n_F tracking the line width) while the same read taken AFTER whitening folds in 0/9 -- it returns n_F = F every time. The mechanism is measured: the on-line channels hold 88.2% of the power before whitening and 9.4% after, because dividing each channel by its own scale lifts the noise-only channels to the amplitude of the line.
+- **17. K_signal against the standard rank selectors** -- On the exp3 planted signals at the same seeds, exact-count accuracy: K_signal 1.000 (36/36 cells), AIC 0.946 (27/36 cells), GD 0.935 (36/36 cells), MDL 0.889 (27/36 cells).  K_signal is the most accurate of the four.  AIC/MDL are undefined where the snapshot count does not exceed the variable count, and are reported n/a there rather than guessed.
+- **18. The nulls under coloured noise** -- On pure AR(1) noise with NO planted signal, the derived floor resolves a mode in 100.0% of draws at rho > 1 against 1.7% in the i.i.d. control (nominal alpha = 0.05); the worst cell is 100.0% at shape 200x200, rho = 2.  This is NOT specific to the derived floor: on the same records the standard selectors report K_signal 10.2, GD 22.9, MDL 19.0, AIC 44.7 spurious modes on average, so every iid-calibrated selector over-reads and K_signal over-reads the least.  The coherence read fires as it should -- adjacent rows genuinely are more alike than a re-ordering -- so the two must not be read as one number.
 - **19. A state with a hole in it is not a state** -- On a planted operator whose slowest rate is 0.0151, carrying the gaps leaves the read independent of how much was dropped (0.0195 at none, 0.0194 at half, a spread of 0.0009 across 0-50%), while substituting zero biases every rate upward and worsens monotonically -- 0.0195 at none to 0.4502 at 35%, a factor of 23. White noise acquires no persistent mode at any dropout.
 
 ---
@@ -59,7 +59,7 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | SNR (dB) | mean |alpha err| | mean |beta err| |
 | --- | --- | --- |
-| inf (exact) | 4.49e-16 | 4.44e-16 |
+| inf (exact) | 1.72e-15 | 4.44e-16 |
 | 60 | 1.65e-05 | 1.43e-05 |
 | 40 | 2.24e-04 | 1.57e-04 |
 | 30 | 2.08e-03 | 5.66e-04 |
@@ -79,31 +79,31 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 | 200x200 | 0 | 1 | 0.03 | 0.967 |
 | 200x200 | 0 | 2 | 0.03 | 0.967 |
 | 200x200 | 0 | 4 | 0.03 | 0.967 |
-| 200x200 | 1 | 0.5 | 0.23 | 0.233 |
+| 200x200 | 1 | 0.5 | 0.1 | 0.1 |
 | 200x200 | 1 | 1 | 1 | 1 |
 | 200x200 | 1 | 2 | 1 | 1 |
 | 200x200 | 1 | 4 | 1 | 1 |
-| 200x200 | 3 | 0.5 | 0.3 | 0 |
+| 200x200 | 3 | 0.5 | 0.17 | 0 |
 | 200x200 | 3 | 1 | 3 | 1 |
 | 200x200 | 3 | 2 | 3 | 1 |
 | 200x200 | 3 | 4 | 3 | 1 |
-| 200x200 | 5 | 0.5 | 0.37 | 0 |
+| 200x200 | 5 | 0.5 | 0.33 | 0 |
 | 200x200 | 5 | 1 | 5 | 1 |
 | 200x200 | 5 | 2 | 5 | 1 |
 | 200x200 | 5 | 4 | 5 | 1 |
-| 600x40 | 0 | 0.5 | 0.1 | 0.9 |
-| 600x40 | 0 | 1 | 0.1 | 0.9 |
-| 600x40 | 0 | 2 | 0.1 | 0.9 |
-| 600x40 | 0 | 4 | 0.1 | 0.9 |
-| 600x40 | 1 | 0.5 | 0.57 | 0.567 |
+| 600x40 | 0 | 0.5 | 0.03 | 0.967 |
+| 600x40 | 0 | 1 | 0.03 | 0.967 |
+| 600x40 | 0 | 2 | 0.03 | 0.967 |
+| 600x40 | 0 | 4 | 0.03 | 0.967 |
+| 600x40 | 1 | 0.5 | 0.33 | 0.333 |
 | 600x40 | 1 | 1 | 1 | 1 |
 | 600x40 | 1 | 2 | 1 | 1 |
-| 600x40 | 1 | 4 | 1.07 | 0.967 |
-| 600x40 | 3 | 0.5 | 1.03 | 0 |
+| 600x40 | 1 | 4 | 1 | 1 |
+| 600x40 | 3 | 0.5 | 0.8 | 0 |
 | 600x40 | 3 | 1 | 3 | 1 |
 | 600x40 | 3 | 2 | 3 | 1 |
 | 600x40 | 3 | 4 | 3 | 1 |
-| 600x40 | 5 | 0.5 | 1.27 | 0 |
+| 600x40 | 5 | 0.5 | 0.97 | 0 |
 | 600x40 | 5 | 1 | 5 | 1 |
 | 600x40 | 5 | 2 | 5 | 1 |
 | 600x40 | 5 | 4 | 5 | 1 |
@@ -111,36 +111,36 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 | 40x600 | 0 | 1 | 0.03 | 0.967 |
 | 40x600 | 0 | 2 | 0.03 | 0.967 |
 | 40x600 | 0 | 4 | 0.03 | 0.967 |
-| 40x600 | 1 | 0.5 | 0.47 | 0.467 |
+| 40x600 | 1 | 0.5 | 0.37 | 0.367 |
 | 40x600 | 1 | 1 | 1 | 1 |
 | 40x600 | 1 | 2 | 1 | 1 |
 | 40x600 | 1 | 4 | 1 | 1 |
-| 40x600 | 3 | 0.5 | 0.9 | 0 |
+| 40x600 | 3 | 0.5 | 0.63 | 0 |
 | 40x600 | 3 | 1 | 3 | 1 |
 | 40x600 | 3 | 2 | 3 | 1 |
 | 40x600 | 3 | 4 | 3 | 1 |
-| 40x600 | 5 | 0.5 | 1.03 | 0 |
+| 40x600 | 5 | 0.5 | 0.87 | 0 |
 | 40x600 | 5 | 1 | 5 | 1 |
 | 40x600 | 5 | 2 | 5 | 1 |
 | 40x600 | 5 | 4 | 5 | 1 |
-| 300x120 | 0 | 0.5 | 0.03 | 0.967 |
-| 300x120 | 0 | 1 | 0.03 | 0.967 |
-| 300x120 | 0 | 2 | 0.03 | 0.967 |
-| 300x120 | 0 | 4 | 0.03 | 0.967 |
-| 300x120 | 1 | 0.5 | 0.23 | 0.233 |
+| 300x120 | 0 | 0.5 | 0 | 1 |
+| 300x120 | 0 | 1 | 0 | 1 |
+| 300x120 | 0 | 2 | 0 | 1 |
+| 300x120 | 0 | 4 | 0 | 1 |
+| 300x120 | 1 | 0.5 | 0.13 | 0.133 |
 | 300x120 | 1 | 1 | 1 | 1 |
 | 300x120 | 1 | 2 | 1 | 1 |
-| 300x120 | 1 | 4 | 1.07 | 0.933 |
-| 300x120 | 3 | 0.5 | 0.5 | 0 |
+| 300x120 | 1 | 4 | 1 | 1 |
+| 300x120 | 3 | 0.5 | 0.23 | 0 |
 | 300x120 | 3 | 1 | 3 | 1 |
 | 300x120 | 3 | 2 | 3 | 1 |
 | 300x120 | 3 | 4 | 3 | 1 |
-| 300x120 | 5 | 0.5 | 0.5 | 0 |
+| 300x120 | 5 | 0.5 | 0.33 | 0 |
 | 300x120 | 5 | 1 | 5 | 1 |
 | 300x120 | 5 | 2 | 5 | 1 |
 | 300x120 | 5 | 4 | 5 | 1 |
 
-**Conclusion.** K_signal recovers the planted mode count essentially perfectly once modes clear the floor (snr in [1,2]); K=0 specificity is ~0.95, uniform across aspect ratios (the derived floor is calibrated flat, with no fitted term).
+**Conclusion.** K_signal recovers the planted mode count essentially perfectly once modes clear the floor (snr in [1,2]); K=0 specificity is 0.975, across aspect ratios (the derived floor has no fitted term).
 
 
 ## 4. Coherence detects order and is null-calibrated
@@ -151,14 +151,14 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | signal | mean z | std z | min z |
 | --- | --- | --- | --- |
-| ordered (smooth) | 26.67 | 3.05 | 18.99 |
-| rows permuted | -0.15 | 1.03 | -2.66 |
+| ordered (smooth) | 27.3 | 2 | 23.2 |
+| rows permuted | -0.114 | 1.08 | -2.93 |
 
 **(b) iid null calibration**
 
 | null sample | mean z | std z | P(z>2) | N(0,1) target |
 | --- | --- | --- | --- | --- |
-| 2000 iid draws | 0.014 | 0.998 | 0.0265 | 0.0228 |
+| 2000 iid draws | 0.018 | 1.005 | 0.0295 | 0.0228 |
 
 **Conclusion.** Coherence sharply separates ordered from permuted (an order-of-magnitude z gap) and is null-centred at ~0 with std ~1 (the exact Cliff-Ord/Mantel null variance, Def 5.3); P(z>2) sits near the 0.023 N(0,1) target, the small residual being the permutation distribution's tail skew, not the standardisation.
 
@@ -327,12 +327,12 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | planted period | resolved window | dominant window | max K | windows resolving | windows swept |
 | --- | --- | --- | --- | --- | --- |
-| 16 | 8 | 512 | 2 | 12 | 12 |
+| 16 | 12 | 512 | 1 | 11 | 12 |
 | 32 | 8 | 512 | 1 | 12 | 12 |
-| 64 | 12 | 512 | 1 | 11 | 12 |
-| 128 | 17 | 512 | 1 | 10 | 12 |
+| 64 | 17 | 512 | 1 | 10 | 12 |
+| 128 | 25 | 512 | 1 | 9 | 12 |
 
-**Conclusion.** Structure is reported at the scale that contains it, so the profile locates the observation window a signal requires.
+**Conclusion.** The resolved window rises with the planted extent, and the shortest window that resolves is set by the carrier's strength as well as its period.
 
 
 ## 13. The reads divide by the measured extent, and a mask is not a zero
@@ -343,11 +343,11 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | channels blanked | as NaN | as a mask over a wrong value |
 | --- | --- | --- |
-| 0% | 2.78e-16 | 2.78e-16 |
+| 0% | 2.22e-16 | 2.22e-16 |
 | 25% | 2.22e-16 | 2.22e-16 |
-| 50% | 2.22e-16 | 2.22e-16 |
-| 75% | 1.67e-16 | 1.67e-16 |
-| 90% | 2.78e-16 | 2.78e-16 |
+| 50% | 3.33e-16 | 3.33e-16 |
+| 75% | 2.78e-16 | 2.78e-16 |
+| 90% | 2.22e-16 | 2.22e-16 |
 
 **(b) zero is not absence** -- what substituting 0 costs
 
@@ -370,14 +370,14 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | recording scale | K_signal | coherence | phi_F | worst relative deviation |
 | --- | --- | --- | --- | --- |
-| 1e+12 | 3 | 0.4037 | 0.09528 | 4.0e-15 |
-| 1e+06 | 3 | 0.4037 | 0.09528 | 1.2e-15 |
-| 1e+03 | 3 | 0.4037 | 0.09528 | 4.1e-16 |
-| 1e+00 | 3 | 0.4037 | 0.09528 | 0.0e+00 |
-| 1e-06 | 3 | 0.4037 | 0.09528 | 3.7e-15 |
-| 1e-15 | 3 | 0.4037 | 0.09528 | 9.8e-15 |
-| 1e-21 | 3 | 0.4037 | 0.09528 | 1.0e-14 |
-| 1e-30 | 3 | 0.4037 | 0.09528 | 1.1e-14 |
+| 1e+12 | 3 | 0.3432 | 0.09528 | 5.7e-15 |
+| 1e+06 | 3 | 0.3432 | 0.09528 | 3.2e-15 |
+| 1e+03 | 3 | 0.3432 | 0.09528 | 8.9e-15 |
+| 1e+00 | 3 | 0.3432 | 0.09528 | 0.0e+00 |
+| 1e-06 | 3 | 0.3432 | 0.09528 | 4.2e-15 |
+| 1e-15 | 3 | 0.3432 | 0.09528 | 1.7e-15 |
+| 1e-21 | 3 | 0.3432 | 0.09528 | 4.9e-15 |
+| 1e-30 | 3 | 0.3432 | 0.09528 | 4.7e-15 |
 
 **(b) the regime a fixed absolute floor destroys**
 
@@ -396,16 +396,16 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | bits | quantization sigma | K_signal | noise floor | floor / unquantized |
 | --- | --- | --- | --- | --- |
-| 16 | 9e-05 | 3 | 24.04 | 1 |
-| 10 | 0.00557 | 3 | 24.01 | 0.999 |
-| 8 | 0.02236 | 3 | 24.08 | 1.002 |
-| 6 | 0.09052 | 3 | 24.75 | 1.03 |
-| 4 | 0.3802 | 3 | 21.93 | 0.913 |
-| 3 | 0.8147 | 4 | 14.2 | 0.591 |
-| 2 | 1.901 | 1 | 19.03 | 0.792 |
-| exact | 0 | 3 | 24.04 | 1 |
+| 16 | 9e-05 | 3 | 25.61 | 1 |
+| 10 | 0.00557 | 3 | 25.61 | 1 |
+| 8 | 0.02236 | 3 | 25.61 | 1 |
+| 6 | 0.09052 | 3 | 25.61 | 1 |
+| 4 | 0.3802 | 3 | 25.61 | 1 |
+| 3 | 0.8147 | 3 | 25.61 | 1 |
+| 2 | 1.901 | 3 | 25.61 | 1 |
+| exact | 0 | 3 | 25.61 | 1 |
 
-**Conclusion.** Nothing in the read path tests a quantity that carries units against a fixed number. The one place that must -- deciding whether a channel has any scale to whiten by -- takes the frame's own pooled MAD times the working dtype's epsilon, so it moves with the record and with the arithmetic. A channel with no spread is given no scale at all, which is what keeps coarsely quantized input finite: at 2 bits a channel's samples collapse onto one level, and dividing by any manufactured stand-in would lift round-off to unit amplitude and be resolved as signal.
+**Conclusion.** Nothing in the read path tests a quantity that carries units against a fixed number. Whether a channel has any scale to whiten by is decided by exact equality -- every measured value the same -- which carries no units at all, and a channel with no spread is given no scale rather than a manufactured one. The floor is the null's, fixed by the screen's shape, so quantization cannot move it.
 
 
 ## 15. Channel scatter separates a decay that is structure from one that is noise
@@ -439,15 +439,15 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | F (channels) | line width | n_F as shipped | n_F if whitened first | on-line power share, raw | after whitening |
 | --- | --- | --- | --- | --- | --- |
-| 64 | 2 | 6 | 64 | 0.920 | 0.082 |
-| 64 | 4 | 12 | 64 | 0.885 | 0.138 |
-| 64 | 8 | 24 | 64 | 0.866 | 0.273 |
-| 128 | 2 | 7 | 128 | 0.909 | 0.040 |
-| 128 | 4 | 13 | 128 | 0.880 | 0.072 |
+| 64 | 2 | 6 | 64 | 0.920 | 0.078 |
+| 64 | 4 | 12 | 64 | 0.885 | 0.141 |
+| 64 | 8 | 24 | 64 | 0.866 | 0.266 |
+| 128 | 2 | 7 | 128 | 0.909 | 0.039 |
+| 128 | 4 | 13 | 128 | 0.880 | 0.070 |
 | 128 | 8 | 24 | 128 | 0.863 | 0.133 |
-| 256 | 2 | 8 | 256 | 0.889 | 0.018 |
-| 256 | 4 | 14 | 256 | 0.871 | 0.036 |
-| 256 | 8 | 25 | 256 | 0.859 | 0.068 |
+| 256 | 2 | 8 | 256 | 0.889 | 0.020 |
+| 256 | 4 | 14 | 256 | 0.871 | 0.035 |
+| 256 | 8 | 25 | 256 | 0.859 | 0.066 |
 
 **Conclusion.** The order in `projection.read` (geometry -> normalize -> project) is forced, not incidental: geometry measures the unevenness of the raw amplitudes across channels, and normalize exists to remove that unevenness, so composing them the other way leaves the first read nothing to find. The cost is a PRECONDITION rather than a parameter: 2^H_F counts channels in play only when the channels are already commensurate. That cannot be established from one frame -- scaling a column by c is indistinguishable from that channel being c times louder -- so, like which axis is ordered, it is declared by the caller. A frame of mixed units reads its units, not its structure.
 
@@ -469,7 +469,7 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 | 200x200 | 5 | 4 | 1 | 1 | n/a | n/a | 5 | 5 | n/a | n/a |
 | 600x40 | 1 | 1 | 1 | 0.967 | 1 | 0.833 | 1 | 0.97 | 1 | 1.17 |
 | 600x40 | 1 | 2 | 1 | 1 | 1 | 0.833 | 1 | 1 | 1 | 1.17 |
-| 600x40 | 1 | 4 | 0.967 | 1 | 1 | 0.833 | 1.07 | 1 | 1 | 1.17 |
+| 600x40 | 1 | 4 | 1 | 1 | 1 | 0.833 | 1 | 1 | 1 | 1.17 |
 | 600x40 | 3 | 1 | 1 | 1 | 1 | 0.9 | 3 | 3 | 3 | 3.1 |
 | 600x40 | 3 | 2 | 1 | 1 | 1 | 0.933 | 3 | 3 | 3 | 3.07 |
 | 600x40 | 3 | 4 | 1 | 1 | 1 | 0.933 | 3 | 3 | 3 | 3.07 |
@@ -487,7 +487,7 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 | 40x600 | 5 | 4 | 1 | 1 | 1 | 0.933 | 5 | 5 | 5 | 5.07 |
 | 300x120 | 1 | 1 | 1 | 1 | 0 | 1 | 1 | 1 | 0 | 1 |
 | 300x120 | 1 | 2 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
-| 300x120 | 1 | 4 | 0.933 | 1 | 1 | 1 | 1.07 | 1 | 1 | 1 |
+| 300x120 | 1 | 4 | 1 | 1 | 1 | 1 | 1 | 1 | 1 | 1 |
 | 300x120 | 3 | 1 | 1 | 0.967 | 0 | 1 | 3 | 2.97 | 0 | 3 |
 | 300x120 | 3 | 2 | 1 | 1 | 1 | 1 | 3 | 3 | 3 | 3 |
 | 300x120 | 3 | 4 | 1 | 1 | 1 | 1 | 3 | 3 | 3 | 3 |
@@ -506,24 +506,24 @@ Produced 2026-09-08 by `python research/validation/run_all.py` with entroptics 0
 
 | shape | rho | mean K_signal | P(K_signal > 0) | mean GD | mean MDL | mean AIC | mean coherence z |
 | --- | --- | --- | --- | --- | --- | --- | --- |
-| 200x200 | 1 | 0.03 | 0.025 | 0 | n/a | n/a | 0.19 |
-| 200x200 | 2 | 12.9 | 1 | 23.5 | n/a | n/a | 123.6 |
-| 200x200 | 4 | 15.47 | 1 | 33.1 | n/a | n/a | 109.7 |
-| 200x200 | 8 | 13.57 | 1 | 35.5 | n/a | n/a | 90.46 |
-| 200x200 | 16 | 11.22 | 1 | 36.1 | n/a | n/a | 73.56 |
-| 200x200 | 32 | 9.88 | 1 | 36.2 | n/a | n/a | 61.25 |
-| 300x120 | 1 | 0.05 | 0.05 | 0 | 0 | 0 | 0.06 |
-| 300x120 | 2 | 9.07 | 1 | 9.5 | 0 | 42.8 | 172.9 |
-| 300x120 | 4 | 13.47 | 1 | 22.8 | 12.5 | 64 | 157.9 |
-| 300x120 | 8 | 13.8 | 1 | 28.2 | 27.9 | 69.1 | 130 |
-| 300x120 | 16 | 11.78 | 1 | 29.7 | 30.4 | 70.1 | 103.7 |
-| 300x120 | 32 | 9.8 | 1 | 29.9 | 31.4 | 70.7 | 84.23 |
-| 40x600 | 1 | 0 | 0 | 0 | 0 | 0.1 | -0.14 |
-| 40x600 | 2 | 7.72 | 1 | 10.8 | 16.4 | 25.4 | 25.69 |
-| 40x600 | 4 | 6.53 | 1 | 11.8 | 17.6 | 26.2 | 23.69 |
-| 40x600 | 8 | 5.95 | 1 | 12.2 | 17.9 | 26.3 | 20.89 |
-| 40x600 | 16 | 5.38 | 1 | 12.3 | 17.9 | 26.3 | 18.13 |
-| 40x600 | 32 | 5.35 | 1 | 12.3 | 17.9 | 26.3 | 15.91 |
+| 200x200 | 1 | 0.03 | 0.025 | 0 | n/a | n/a | 0.2 |
+| 200x200 | 2 | 12.78 | 1 | 23.5 | n/a | n/a | 124 |
+| 200x200 | 4 | 15.7 | 1 | 33.1 | n/a | n/a | 110.7 |
+| 200x200 | 8 | 13.85 | 1 | 35.5 | n/a | n/a | 91.87 |
+| 200x200 | 16 | 11.53 | 1 | 36.1 | n/a | n/a | 75.4 |
+| 200x200 | 32 | 9.53 | 1 | 36.2 | n/a | n/a | 63.7 |
+| 300x120 | 1 | 0.03 | 0.025 | 0 | 0 | 0 | 0.02 |
+| 300x120 | 2 | 8.95 | 1 | 9.5 | 0 | 42.8 | 173.2 |
+| 300x120 | 4 | 13.53 | 1 | 22.8 | 12.5 | 64 | 159 |
+| 300x120 | 8 | 13.97 | 1 | 28.2 | 27.9 | 69.1 | 131.6 |
+| 300x120 | 16 | 11.88 | 1 | 29.7 | 30.4 | 70.1 | 105.8 |
+| 300x120 | 32 | 9.85 | 1 | 29.9 | 31.4 | 70.7 | 86.82 |
+| 40x600 | 1 | 0 | 0 | 0 | 0 | 0.1 | -0.17 |
+| 40x600 | 2 | 7.9 | 1 | 10.8 | 16.4 | 25.4 | 25.96 |
+| 40x600 | 4 | 6.88 | 1 | 11.8 | 17.6 | 26.2 | 24.29 |
+| 40x600 | 8 | 6 | 1 | 12.2 | 17.9 | 26.3 | 22.07 |
+| 40x600 | 16 | 5.35 | 1 | 12.3 | 17.9 | 26.3 | 20.05 |
+| 40x600 | 32 | 5 | 1 | 12.3 | 17.9 | 26.3 | 18.28 |
 
 **(b) the raw spectrum, against the i.i.d. edge it is read at**
 

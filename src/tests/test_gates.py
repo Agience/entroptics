@@ -1,9 +1,8 @@
 """The cheap signal gates for high-rate capture.
 
 ``Projection.has_signal``, and ``Aperture.has_signal()`` which delegates to it, must mirror
-``K_signal > 0`` exactly, and the SVD-free ``probe_signal`` is conservative -- it may
-over-fire but must never return False when a real mode is resolved (so gating on it cannot drop a
-detection).  Deterministic seeds."""
+``K_signal > 0`` exactly, and so must ``probe_signal``, which stops at the singular values (the
+floor reads them).  Deterministic seeds."""
 import numpy as np
 import pytest
 
@@ -47,10 +46,12 @@ def test_aperture_has_signal_is_bool_and_idempotent():
     assert noise.has_signal() is False
 
 
-def test_probe_signal_conservative_never_false_on_signal():
+def test_probe_signal_matches_k_signal():
+    hits = 0
     for W in _mix(seed=3):
-        if Projection(W).K_signal > 0:
-            assert probe_signal(W) is True             # never drop a real detection
+        assert probe_signal(W) is (Projection(W).K_signal > 0)
+        hits += probe_signal(W)
+    assert 0 < hits < 40                               # both branches are exercised
 
 
 def test_probe_signal_defers_on_gaps():

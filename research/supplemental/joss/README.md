@@ -41,14 +41,14 @@ reported and left in place.
 | Public repository, version control | `https://github.com/Agience/entroptics` |
 | OSI-approved licence, in a `LICENSE` file | Apache-2.0 in `LICENSE.md`, declared in `pyproject.toml` and its trove classifier |
 | Installation instructions | `README.md` § Install — PyPI, extras, and an editable checkout |
-| Example usage | `README.md` § Quickstart, with worked examples for the batch read, projection, filter and streaming paths |
-| Automated tests | 675 tests under `src/tests`, all passing; CI on `ubuntu`/`macos`/`windows` × Python 3.10–3.12, plus a numpy/torch parity job (`.github/workflows/ci.yml`) |
+| Example usage | `README.md` § Examples — counting components and separating them from noise, a single signal's frequencies and decays, a reusable basis with drift, and streaming; [`docs/GUIDE.md`](../../../docs/GUIDE.md) for every read |
+| Automated tests | 960 tests under `src/tests`, all passing with the `[dev]` extra installed; CI on `ubuntu`/`macos`/`windows` × Python 3.10–3.12, plus a numpy/torch parity job (`.github/workflows/ci.yml`) |
 | Contribution guidelines | `CONTRIBUTING.md` — build, test, DCO sign-off, commit format, licensing |
 | Substantial scholarly effort | 19-experiment seeded validation suite, a Lean 4 / Mathlib certification, and three preprints |
 | Reproducibility of reported results | `research/validation/run_all.py` regenerates `RESULTS.md` byte-identically; each paper directory carries a `reproduce.py` and a `verify.py` |
-| Archive with a DOI | Zenodo `10.5281/zenodo.22687899` (v0.2.3; concept DOI `10.5281/zenodo.21273400` resolves to the latest) |
+| Archive with a DOI | Zenodo concept DOI `10.5281/zenodo.21273400` (resolves to the latest; each release also gets its own version DOI, minted when the release is tagged) |
 | Author ORCID | `0009-0002-0150-4027`, in the paper front matter, `CITATION.cff` and `.zenodo.json` |
-| Version consistency | `0.2.3` in `pyproject.toml`, `CITATION.cff` and `.zenodo.json`; the library reports it from installed distribution metadata rather than a literal |
+| Version consistency | `0.2.5` in `pyproject.toml`, `CITATION.cff` and `.zenodo.json`; the library reports it from installed distribution metadata rather than a literal |
 
 ## Gaps
 
@@ -58,11 +58,11 @@ claim.
 
 | gap as reported | closed by |
 |---|---|
-| No labelled statement of need in the README | `README.md` § **Statement of need** — the problem, the alternatives it is measured against (`scikit-learn` PCA / Minka, `optht`, Wax–Kailath AIC/MDL), the audience, and an explicit pointer to PyDMD and PyKoopman as the better choice when DMD is the problem |
+| No labelled statement of need in the README | `README.md` § **Statement of need** — the problem, the alternatives it is measured against (the Gavish–Donoho threshold, Wax–Kailath AIC/MDL), the audience, and an explicit pointer to PyDMD and PyKoopman as the better choice when DMD is the problem |
 | No API documentation beyond docstrings | [`docs/API.md`](../../../docs/API.md) — all 78 public names with signatures and summaries, **generated from `entroptics.__all__`** by `docs/generate_api.py`, so it cannot drift from the code; output is deterministic and committed, so staleness shows as a diff |
 | Community guidelines incomplete | `README.md` § **Getting help** and `CONTRIBUTING.md` § **Reporting an issue** — where to file, what a useful report contains, the security address, and the conduct link |
 | No `CODE_OF_CONDUCT.md` | [`CODE_OF_CONDUCT.md`](../../../CODE_OF_CONDUCT.md) — Contributor Covenant 2.1, enforcement address `connect@agience.ai` |
-| Data-dependence not stated up front | `README.md` § **What runs without a download** — the test suite and all 19 experiments need no external data; the two FRB figure routines are named as the only exception, with a pointer to the fetch |
+| Data-dependence not stated up front | `README.md` § **Reproducing the numbers** — the tests, all 19 experiments and every benchmark need no external data; the two FRB figure routines are named as the only exception, with a pointer to the fetch |
 
 ## Remaining
 

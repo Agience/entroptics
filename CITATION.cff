@@ -12,16 +12,13 @@ authors:
 repository-code: "https://github.com/Agience/entroptics"
 url: "https://agience.ai"
 license: Apache-2.0
-doi: "10.5281/zenodo.22687899"
+doi: "10.5281/zenodo.21273400"
 identifiers:
   - type: doi
     value: "10.5281/zenodo.21273400"
     description: "Concept DOI - resolves to the latest version of Entroptics."
-  - type: doi
-    value: "10.5281/zenodo.22687899"
-    description: "Version DOI - this release, 0.2.3."
-version: 0.2.3
-date-released: "2026-09-09"
+version: 0.2.5
+date-released: "2026-09-29"
 keywords:
   - entroptics
   - entropy

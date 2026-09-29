@@ -1,10 +1,10 @@
 """
 Experiment 14 -- A read is a property of the signal, not of the units it was recorded in.
 
-Whitening (Def 8.1) rescales each channel by its own robust MAD, so every read downstream of it
-is scale-free by construction: multiplying a record by a constant must not move anything.  That
+Whitening (Def 8.1) rescales each channel by its own RMS, so every read downstream of it is
+scale-free by construction: multiplying a record by a constant must not move anything.  That
 invariance is only real if no test anywhere in the path compares a DIMENSIONAL quantity against a
-fixed number -- a MAD carries the record's units, and a fixed cut on one is a statement about units.
+fixed number -- a scale carries the record's units, and a fixed cut on one is a statement about units.
 
   (a) The same signal, over 36 orders of magnitude of recording scale.  Every read is compared
       against the same signal at unit scale; the target is equality, not a tolerance band.
@@ -116,13 +116,11 @@ def run() -> dict:
         f"down to 2 the derived floor stays within a factor of "
         f"{max(max(ratios), 1/min(ratios)):.2f} of the unquantized floor at every depth.")
     concl = (
-        "Nothing in the read path tests a quantity that carries units against a fixed number. The "
-        "one place that must -- deciding whether a channel has any scale to whiten by -- takes the "
-        "frame's own pooled MAD times the working dtype's epsilon, so it moves with the record and "
-        "with the arithmetic. A channel with no spread is given no scale at all, "
-        "which is what keeps coarsely quantized input finite: at 2 bits a channel's samples collapse "
-        "onto one level, and dividing by any manufactured stand-in would lift round-off to unit "
-        "amplitude and be resolved as signal.")
+        "Nothing in the read path tests a quantity that carries units against a fixed number. "
+        "Whether a channel has any scale to whiten by is decided by exact equality -- every "
+        "measured value the same -- which carries no units at all, and a channel with no spread "
+        "is given no scale rather than a manufactured one. The floor is the null's, fixed by the "
+        "screen's shape, so quantization cannot move it.")
 
     return dict(
         title="14. A read is a property of the signal, not of the units it was recorded in",

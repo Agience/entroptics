@@ -123,6 +123,58 @@ def test_reconstruct_decay_shape_and_normalisation():
     assert c[0] == pytest.approx(1.0, abs=1e-9)     # normalised so C(0) = 1
 
 
+def test_modes_are_the_powers_of_the_reconstructed_decay():
+    """modes() carries the P_k of C(tau) = sum_k P_k mu_k^tau: rebuilt from its own poles and
+    powers it is reconstruct_decay exactly; sorted by power, largest first; shares sum to one."""
+    rng = np.random.default_rng(1)
+    rho, scale = np.array([0.95, 0.7, 0.3]), np.array([1.0, 2.0, 3.0])
+    x = np.zeros((2000, 3))
+    for t in range(1, 2000):
+        x[t] = rho * x[t - 1] + scale * rng.standard_normal(3)
+    d = dynamics(x)
+    m = d.modes()
+    mu, P = np.asarray(m.mu), np.asarray(m.power)
+    assert P.size > 1 and np.all(np.diff(P) <= 0)
+    assert float(np.sum(np.asarray(m.share))) == pytest.approx(1.0, abs=1e-12)
+    C = np.real((mu[None, :] ** np.arange(20)[:, None]) @ P.astype(complex))
+    assert np.allclose(C / C[0], np.asarray(d.reconstruct_decay(20)), atol=1e-12)
+    assert np.allclose(np.asarray(m.alpha), -np.log(np.abs(mu)))
+    assert np.allclose(np.asarray(m.beta), np.angle(mu))
+
+
+def test_modes_rank_the_stronger_mode_first():
+    """Two independent AR(1) channels: the stronger mode (rho 0.5, scale 3) comes first, and for
+    decoupled channels each mode's power is its channel's variance, so the powers stand in the
+    ratio of the sample variances."""
+    rng = np.random.default_rng(0)
+    T, rho, scale = 4000, np.array([0.9, 0.5]), np.array([1.0, 3.0])
+    x = np.zeros((T, 2))
+    for t in range(1, T):
+        x[t] = rho * x[t - 1] + scale * rng.standard_normal(2)
+    m = dynamics(x).modes()
+    assert float(np.real(np.asarray(m.mu)[0])) == pytest.approx(0.5, abs=0.05)
+    P, v = np.asarray(m.power), x.var(axis=0)
+    assert P[0] / P[1] == pytest.approx(v[1] / v[0], rel=0.01)
+
+
+def test_modes_run_on_torch_and_match_numpy():
+    torch = pytest.importorskip("torch")
+    rng = np.random.default_rng(1)
+    rho, scale = np.array([0.95, 0.7, 0.3]), np.array([1.0, 2.0, 3.0])
+    x = np.zeros((2000, 3))
+    for t in range(1, 2000):
+        x[t] = rho * x[t - 1] + scale * rng.standard_normal(3)
+    mn, mt = dynamics(x).modes(), dynamics(torch.as_tensor(x)).modes()
+    assert isinstance(mt.power, torch.Tensor)                          # never left the backend
+    assert np.allclose(mt.power.cpu().numpy(), mn.power, rtol=1e-12)
+    assert np.allclose(mt.mu.cpu().numpy(), mn.mu, atol=1e-12)
+
+
+def test_modes_before_any_frame_are_empty():
+    m = Dynamics(3).modes()
+    assert np.asarray(m.power).size == 0 and np.asarray(m.mu).size == 0
+
+
 # ── the scalar-sequence moment pencil (hankel_spectrum) + generic jackknife ───────────────
 def test_hankel_spectrum_recovers_known_transfer_modes():
     """The moment pencil on a finite exponential sum C(tau)=sum_k w_k lam_k^tau recovers the lam_k
@@ -142,13 +194,13 @@ def test_hankel_spectrum_recovers_known_transfer_modes():
 
 
 def test_hankel_spectrum_matches_handrolled_pencil():
-    """Bit-for-bit agreement with the hand-rolled reflection-positive pencil used by the mass-gap
-    scripts, so results here reproduce the same published numbers."""
+    """Agreement with the reflection-positive pencil written out by hand, so a caller who rolled
+    their own reproduces the same numbers through the library."""
     rng = np.random.default_rng(3)
     lam = np.array([0.6, 0.33, 0.15]); w = np.array([0.5, 0.3, 0.2])
     c = np.array([float(np.sum(w * lam ** t)) for t in range(12)]) + 1e-4 * rng.standard_normal(12)
     n = 3
-    cN = c / c[0]                                        # the exact 8_7 `pencil` body:
+    cN = c / c[0]                                        # the hand-written pencil:
     idx = np.add.outer(np.arange(n + 1), np.arange(n + 1))
     H0, H1 = cN[idx], cN[idx + 1]
     ww, V = np.linalg.eigh(H0); keep = ww > 1e-6 * ww.max()
@@ -168,9 +220,9 @@ def test_jackknife_mean_matches_closed_form():
     assert abs(se - x.std(ddof=1) / np.sqrt(len(x))) < 1e-12
 
 
-def test_jackknife_binned_matches_massgap_convention():
+def test_jackknife_binned_matches_the_standard_convention():
     """Binned (delete-one-bin) jackknife reproduces sqrt((G-1)/G sum (theta_g-mean)^2), the
-    mass-gap scripts' error convention."""
+    standard delete-one-group error."""
     from entroptics import jackknife
     X = np.random.default_rng(1).standard_normal((64, 4))
     read = lambda s: float(np.mean(s))

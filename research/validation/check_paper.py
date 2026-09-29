@@ -43,6 +43,7 @@ ARTIFACTS = [
     REPO / "research/figures/frb_spotcheck.csv",          # the 12-waterfall random draw
     REPO / "research/figures/frb_display.csv",            # the contrast-stretch diagnostics
     REPO / "research/supplemental/frb/tables/agreement.csv",
+    REPO / "research/benchmarks/screen_null.jsonl",       # the screen's null (section 8)
 ]
 
 #: Constants that are DERIVED mathematics rather than measurements.  Each is tabulated with its

@@ -91,7 +91,7 @@ from typing import Callable
 import numpy as np
 
 from . import environment as _env
-from .entropy import MAD_SCALE, macheps
+from .entropy import MAD_SCALE
 
 # The distinct cut points a provider can be keyed to (``ctx.kind``).  Each is a separate
 # noise-vs-signal decision, so each can take its own provider (see ``by_kind`` / a mapping):
@@ -269,9 +269,8 @@ def johnstone(N: int, F: int, *, complex_: bool = False) -> tuple[float, float]:
 
 def debias_denominator(N: int, F: float, *, complex_: bool = False) -> float:
     """The de-biasing denominator ``F * c_F * dof`` that turns a median row energy into the
-    per-cell noise variance ``sigma^2``.  Split out so every screen-floor call site (per-frame
-    ``noise_sigma2`` / ``mp``, the numpy batch ``projection._mp_floor_batch``, and the batched
-    resolved read) shares one definition and cannot drift:
+    per-cell noise variance ``sigma^2``, for :func:`proximity.mp_spectrum`'s prediction (the
+    screen's floor reads its null's exact variance instead, :func:`noise_sigma2_from_spectrum`):
 
       c_F        -- the sample median of ||row||^2 estimates the distribution median of a
                     chi^2_F (= F*c_F), not the mean F (Wilson-Hilferty, a small-F bias);
@@ -302,28 +301,41 @@ def screen_floor_sq(sigma2, N: int, F: int, far: float, *, complex_: bool = Fals
     return sigma2 * (mu + q * sig_J)
 
 
-def noise_sigma2(xp, screen, N: int, F: int, *, complex_: bool = False) -> float:
-    """The de-biased robust per-cell noise variance the ``mp`` / ``bulk`` providers build
-    on: the median row energy over F divided by :func:`debias_denominator` (the chi^2 median
-    ``c_F`` and the centring dof ``(N-1)/N``).  Shared with the per-mode significance so they
-    agree."""
-    re = _env.sum_ax(xp, xp.abs(screen) ** 2, 1)
-    # RELATIVE guard, shared verbatim by all five sites that form this variance.  It exists for
-    # one consumer -- `mode_significance` divides by sigma^2 -- so it only has to keep that finite
-    # on a screen with no energy.  sigma^2 carries dimension 2, so an absolute constant stops
-    # depending on the data: with the previous `1e-30` the reported variance was inflated 2.79x at
-    # a screen scale of 1e-15 and 1.8e+06x at 1e-18.  Built from the row energies alone, which is
-    # the one quantity every site has, so the copies cannot drift.
-    e = ((float(_env.median1d(xp, re)) + float(_env.sum_ax(xp, re)) * macheps(xp, screen))
-         / debias_denominator(N, F, complex_=complex_))
-    # The additive guard exists for ONE consumer -- `mode_significance` divides by sigma^2 -- so
-    # it only has to keep that division finite on an all-zero screen.  It must therefore be
-    # RELATIVE: sigma^2 carries dimension 2, so an absolute `1e-30` stops depending on the data
-    # once the screen falls near 1e-15.  Measured with the old constant, the reported variance was
-    # inflated 2.79x at a screen scale of 1e-15 and 1.8e+06x at 1e-18 -- the floor was the constant.
-    # `macheps` is dtype-only, so the batch path in `projection._mp_floor_batch` computes the
-    # identical value per frame and the two cannot drift (`test_read_batch_bit_identical`).
-    return e
+def noise_sigma2_from_spectrum(s2, N: int, F: int):
+    """The per-cell variance the ``mp`` floor builds on, from an ``N x F`` screen's squared
+    singular values ``s2`` (``(..., r)``): its mean cell energy with the degree of freedom each
+    column's mean took, ``sum s^2 / (N F) * N / (N - 1)``.  Returns ``(...)``.
+
+    The whitening gives every column the same energy (:func:`entropy.whiten_stats`), so the
+    screen's Gram is a sample correlation matrix and this is the variance of its null -- channels
+    independent -- exactly, for noise of any marginal: ``N / (N - 1)`` on an unfolded screen of
+    live columns, and whatever the fold and the flat channels leave otherwise.  It is not an
+    estimate of a noise level under a signal.  A signal takes its share of each channel's energy,
+    and the noise is left with the rest, so a mode is read against what independent channels of
+    the same energies would produce -- the correlation read's own question.  (A variance estimated
+    to be robust to the signal instead -- a median -- finds the noise left at a different level in
+    each channel, by that channel's signal share, and reads the loudest as modes: 6-12 modes on a
+    rank-2 record.)  ``F`` is the LIVE width: a dead column is not a cell of the ensemble."""
+    s2 = np.asarray(s2, dtype=np.float64)
+    N, F = int(N), int(F)
+    if N < 1 or F < 1:
+        return np.zeros(s2.shape[:-1]) if s2.ndim > 1 else 0.0
+    out = np.clip(s2, 0.0, None).sum(axis=-1) / (N * F) * N / max(N - 1, 1)
+    return out if s2.ndim > 1 else float(out)
+
+
+def noise_sigma2(xp, screen, N: int, F: int, *, complex_: bool = False, s=None) -> float:
+    """The per-cell variance the ``mp`` floor builds on (:func:`noise_sigma2_from_spectrum`), read
+    from the screen's singular values ``s`` (computed when not given).  Shared by the
+    per-frame floor, the per-mode significance and the batched floors, so they cannot drift.
+    ``F`` is the LIVE width (:func:`projection.live_columns`): a dead column is not a cell of the
+    ensemble.  ``complex_`` is kept for the callers' signature; the law is the same."""
+    if int(N) <= 0 or not (F > 0):
+        return 0.0
+    if s is None:
+        s = _env.svdvals(xp, screen)
+    s = np.asarray(_env.to_numpy(s), dtype=np.float64)
+    return noise_sigma2_from_spectrum(s ** 2, N, F)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -371,7 +383,8 @@ class FloorContext:
 
 def mp(ctx: FloorContext) -> float:
     """The default provider: the finite-size Johnstone / Tracy-Widom edge.  Projection:
-    ``sqrt(sigma^2 * (mu + q*sigma_J))`` with the de-biased per-cell variance.  Correlation
+    ``sqrt(sigma^2 * (mu + q*sigma_J))`` with the null's per-cell variance
+    (:func:`noise_sigma2_from_spectrum`).  Correlation
     floor: ``(mu + q*sigma_J)/T`` in correlation units.  Parameter-free; only ``far``."""
     # The ensemble is a fact about the data, so it is read off the data and never asked for: a
     # complex screen's largest eigenvalue follows TW2 (GUE), with the complex Wishart centring
@@ -381,7 +394,7 @@ def mp(ctx: FloorContext) -> float:
     if ctx.kind == "projection":
         N, F = int(ctx.shape[0]), int(ctx.shape[1])
         xp = _env.ns(ctx.data)
-        s2 = noise_sigma2(xp, ctx.data, N, F, complex_=cx)
+        s2 = noise_sigma2(xp, ctx.data, N, F, complex_=cx, s=ctx.spectrum)
         return math.sqrt(screen_floor_sq(s2, N, F, ctx.far, complex_=cx))
     T, N = int(ctx.shape[0]), int(ctx.shape[1])
     mu, sig_J = johnstone(T, N, complex_=cx)
@@ -534,19 +547,19 @@ def weighted_effective(stack, weights) -> Callable[["FloorContext"], float]:
     aggregate = np.tensordot(w, stack, axes=(0, 0)) / sw
 
     def _provider(ctx: "FloorContext") -> float:
-        from .entropy import mad_stats
-        from .projection import project
+        from .entropy import whiten_stats
+        from .projection import fold_variance, _fold_ortho
         N, F = int(ctx.shape[0]), int(ctx.shape[1])
-        T, Fin = aggregate.shape
-        _, scale, _ = mad_stats(np, aggregate)
-        scale = np.where(np.asarray(scale) > 0, scale, 1.0)
-        dev = (stack - aggregate[None]) / scale[None, None, :]        # screen units
+        _, scale = whiten_stats(np, aggregate)
+        scale = np.asarray(scale)
+        live = (scale > 0) & np.isfinite(scale)                       # the channels the read keeps
+        agg, stk, scale = aggregate[:, live], stack[:, :, live], scale[live]
+        T, Fin = agg.shape
+        dev = (stk - agg[None]) / scale[None, None, :]                # screen units
 
-        # The edge is a statement about the MEAN per-cell variance, so that is the statistic
-        # taken -- not a robust centre, which reports the quiet cells when the loud ones set
-        # the top singular value.
+        # Each row's MEAN per-cell variance -- not a robust centre, which reports the quiet cells
+        # when the loud ones set the top singular value.
         per_row = np.mean(dev ** 2, axis=(0, 2))                      # (T,)
-        sigma2_1 = float(np.mean(per_row))
 
         # ...and one variance only describes the screen if the rows SHARE one.  How much
         # row-to-row spread mere sampling produces is not taken from an asymptotic formula --
@@ -572,13 +585,33 @@ def weighted_effective(stack, weights) -> Callable[["FloorContext"], float]:
                     "single floor does not describe this screen; whiten the ordered axis "
                     "first, or use a provider that does not assume one noise level.")
 
-        cells = max(1.0, (T * Fin) / max(project(np.zeros((T, Fin)), T / N, Fin / F).size, 1))
-        sigma2 = sigma2_1 / (eff * cells)
+        # The columns need not share one variance: the aggregate's channel scale carries its own
+        # signal, so its noise lands at a different level in each column, and the edge of such a
+        # matrix is set by the second moment of the column variances as well as the first.  The
+        # isotropic matrix with the same first two moments has per-cell variance
+        # sum v^2 / sum v at width (sum v)^2 / sum v^2 (``proximity.effective_width``), which is
+        # the one-variance edge exactly when the columns are equal.  The column variances are
+        # carried onto the screen by its folds: the feature axis orthonormally (column k of the
+        # screen holds sum_i v_i Q_ik^2), the ordered axis by its own averaging factor.
+        v_in = np.mean(np.abs(dev) ** 2, axis=(0, 1))                   # (Fin,)
+        if F != Fin:
+            Q = np.asarray(_fold_ortho(np, np.eye(Fin), F, axis=1))
+            v = (v_in[:, None] * Q ** 2).sum(axis=0)
+        else:
+            v = v_in
+        # A sample's deviation from the weighted mean it is part of has expected square
+        # Var * (1 - 2/M + 1/eff) (its own weight enters the mean), so the per-sample variance is
+        # the measured one over that factor, and the aggregate's is the per-sample one over eff.
+        M_s = int(stack.shape[0])
+        v = v / (1.0 - 2.0 / M_s + 1.0 / eff) * fold_variance(T, N) / eff
+        sv, sv2 = float(np.sum(v)), float(np.sum(v ** 2))
+        if not (sv > 0.0):
+            return 0.0
+        sigma2, width = sv2 / sv, sv * sv / sv2
         cx = _env.is_complex_obj(ctx.data)
-        if ctx.kind == "projection":
-            return math.sqrt(screen_floor_sq(sigma2, N, F, ctx.far, complex_=cx))
-        mu, sig_J = johnstone(N, F, complex_=cx)
-        return sigma2 * (mu + tw_quantile(ctx.far, complex_=cx) * sig_J)
+        mu, sig_J = johnstone(N, width, complex_=cx)
+        edge = sigma2 * (mu + tw_quantile(ctx.far, complex_=cx) * sig_J)
+        return math.sqrt(edge) if ctx.kind == "projection" else edge
 
     _provider.__name__ = "weighted_effective_null"
     _provider.effective_n = eff

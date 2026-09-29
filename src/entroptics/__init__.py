@@ -89,7 +89,8 @@ from .environment import set_precision, precision   # ENVIRONMENTAL compute prec
 from .projection import read_batch, BatchRead           # batched monitor (bit-identical ensemble read)
 from .reads import spectral_batch                    # batched correlation-eigvalsh read (bit-identical)
 from .reads import carriage, Carriage             # weighted-aggregation null (weights against samples)
-from .dynamics import hankel_spectrum, jackknife, HankelSpectrum  # scalar-sequence moment pencil + jackknife
+from .dynamics import hankel_spectrum, jackknife, bootstrap, HankelSpectrum  # moment pencil + resampling
+from .dynamics import matrix_pencil, MatrixPencil                           # correlator-matrix pencil
 from .batch import (resolved_batch, ResolvedBatch,   # the ONE batched resolved-screen read (numpy CPU / torch GPU)
                     ResolvedScreen, ResolvedScreenBatch, ResourceLimits, recommend_backend)
 from .lift import koopman_lift, delay_embed          # Koopman observable lift (nonlinear -> linear operator)
@@ -106,7 +107,8 @@ except _PkgNotFound:                                  # not installed: a source 
     __version__ = "0.0.0+source"
 __all__ = list(_aperture.__all__) + ["set_precision", "precision", "read_batch", "BatchRead",
                                      "spectral_batch", "carriage", "Carriage",
-                                     "hankel_spectrum", "jackknife", "HankelSpectrum",
+                                     "hankel_spectrum", "jackknife", "bootstrap", "HankelSpectrum",
+                                     "matrix_pencil", "MatrixPencil",
                                      "resolved_batch", "ResolvedBatch", "ResolvedScreen",
                                      "ResolvedScreenBatch", "ResourceLimits", "recommend_backend",
                                      "koopman_lift", "delay_embed"]

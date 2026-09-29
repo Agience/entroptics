@@ -23,7 +23,6 @@ import pytest
 
 from entroptics import Aperture
 from entroptics.entropy import normalize
-from entroptics.projection import _fold_axis
 
 
 def _frame(T=64, F=24, seed=0, gain=40.0, noise=1.0):
@@ -71,9 +70,9 @@ def test_normalize_stats_invert_exactly():
 def test_normalize_stats_on_the_masked_path():
     """A. the masked branch reports ITS OWN stats.
 
-    ``_normalize_masked_np`` takes a masked median and shrinks with a per-channel valid-cell
-    count, so its centre and scale are not the clean path's.  Re-running the clean path on the
-    gapped frame would give different numbers, which is why the branch has to return them."""
+    The masked branch takes its mean over the measured cells and its scale over consecutive
+    measured pairs, so its centre and scale are not the clean path's.  Re-running the clean path on
+    the gapped frame would give different numbers, which is why the branch has to return them."""
     W, _ = _frame()
     Wm = W.copy()
     Wm[3, 4] = np.nan            # a scattered gap
@@ -204,20 +203,25 @@ def test_map_spans_a_folded_feature_axis():
     clean, info = Aperture(W, window=None).extract()
     N, F_eff = info["screen_shape"]
     assert F_eff < F, "this frame is meant to coarsen"
-    assert info["centre"].shape == (F_eff,) and info["scale"].shape == (F_eff,)
+    assert clean.shape == W.shape, "the modes are carried back to the caller's grid"
+    assert info["centre"].shape == (F,) and info["scale"].shape == (F,)
 
-    # the truth and the raw frame on the screen's own grid -- the same fold, applied to both
-    fold = lambda A: _fold_axis(_fold_axis(A, N, axis=0), F_eff, axis=1)
-    assert _rel(clean, fold(truth)) < _rel(fold(W), fold(truth)), (
-        "on the folded grid the filter must still beat the raw frame")
-    assert _rel(clean, fold(truth)) < 0.15, "and the group map must land it close to the truth"
+    # scored on the caller's grid, against the truth itself
+    assert _rel(clean, truth) < _rel(W, truth), "the filter must beat the raw frame"
+    assert _rel(clean, truth) < 0.15, "and land close to the truth"
+    assert np.abs(clean + info["residual"] - W).max() < 1e-9, "nothing lost across the fold"
 
 
 def test_dead_channels_do_not_misalign_the_map():
-    """E. a fully-dead channel is dropped from the screen, and the map is aligned with what
-    SURVIVED -- an off-by-one here would silently apply the wrong channel's gain."""
+    """E. a fully-dead channel is dropped from the read and comes back NaN on the caller's grid,
+    and the live channels are aligned with what SURVIVED: they equal the read of the frame with
+    that channel removed, exactly.  An off-by-one would apply the wrong channel's gain."""
     W, _ = _frame(F=24)
     W[:, 6] = np.nan                                  # never measured
     clean, info = Aperture(W, window=None).extract()
-    assert clean.shape[1] == info["centre"].shape[0] == info["scale"].shape[0]
-    assert clean.shape[1] < W.shape[1], "the dead channel must be dropped"
+    assert clean.shape == W.shape
+    assert np.all(np.isnan(clean[:, 6])) and np.isnan(info["centre"][6])
+    live = np.delete(np.arange(24), 6)
+    ref, ref_info = Aperture(W[:, live], window=None).extract()
+    assert np.array_equal(clean[:, live], ref)
+    assert np.array_equal(info["centre"][live], ref_info["centre"])

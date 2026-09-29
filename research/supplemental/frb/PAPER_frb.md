@@ -11,7 +11,7 @@ ORCID [0009-0002-0150-4027](https://orcid.org/0009-0002-0150-4027)
 
 ## Abstract
 
-We apply a parameter-free rank-selection and reconstruction procedure to publicly released CHIME/FRB Catalog 1 waterfalls and compare the result against CHIME's own *fitburst* forward model. The procedure selects its rank against a derived Tracy–Widom noise floor, reconstructs the field on the resolved modes with Gavish–Donoho shrinkage, and removes persistent narrowband structure by a geometric cut on each mode's entropic footprint. No constant is fitted to the data, no template of a burst enters anywhere, and nothing is tuned per event. On four bright events the reconstruction correlates with the forward model at $0.515$–$0.609$ (mean $0.560$), against $0.115$–$0.373$ (mean $0.198$) for the raw waterfall and $0.214$ for a box-average control that applies the same frequency smoothing and nothing else. To make those figures interpretable in the absence of ground truth we report two reference points: the forward model corrupted by the record's own measured noise scores $0.219$ against the model, and the forward model degraded by exactly the resolution the read is taken at scores $0.994$. The read therefore sits well above what the record's noise permits and well below what its resolution permits, and the residual gap is attributable to the forward model's own parametric form, which we cannot quantify without refitting it. A further 12 waterfalls drawn uniformly at random from the same release are read by the identical path; all twelve are read without incident and eight resolve a mode above the floor. Neither the read nor the forward model is ground truth, and the noise floor is calibrated against an i.i.d. bulk which a serially correlated record violates; both limits are stated and quantified.
+We apply a parameter-free rank-selection and reconstruction procedure to publicly released CHIME/FRB Catalog 1 waterfalls and compare the result against CHIME's own *fitburst* forward model. The procedure selects its rank against a derived Tracy–Widom noise floor, reconstructs the field as the orthogonal projection onto its resolved modes — lossless, with everything else kept in a residual — and moves persistent narrowband structure to that residual by a geometric cut on each mode's entropic footprint. No constant is fitted to the data, no template of a burst enters anywhere, and nothing is tuned per event. On four bright events the reconstruction correlates with the forward model at $0.421$–$0.533$ (mean $0.470$), against $0.115$–$0.373$ (mean $0.198$) for the raw waterfall and $0.214$ for a box-average control that applies frequency smoothing alone. To make those figures interpretable in the absence of ground truth we report two reference points: the forward model corrupted by the record's own measured noise scores $0.219$ against the model, and the forward model degraded by exactly the resolution the modes are read at scores $0.994$. The read therefore sits well above what the record's noise permits and well below what that resolution permits. It is taken at the recorded channel resolution and keeps structure along frequency that the smooth forward model does not carry; the remaining gap reflects that structure and the forward model's own parametric form, which we cannot separate without refitting the model. A further 12 waterfalls drawn uniformly at random from the same release are read by the identical path; all twelve are read without incident and seven resolve a mode above the floor. Neither the read nor the forward model is ground truth, and the noise floor is calibrated against an i.i.d. bulk which a serially correlated record violates; both limits are stated and quantified.
 
 ---
 
@@ -42,15 +42,15 @@ Write $W\in\mathbb{R}^{T\times F}$ for the dedispersed waterfall with $T$ time s
 
 **Observer facts.** Dead channels are *dropped*, never zero-filled. A channel that was measured and read zero is an observation of no power; a channel that was never measured is absent, and absence is not an observation of zero — substituting zero widens the axis the signal is scored against by exactly the channels carrying nothing. "Dead" is the catalogue's own mask together with a zero-variance test. This is the only step that uses knowledge of the instrument, and it supplies no burst information.
 
-**Whiten.** Each surviving channel is rescaled to a common robust median-absolute-deviation noise scale, with each channel's scale shrunk toward the pooled cross-channel scale by a data-derived James–Stein weight. A channel whose MAD falls at or below the frame's pooled MAD times the working arithmetic's machine epsilon is given no scale at all: dividing by a manufactured stand-in would lift round-off to unit amplitude, which the reconstruction would then resolve as signal. The step equalises per-channel scale and performs **no decorrelation** — it is a per-channel divide, not $\Sigma^{-1/2}$ — so noise correlated *across* channels survives it intact.
+**Whiten.** Each surviving channel is centred on its mean and scaled by its root-mean-square deviation about it, so every whitened channel carries the same energy and the screen's Gram is a sample correlation matrix. A channel whose values are all equal has no scale and leaves the screen; no number separates it from one that moved. The step equalises per-channel scale and performs **no decorrelation** — it is a per-channel divide, not $\Sigma^{-1/2}$ — so noise correlated *across* channels survives it intact.
 
 **Fold.** The frequency axis is coarsened to the resolution the record's own power marginal says it carries, $F_{\mathrm{eff}}=\operatorname{round}(F/\delta_F)$ with $\delta_F=F_{\mathrm{eff}\text{-}\mathrm{measured}}/2^{\mathrm H_F}$ read from the Shannon entropy of the frequency power marginal. The fold is licensed only where two conditions both hold: that the concentration is real against an exact Dirichlet null, and that the frequency axis is *continuous* — that neighbouring channels are more alike than a random relabelling, tested against the closed-form permutation null. The time axis keeps native spacing, which the ordered reads require. For these frames the fold takes $9{,}760$–$11{,}696$ live channels to $5{,}949$–$10{,}972$.
 
-**The derived floor.** The largest squared singular value of an $N\times F_{\mathrm{eff}}$ pure-noise screen concentrates at the Johnstone centre $\mu=(\sqrt{N-1}+\sqrt{F_{\mathrm{eff}}})^2$ with fluctuation scale $\varsigma_J=(\sqrt{N-1}+\sqrt{F_{\mathrm{eff}}})\big(\tfrac1{\sqrt{N-1}}+\tfrac1{\sqrt{F_{\mathrm{eff}}}}\big)^{1/3}$, and $(s_1^2-\mu)/\varsigma_J$ follows the real ($\beta=1$) Tracy–Widom law [Tracy & Widom 1996; Johnstone 2001]. The per-cell noise variance is read robustly from the median row energy, de-biased by the Wilson–Hilferty $\chi^2$ median $c_F=(1-\tfrac{2}{9F})^3$ and by the centring degree of freedom $(N-1)/N$. With the universal Tracy–Widom$_1$ quantile $q_\alpha$ ($q_{0.05}=0.9793$),
+**The derived floor.** The largest squared singular value of an $N\times F_{\mathrm{eff}}$ pure-noise screen concentrates at the Johnstone centre $\mu=(\sqrt{N-1}+\sqrt{F_{\mathrm{eff}}})^2$ with fluctuation scale $\varsigma_J=(\sqrt{N-1}+\sqrt{F_{\mathrm{eff}}})\big(\tfrac1{\sqrt{N-1}}+\tfrac1{\sqrt{F_{\mathrm{eff}}}}\big)^{1/3}$, and $(s_1^2-\mu)/\varsigma_J$ follows the real ($\beta=1$) Tracy–Widom law [Tracy & Widom 1996; Johnstone 2001]. The per-cell variance is the screen's mean cell energy with the centring's degree of freedom, $\hat\sigma^2=\|S\|_F^2/(N F_{\mathrm{eff}})\cdot N/(N-1)$. Every whitened channel has the same energy, so on an unfolded screen this is the null's own variance exactly; these screens are folded, where channels that share structure raise it, which only raises the floor. The edge law is proved for i.i.d. entries with a finite fourth moment [Bao, Pan & Zhou 2012]. With the universal Tracy–Widom$_1$ quantile $q_\alpha$ ($q_{0.05}=0.9793$),
 
 $$\Phi=\sqrt{\hat\sigma^2\,(\mu+q_\alpha\varsigma_J)},\qquad K_{\mathrm{signal}}=\#\{k:s_k>\Phi\}.$$
 
-Given $\alpha$, the floor is fixed by the shape $(N,F_{\mathrm{eff}})$ alone: $\mu,\varsigma_J,c_F$ and $(N-1)/N$ depend on it and $q_\alpha$ is a universal constant. Nothing in $\Phi$ is fitted.
+Given $\alpha$, $\mu,\varsigma_J$ and $(N-1)/N$ depend on the shape $(N,F_{\mathrm{eff}})$ alone and $q_\alpha$ is a universal constant. Nothing in $\Phi$ is fitted.
 
 **The mode footprint.** Each resolved mode carries a left (time) singular vector $u_k$ and a right (frequency) singular vector $v_k$. Its footprint is the pair of entropic fill fractions
 
@@ -60,9 +60,9 @@ which read the *shape* a mode has where the scalar floor sees only its size: a b
 
 **The geometry cut.** A mode with $\varphi^{(k)}_F\le\varphi^{(k)}_T$ — wider in frequency than in time, the signature of channelised interference — is dropped; a broadband transient $\varphi^{(k)}_F>\varphi^{(k)}_T$ is kept. This is a *shape* test and not a detection: it carries no null and no level, and it drops persistent structure whether or not that structure is interference. It is a stated criterion.
 
-**The read-side filter.** The output is the field reconstructed from its surviving modes, $\widehat S=U\operatorname{diag}(\tilde s)V^{\mathsf H}$, with $\tilde s$ the singular spectrum shrunk against the derived floor after [Gavish & Donoho 2017]: modes at or below the floor map to zero and the survivors are de-biased toward it. Because $U$ and $V$ are read from the data, $\widehat S$ is supported on the measured screen's own modes and introduces no direction the record does not carry. The per-channel whitening is inverted before the output is returned, so the read carries the burst's morphology *and* the waterfall's own amplitude scale; $W-\widehat W$ is therefore a plain difference and is exactly what the filter discarded. A channel's median is removed before the decomposition and is never offered to the cut, so it is carried through untouched.
+**The read-side filter.** The output is the orthogonal projection onto the resolved modes, $\widehat S=U_KU_K^{\mathsf H}S$ ($=U_KU_K^{\mathsf H}SV_KV_K^{\mathsf H}$, since $SV_K=U_K\Sigma_K$), with $U_K,V_K$ the screen's singular vectors above the derived floor; the singular values are never altered. On the recorded grid the resolved time profiles are carried back through the fold's adjoint and every recorded channel is projected onto them, so the read is at the recorded frequency resolution. Because $U_K$ is read from the data, $\widehat S$ is supported on the measured screen's own modes and introduces no direction the record does not carry, and as a projection it is idempotent and loses nothing: the read and $W-\widehat W$ sum to the waterfall exactly. The per-channel whitening is inverted before the output is returned, so the read carries the burst's morphology *and* the waterfall's own amplitude scale; $W-\widehat W$ is therefore a plain difference and is exactly what the filter discarded. A channel's median is removed before the decomposition and is never offered to the cut, so it is carried through untouched.
 
-With shrinkage the map is not a projection — the survivors are de-biased — and the Frobenius optimality of [Gavish & Donoho 2017], an asymptotic statement for i.i.d. noise at a known $\sigma$ cut at the bulk edge, is not claimed for it.
+Carrying the feature profiles back through the fold as well would hold every mode to the fold's frequency resolution, and is not done.
 
 ---
 
@@ -78,24 +78,24 @@ Figure 1 places the reconstruction beside *fitburst* and the raw waterfall on fo
 
 | event | DM | $T$ | live | read at | $K_{\mathrm{signal}}$ | contrast | $z$ | kept | dropped |
 |---|---|---|---|---|---|---|---|---|---|
-| FRB20190425A | 128.2 | 19 | 9,760 | 5,949 | 3 | 4.22 | 3.1 | 3 | 0 |
-| FRB20190106B | 316.6 | 38 | 11,632 | 10,972 | 3 | 1.30 | 4.7 | 2 | 1 |
-| FRB20190227A | 394.0 | 38 | 11,696 | 10,727 | 5 | 2.00 | 5.8 | 4 | 1 |
-| FRB20190323B | 789.6 | 19 | 11,312 | 10,550 | 1 | 1.41 | 3.4 | 1 | 0 |
+| FRB20190425A | 128.2 | 19 | 9,760 | 5,949 | 2 | 2.02 | −2.5 | 2 | 0 |
+| FRB20190106B | 316.6 | 38 | 11,632 | 10,972 | 1 | 1.17 | 1.3 | 1 | 0 |
+| FRB20190227A | 394.0 | 38 | 11,696 | 10,727 | 2 | 1.48 | 5.2 | 2 | 0 |
+| FRB20190323B | 789.6 | 19 | 11,312 | 10,550 | 1 | 1.21 | −3.5 | 1 | 0 |
 
-*Table 1. Per-burst reads, from `tables/events.csv`. "live" is the surviving width of the 16,384 recorded channels; "read at" is the width the fold takes it to. Contrast is $\sigma_1/\Phi$, the leading singular value over the screen floor; $z$ is the ordered-axis coherence. "kept" and "dropped" are the resolved modes on each side of the geometry cut.*
+*Table 1. Per-burst reads, from `tables/events.csv`. "live" is the surviving width of the 16,384 recorded channels; "read at" is the width the modes are read at, the fold's. Contrast is $\sigma_1/\Phi$, the leading singular value over the screen floor; $z$ is the ordered-axis coherence. "kept" and "dropped" are the resolved modes on each side of the geometry cut.*
 
 Each event resolves at least one mode above the floor. The reported per-mode quantity is the bounded contrast $\sigma_1/\Phi$ rather than a tail probability: a per-mode $p_k$ would rest on a Tracy–Widom approximation [Chiani 2014] far outside its calibrated range at these deviates, and is therefore not reported.
 
 The record shapes are extreme — $T=19$–$38$ against $16{,}384$ recorded channels — so the aspect ratio each read was taken at is on the page beside it.
 
-**The fold changes nothing it resolves.** $K_{\mathrm{signal}}$ is identical read folded or at the live width on all four events, and the contrast is equal or slightly higher folded. The read is then mapped back onto the recorded frequency axis for display; the mapping invents nothing, since the read is constant across each folded group.
+**The modes are read at the fold's width** (the "read at" column), and every recorded channel is then projected onto them, so the read is at the recorded frequency resolution.
 
 ### 3.2 A random spot-check
 
-A further **12 waterfalls drawn uniformly at random** from the same public release, at a fixed seed, are read by the identical path (`tables/spotcheck.csv`). All twelve are read without incident, and $K_{\mathrm{signal}}\ge1$ on eight of them.
+A further **12 waterfalls drawn uniformly at random** from the same public release, at a fixed seed, are read by the identical path (`tables/spotcheck.csv`). All twelve are read without incident, and $K_{\mathrm{signal}}\ge1$ on seven of them.
 
-The four that resolve nothing are the four whose leading singular value sits at or below the derived floor — contrast $0.98$–$0.99$, against $1.30$–$4.22$ for the events of Figure 1 — the floor declining to certify a mode it cannot separate from the bulk. Record length does not separate the two groups: the four that resolve nothing span $T=19$–$57$ and the eight that resolve span $T=19$–$95$, so the shortest records sit in both.
+The five that resolve nothing are the five whose leading singular value sits at or below the derived floor — contrast $0.99$–$1.00$, against $1.17$–$2.02$ for the events of Figure 1 — the floor declining to certify a mode it cannot separate from the bulk. Record length does not separate the two groups: the five that resolve nothing span $T=19$–$57$ and the seven that resolve span $T=19$–$95$, so the shortest records sit in both.
 
 This establishes that the untuned instrument runs on records it was not selected against, and reports what it finds on them. It is not a performance measurement: nothing here is scored against a reference.
 
@@ -109,27 +109,27 @@ Every quantity is scored on the **same cells** (the live channels — the read i
 |---|---|---|
 | raw waterfall | $0.115$–$0.373$ | $0.198$ |
 | box-average control | $0.118$–$0.427$ | $0.214$ |
-| **the read** | $\mathbf{0.515}$–$\mathbf{0.609}$ | $\mathbf{0.560}$ |
+| **the read** | $\mathbf{0.421}$–$\mathbf{0.533}$ | $\mathbf{0.470}$ |
 
 *Table 2. Correlation against the fitburst forward model, from `tables/agreement.csv`.*
 
-The read arrives smoothed along frequency, and the model is smooth too, so the box-average control rebins the raw waterfall to the read's own folded width — everything the fold does and nothing the read does. It reads $0.214$. **The fold accounts for $4.6\%$ of the gain and the read for the rest.**
+The model is smooth along frequency, so the box-average control rebins the raw waterfall to the width the modes are read at — smoothing alone, with no read. It reads $0.214$. **Smoothing accounts for $6.1\%$ of the gain and the read for the rest.** The read itself is not smoothed: it is at the recorded channel resolution, and keeps structure along frequency that the smooth model does not carry.
 
 ---
 
 ## 4. What sets the scale
 
-A correlation of $0.560$ against a series that is not ground truth means nothing on its own. There is no ground truth here to supply a scale — the source of a fast radio burst is unknown, and the forward model is a parametric fit to the same waterfall — so we report two reference points that are computable from the record itself and say what each does and does not bound.
+A correlation of $0.470$ against a series that is not ground truth means nothing on its own. There is no ground truth here to supply a scale — the source of a fast radio burst is unknown, and the forward model is a parametric fit to the same waterfall — so we report two reference points that are computable from the record itself and say what each does and does not bound.
 
 **The noise-limited reference.** Take the forward model itself, corrupt it with this record's own per-channel noise, and score it against the model. The noise scale is read robustly (MAD) from the off-burst columns of the raw waterfall, where the on-burst window is the smallest contiguous run of time samples containing $99\%$ of the model's band-summed power — a stated criterion, and the only free choice in this section. This answers: *what would a method that recovered the forward model exactly score, if it were measured through this waterfall's noise?*
 
-**The fold-resolution ceiling.** Take the forward model, degrade it by exactly the fold the read is taken at, and score it against the model. This answers: *what is the most any read at that frequency resolution could score, from resolution alone?*
+**The fold-resolution ceiling.** Take the forward model, degrade it by exactly the fold the read is taken at, and score it against the model. This answers: *what is the most a read limited to that frequency resolution could score, from resolution alone?* The read itself is taken back to the recorded channels and is not bound by it.
 
 | reference | range | mean |
 |---|---|---|
 | noise-limited (perfect recovery, measured through this noise) | $0.117$–$0.439$ | $0.219$ |
 | raw waterfall (measured) | $0.115$–$0.373$ | $0.198$ |
-| **the read** | $\mathbf{0.515}$–$\mathbf{0.609}$ | $\mathbf{0.560}$ |
+| **the read** | $\mathbf{0.421}$–$\mathbf{0.533}$ | $\mathbf{0.470}$ |
 | fold-resolution ceiling (perfect recovery at the read's resolution) | $0.9853$–$0.9987$ | $0.994$ |
 
 *Table 3. The read against its two reference points, from `tables/agreement.csv`.*
@@ -138,11 +138,11 @@ Two things follow, and they are the point of the section.
 
 **The raw waterfall's low agreement is noise, not disagreement about the burst.** A series that *is* the forward model, measured through this record's noise, scores $0.219$; the raw waterfall scores $0.198$. The two are not meaningfully different. So the forward model's functional form is not what holds the raw frame down to $0.198$ — the noise is, entirely. That is the floor the read has to beat, and it beats it on every event.
 
-**Resolution is not what caps the read.** A perfect recovery at the read's own folded width scores $0.994$. The fold costs at most $1.5\%$ of the attainable correlation on the worst of the four events and $0.1\%$ on the best. So the gap between $0.559$ and $1$ is not the resolution the instrument chose.
+**Resolution is not what caps the read.** A perfect recovery at the modes' folded width scores $0.994$. The fold costs at most $1.5\%$ of the attainable correlation on the worst of the four events and $0.1\%$ on the best. So the gap between $0.470$ and $1$ is not the resolution the instrument chose.
 
-**What we cannot bound.** The remaining gap is attributable to the forward model's own form. *fitburst* is smooth and has no per-channel freedom, while both the waterfall and the read carry per-channel structure that no smooth parametric surface can represent. Quantifying that would require refitting *fitburst* — perturbing its parameters, or refitting it to a resampled record — and we do not have its fitting code. **We therefore do not report a ceiling that accounts for the model's form, and the residual gap between $0.559$ and $0.994$ should not be read as error in the read.** It is a mixture of the read's own residual and a representational limit of the reference, in unknown proportion.
+**What we cannot bound.** The remaining gap is attributable to the forward model's own form. *fitburst* is smooth and has no per-channel freedom, while both the waterfall and the read carry per-channel structure that no smooth parametric surface can represent. Quantifying that would require refitting *fitburst* — perturbing its parameters, or refitting it to a resampled record — and we do not have its fitting code. **We therefore do not report a ceiling that accounts for the model's form, and the residual gap between $0.470$ and $0.994$ should not be read as error in the read.** It is a mixture of the read's own residual and a representational limit of the reference, in unknown proportion.
 
-One consequence of scoring on the full frame is worth naming. Off the burst, both the read and the model are close to zero, and that agreement counts toward the score. Restricted to the on-burst window alone, the raw waterfall reads $0.297$ and the read $0.468$ (means; per-event values in `tables/agreement.csv`). The read's margin over the raw survives the restriction — the read is $2.8\times$ the raw on the full frame and $1.6\times$ on the on-burst window — but the absolute figures are lower, and a reader comparing against a full-frame number elsewhere should use the same convention.
+One consequence of scoring on the full frame is worth naming. Off the burst, both the read and the model are close to zero, and that agreement counts toward the score. Restricted to the on-burst window alone, the raw waterfall reads $0.297$ and the read $0.394$ (means; per-event values in `tables/agreement.csv`). The read's margin over the raw survives the restriction — the read is $2.4\times$ the raw on the full frame and $1.3\times$ on the on-burst window — but the absolute figures are lower, and a reader comparing against a full-frame number elsewhere should use the same convention.
 
 ---
 
@@ -150,7 +150,7 @@ One consequence of scoring on the full frame is worth naming. Off the burst, bot
 
 **Neither is ground truth.** The source of a fast radio burst is unknown, and the forward model is itself a fit to this same waterfall with no per-channel freedom. The agreement says that two methods assuming nothing in common find the same burst; it does not say either has recovered it correctly.
 
-**The floor's null is an i.i.d. bulk, and that is a real restriction.** The Tracy–Widom law the floor is derived from is the null of the largest eigenvalue under an i.i.d. Gaussian bulk. Noise correlated *across* channels — common-mode drift, narrowband interference — or heavy-tailed noise concentrates its variance into a few modes and is, on the singular spectrum alone, indistinguishable from signal; the floor counts it as resolved. Correlation *along* the ordered axis moves the bulk itself. Measured on pure AR(1) rows with no planted signal, the derived floor resolves a mode in $100\%$ of draws at every correlation length from $\rho=2$ to $32$, against $0$–$5\%$ on i.i.d. rows [Sessford 2026, §12]. The effect is in the spectrum rather than in any estimator: at shape $(200,200)$ and $\rho=2$ the leading singular value of the raw field averages $37.5$ against a Bai–Yin i.i.d. edge of $28.3$, with $13.3$ values above it, where the i.i.d. control sits on the edge at $28.0$ with $0.1$. No method reading against that edge can be right on such a record, and the standard singular-value and model-order selectors over-read the same records by two to four times as much.
+**The floor's null is an i.i.d. bulk, and that is a real restriction.** The Tracy–Widom law the floor is derived from is the null of independent channels, each i.i.d. in time. Noise correlated *across* channels — common-mode drift, narrowband interference — concentrates its variance into a few modes and is, on the singular spectrum alone, indistinguishable from signal; the floor counts it as resolved. The read is a correlation read, so a mode must span channels to clear the edge — about $(1+\sqrt{F_{\mathrm{eff}}/T})^2$ of them — and a structure confined to fewer, such as a single-channel line, is not resolved at any strength. Correlation *along* the ordered axis moves the bulk itself. Measured on pure AR(1) rows with no planted signal, the derived floor resolves a mode in $100\%$ of draws at every correlation length from $\rho=2$ to $32$, against $0$–$2.5\%$ on i.i.d. rows [Sessford 2026, §12]. The effect is in the spectrum rather than in any estimator: at shape $(200,200)$ and $\rho=2$ the leading singular value of the raw field averages $37.5$ against a Bai–Yin i.i.d. edge of $28.3$, with $13.3$ values above it, where the i.i.d. control sits on the edge at $28.0$ with $0.1$. No method reading against that edge can be right on such a record, and the standard singular-value and model-order selectors over-read the same records by two to four times as much.
 
 What this bounds is a record whose *noise* is correlated along the ordered axis. A dedispersed waterfall, whose noise is close to white in time, is not affected, and the reads above are not. A record carrying $1/f$ drift or a common-mode gain would be.
 
@@ -195,10 +195,9 @@ edited all output and takes full responsibility for the content of this publicat
 
 ## References
 
+- Z. Bao, G. Pan, W. Zhou, *Tracy–Widom law for the extreme eigenvalues of sample correlation matrices*, Electron. J. Probab. **17** (2012) no. 88, 1–32.
 - M. Chiani, *Distribution of the largest eigenvalue for real Wishart and Gaussian random matrices and a simple approximation for the Tracy–Widom distribution*, J. Multivariate Anal. **129** (2014) 69–81.
 - CHIME/FRB Collaboration, *The First CHIME/FRB Fast Radio Burst Catalog*, Astrophys. J. Suppl. Ser. **257** (2021) 59, arXiv:2106.04352. Data (public): CANFAR archive, CISTI.CANFAR/21.0007, https://www.canfar.net/.
-- M. Gavish, D. L. Donoho, *Optimal shrinkage of singular values*, IEEE Trans. Inform. Theory **63** (2017) 2137–2152.
-- W. James, C. Stein, *Estimation with quadratic loss*, in *Proc. Fourth Berkeley Symp. Math. Statist. Prob.* **1** (1961) 361–379.
 - I. M. Johnstone, *On the distribution of the largest eigenvalue in principal components analysis*, Ann. Statist. **29** (2001) 295–327.
 - I. J. Sessford, *Entroptics: reading a 2-D signal as a finite optical aperture at its own entropy-matched resolution*, pre-print, 2026. https://github.com/Agience/entroptics
 - C. A. Tracy, H. Widom, *On orthogonal and symplectic matrix ensembles*, Comm. Math. Phys. **177** (1996) 727–754.

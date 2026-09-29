@@ -113,16 +113,14 @@ def _on_burst(mod, keep=ON_BURST_CONTAINMENT):
 
 
 def _read(wf):
-    """The read-side path of frb_panel.py, unchanged: drop dead channels, front door, map the
-    folded screen back onto the recorded frequency axis."""
+    """The read-side path of frb_panel.py, unchanged: drop dead channels, front door.  The read
+    comes back at the recorded channel resolution; ``n_F`` is the width the modes were read at."""
     W = wf.T
     live = np.isfinite(W).all(axis=0) & (np.nanstd(W, axis=0) > 0)
     n_live = int(live.sum())
     clean, info = Aperture(W[:, live], window=None).extract()
-    n_F = int(clean.shape[1])
+    n_F = int(info["screen_shape"][1])
     idx = (np.arange(n_live) * n_F) // n_live
-    if n_F != n_live:
-        clean = clean[:, idx]
     full = np.full_like(wf, np.nan)
     full[live, :] = clean.T
     return full, info, live, idx, n_F, n_live
@@ -148,11 +146,12 @@ def agreement(root):
       noise-limited   the forward model corrupted by this record's OWN measured per-channel
                       noise, scored against the model.  What a method that recovered the
                       model EXACTLY would score if it were measured through this waterfall.
-      fold ceiling    the forward model degraded by exactly the fold the read is taken at,
-                      scored against the model.  The most any read at that width could score,
-                      from resolution alone.
+      fold ceiling    the forward model degraded by exactly the fold the modes are read at,
+                      scored against the model.  The most a read limited to that width could
+                      score, from resolution alone; the read itself is taken back to the
+                      recorded channels, so it is not bound by it.
 
-    They bracket the read from below and above, and neither is a claim about the burst."""
+    Neither is a claim about the burst."""
     rows = []
     # the same quantities unrounded, so the means the paper quotes are means of the
     # correlations and not means of their printed 3-decimal forms

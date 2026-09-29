@@ -203,21 +203,21 @@ def test_default_null_is_mp_and_unchanged():
     assert noise_floor(sc.screen) == noise_floor(sc.screen, null=nulls.mp)
 
 
-def test_permutation_provider_is_at_least_as_conservative_on_correlated_bulk():
-    # a fully cross-correlated bulk with no planted low-rank mode,
-    # scored against the i.i.d. mp yardstick, over-counts resolved modes; the permutation
-    # provider preserves each channel's marginal but destroys the cross-channel alignment,
-    # so it never counts more and sometimes counts fewer.
-    km, kp = [], []
+def test_permutation_provider_states_the_same_null_as_mp():
+    # The whitened screen's columns all have one norm, so its Gram is a sample correlation matrix.
+    # Shuffling each column in time keeps that norm and destroys the cross-channel alignment: it is
+    # the exact finite-sample null that mp's Tracy-Widom edge approximates.  On a fully
+    # cross-correlated bulk (real structure against independent channels) the two floors agree to
+    # a few percent (1.3-2.6% measured, mp the higher) and the counts to within one mode.
     for s in range(8):
         r = np.random.default_rng(100 + s)
         T, F = 150, 30
         A = r.standard_normal((F, F))                      # full-rank random mixing
         X = r.standard_normal((T, F)) @ A                  # correlated bulk, not low-rank
-        km.append(Projection(X).K_signal)                                          # default mp
-        kp.append(Projection(X, null=nulls.permutation(draws=80), seed=0).K_signal)
-    assert all(p <= m for p, m in zip(kp, km))             # never over-counts vs mp
-    assert sum(kp) < sum(km)                               # strictly more conservative overall
+        m = Projection(X)                                                          # default mp
+        p = Projection(X, null=nulls.permutation(draws=80), seed=0)
+        assert m.K_signal >= 1 and abs(p.K_signal - m.K_signal) <= 1
+        assert abs(float(p.noise_floor) / float(m.noise_floor) - 1.0) < 0.05
 
 
 def test_permutation_provider_still_resolves_a_strong_mode():
@@ -449,11 +449,11 @@ def _signed_aggregate(rng, M, avg_sign, kind, T=18, F=12):
 
 
 def _true_top(C, truth, proj):
-    from entroptics.entropy import mad_stats
+    from entroptics.entropy import whiten_stats
     from entroptics.projection import project
     T, F = C.shape
     n_out, f_out = proj.screen.shape
-    _, scale, _ = mad_stats(np, C)
+    _, scale = whiten_stats(np, C)
     scale = np.where(np.asarray(scale) > 0, scale, 1.0).reshape(1, -1)
     return float(np.linalg.svd(project((C - truth) / scale, T / n_out, F / f_out),
                                compute_uv=False)[0])

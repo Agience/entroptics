@@ -174,10 +174,12 @@ def effective_width(A: np.ndarray) -> float:
 
 
 def _noise_sigma2_at(A: np.ndarray, N: int, F: float) -> float:
-    """`null_providers.noise_sigma2` at a real-valued width. The MEDIAN row energy.
+    """The per-cell noise variance of a centred frame at a real-valued width: the MEDIAN row
+    energy over :func:`null_providers.debias_denominator`.
 
     The median, not any mean: a few bright rows are the signal, and a mean lets them raise the
-    floor above themselves."""
+    prediction above themselves.  (The screen's floor does not use this: its frame is whitened, so
+    its null variance is exact -- :func:`null_providers.noise_sigma2_from_spectrum`.)"""
     row_energy = np.sum(np.abs(A) ** 2, axis=1)
     return float(np.median(row_energy)) / debias_denominator(N, F) + 1e-30
 

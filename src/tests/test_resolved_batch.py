@@ -173,7 +173,7 @@ def test_resolved_screen_concurrent_updates_safe():
     from concurrent.futures import ThreadPoolExecutor
     from entroptics.batch import ResolvedScreen
     rng = np.random.default_rng(2); F = 24
-    rs = ResolvedScreen(F, refresh_every=1_000_000, warmup=1)
+    rs = ResolvedScreen(F, refresh_every=1_000_000)
     chunks = [rng.standard_normal((4, F)) for _ in range(40)]
     with ThreadPoolExecutor(max_workers=8) as ex:
         list(ex.map(rs.update, chunks))
@@ -185,7 +185,7 @@ def test_resolved_screen_streams_and_resumes():
     rng = np.random.default_rng(1); F, T = 32, 400
     L = rng.standard_normal((2, F)); Z = rng.standard_normal((T, 2))
     X = Z @ L + rng.standard_normal((T, F)) * 0.5
-    rs = ResolvedScreen(F, refresh_every=16, warmup=64)
+    rs = ResolvedScreen(F, refresh_every=16)
     for i in range(0, T, 16):
         rs.update(X[i:i + 16])
     batch = int(resolved_batch(X[None], fold=False).K_signal[0])
@@ -203,11 +203,11 @@ def test_resolved_screen_batch_matches_batch_and_per_screen():
     rng = np.random.default_rng(0); B, F, T = 6, 24, 300
     L = rng.standard_normal((2, F))
     Xs = np.stack([rng.standard_normal((T, 2)) @ L + rng.standard_normal((T, F)) * 0.5 for _ in range(B)])
-    rsb = ResolvedScreenBatch(B, F, refresh_every=16, warmup=64)
+    rsb = ResolvedScreenBatch(B, F, refresh_every=16)
     for i in range(0, T, 16):
         rsb.update(Xs[:, i:i + 16, :])
     assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False).K_signal)   # == batch read
-    rs = ResolvedScreen(F, refresh_every=16, warmup=64)
+    rs = ResolvedScreen(F, refresh_every=16)
     for i in range(0, T, 16):
         rs.update(Xs[0, i:i + 16, :])
     assert rs.K_signal == int(rsb.K_signal[0])                                      # == per-screen
@@ -264,3 +264,87 @@ def test_resolved_screen_batch_takes_a_provider_and_matches_the_per_screen_read(
         one.update(Xs[j])
         per.append(int(one.K_signal))
     assert [int(k) for k in np.asarray(batch.K_signal)] == per
+
+
+def test_a_stream_of_noise_reads_as_the_batch_does():
+    """The stream forms, at every refresh, the whitened Gram the batch read forms from the same
+    rows, so noise appended one token at a time reads as the batch reads it -- no warmup, no frozen
+    centre whose offset would grow into a mode.  Negative control: the rows' raw Gram (whiten=False
+    on unwhitened rows) reads structure in nearly every stream."""
+    from entroptics.batch import ResolvedScreen, ResolvedScreenBatch
+    B, T, F = 40, 16, 64
+    rng = np.random.default_rng(11)
+    Xs = rng.standard_normal((B, T, F)) * np.exp(rng.uniform(-1, 1, F)) + 3.0
+    rsb = ResolvedScreenBatch(B, F, refresh_every=10 ** 9)
+    raw = ResolvedScreenBatch(B, F, refresh_every=10 ** 9, whiten=False)
+    for t in range(T):
+        rsb.update(Xs[:, t, :])
+        raw.update(Xs[:, t, :])
+    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False).K_signal)
+    assert np.mean(rsb.K_signal > 0) <= 0.1
+    assert np.mean(raw.K_signal > 0) >= 0.9
+    rs = ResolvedScreen(F, refresh_every=10 ** 9)
+    for t in range(T):
+        rs.update(Xs[0, t])
+    assert rs.K_signal == int(resolved_batch(Xs[:1], fold=False).K_signal[0])
+
+
+def test_a_streamed_flat_channel_leaves_the_live_width():
+    """A constant channel carries nothing, on the stream as in the batch read: it is not a cell of
+    the floor's ensemble."""
+    from entroptics.batch import ResolvedScreen, ResolvedScreenBatch
+    rng = np.random.default_rng(3)
+    hits_s, hits_b = 0, 0
+    for i in range(20):
+        X = np.hstack([rng.standard_normal((1024, 12)), np.full((1024, 4), 2.5)])
+        rs = ResolvedScreen(16, refresh_every=10 ** 9)
+        for k in range(0, 1024, 64):
+            rs.update(X[k:k + 64])
+        rsb = ResolvedScreenBatch(1, 16, refresh_every=10 ** 9)
+        rsb.update(X[None])
+        hits_s += rs.K_signal > 0
+        hits_b += int(rsb.K_signal[0]) > 0
+        assert rs.K_signal == int(resolved_batch(X[None, :, :12], fold=False).K_signal[0])
+    assert hits_s <= 2 and hits_b <= 2
+
+
+def test_a_screen_with_no_live_channel_resolves_nothing():
+    """After one token, or on a constant screen, no channel has moved: K = 0 and finite energies,
+    as the batch read gives -- not a sign iteration run on an infinite floor."""
+    from entroptics.batch import ResolvedScreenBatch
+    r = np.random.default_rng(0)
+    X = r.standard_normal((3, 50, 8))
+    b = ResolvedScreenBatch(3, 8)
+    b.update(X[:, 0])
+    assert np.array_equal(b.K_signal, [0, 0, 0])
+    assert np.all(np.isfinite(np.asarray(b.energy(X[:, :2]))))
+    Y = X.copy()
+    Y[1] = 2.0
+    b = ResolvedScreenBatch(3, 8, refresh_every=10 ** 9)
+    b.update(Y)
+    assert np.array_equal(b.K_signal, resolved_batch(Y, fold=False).K_signal)
+
+
+def test_a_provider_sees_the_live_spectrum_descending_on_every_path():
+    from entroptics.batch import ResolvedScreen, ResolvedScreenBatch
+    W = np.random.default_rng(1).standard_normal((200, 8))
+    W[:, 3] = 1.0
+    prov = lambda ctx: 0.5 * ctx.spectrum[0]                     # noqa: E731
+    rs = ResolvedScreen(8, null=prov, refresh_every=10 ** 9)
+    rs.update(W)
+    rb = ResolvedScreenBatch(1, 8, null=prov, refresh_every=10 ** 9)
+    rb.update(W[None])
+    want = int(resolved_batch(W[None], fold=False, null=prov).K_signal[0])
+    assert rs.K_signal == int(rb.K_signal[0]) == want == 7
+
+
+def test_forgetting_does_not_depend_on_how_the_stream_is_blocked():
+    from entroptics.batch import ResolvedScreen
+    x = np.random.default_rng(2).standard_normal((1000, 8))
+    out = []
+    for blk in (1, 10):
+        rs = ResolvedScreen(8, forgetting=0.99, refresh_every=10 ** 9)
+        for k in range(0, 1000, blk):
+            rs.update(x[k:k + blk])
+        out.append((rs.T, rs._m.n))
+    assert out[0][0] == out[1][0] and abs(out[0][1] - out[1][1]) < 1e-9 * out[0][1]

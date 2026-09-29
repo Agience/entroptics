@@ -35,8 +35,10 @@ The aperture quantities: fill fractions, etendue, Strehl, the decay and its diff
 | `CertifiedInterval(attenuation: 'float', attenuation_lo: 'float', attenuation_hi: 'float', band: 'float', certified: 'bool') -> None` | class | A certified interval for the attenuation constant alpha (see attenuation_interval()). |
 | `Concentration(intensity: 'float', focus: 'float', resultant: 'float', n: 'int', dim: 'int') -> None` | class | The concentration / focus of a stack of row-vectors (see concentration()). |
 | `Coupling(z: 'float', sign: 'int', strength: 'float', phase: 'float', tightness: 'float', resolved: 'bool', cutoff: 'float', n: 'int') -> None` | class | The MEASURED coupling between two sides that meet on a shared basis (see :func:`coupling`). |
-| `DecayScatter(noise_share: 'float', tail_share: 'float', channels: 'int') -> None` | class | How much of a decay is the record's OWN sampling scatter, measured from the record. |
+| `DecayScatter(noise_share: 'float', tail_share: 'float', channels: 'int', se: 'object' = None) -> None` | class | How much of a decay is the record's OWN sampling scatter, measured from the record. |
 | `DiffractionLimit(a_delta: 'float', xi: 'float', a_delta_abbe: 'float', H: 'float') -> None` | class | The diffraction limit a_delta from a decay profile (the temporal read). |
+| `EmpiricalBernstein(mean: 'float', radius: 'float', n: 'int') -> None` | class | An empirical-Bernstein interval on a mean: ``lo = mean - radius``, ``hi = mean + radius``. |
+| `IntegratedAutocorrelation(tau_int: 'float', window: 'int', tau_se: 'float', sem: 'float', sem_se: 'float', n: 'int') -> None` | class | The integrated autocorrelation time of one chain and the error of its mean, with the statistical error of each. |
 | `LevelEdge(k: 'int', separability: 'float') -> None` | class | Where an ordered profile separates into two populations, and how much of its spread that separation accounts for (see :func:`level_edge`). |
 | `MercerCertificate(a_delta_temporal: 'float', a_delta_spectral: 'float', ratio: 'float', n_dof: 'float') -> None` | class | The model-free Mercer certificate: a_delta read TWO independent ways |
 | `OccupiedModes(k: 'int', margin: 'float', step: 'float') -> None` | class | Where an aperture's occupied modes end and its empty ones begin, with the evidence for it (see :func:`occupied_modes`). |
@@ -48,14 +50,20 @@ The aperture quantities: fill fractions, etendue, Strehl, the decay and its diff
 | `axis_spectrum(W, axis: 'int', mask=None)` | function | Correlation eigenvalues (descending, non-negative) along ``axis`` (0 = ordered/T, 1 = feature/F) -- the per-axis correlation eigenspectrum every axis read is derived from. |
 | `carriage(X, w, *, far: 'float' = 0.05) -> 'Carriage'` | function | How much of a WEIGHTED aggregation the weights actually carry, against the exact null that the weights are re-paired with the frames at random. |
 | `concentration_band(n_rows: 'int', n_cols: 'int', *, spec_norm: 'float' = 1.0, c_conc: 'float' = 2.0) -> 'float'` | function | A-priori spectral-norm band for the EMPIRICAL correlation matrix from ``n_rows`` iid samples of an ``n_cols``-dim vector. |
+| `cross_covariance(X, Y, lags, *, periodic: 'bool' = False, disconnected=<unset>) -> 'np.ndarray'` | function | The lagged covariance of two records along their ordered axis, summed over channels, |
+| `crossing_lag(profile, level: 'float') -> 'float'` | function | Where a decay first falls below ``level``, in lags, interpolated between the bracketing lags. |
 | `diffraction_limit(profile) -> 'DiffractionLimit'` | function | The diffraction limit a_delta from a 1-D decay ``profile`` C(tau), read from the ENTROPY WIDTH of the decay (see the module notes for the Wiener-Khinchin -> OTF -> Abbe chain): |
+| `effective_rates(profile) -> 'np.ndarray'` | function | The lag-local decay rate of a profile, ``m[t] = log(c[t] / c[t+1])`` |
+| `empirical_bernstein(samples, delta: 'float', *, span: 'float') -> 'EmpiricalBernstein'` | function | The empirical-Bernstein interval on the mean of ``samples`` (Maurer & Pontil 2009, Thm 4, the sample-variance form). |
 | `fresnel_number(W, window, mask=None) -> 'float'` | function | FRESNEL number N_F ~ window * phi_T -- the near/far-field (UV/IR) coordinate. |
+| `integrated_autocorrelation(x, *, window='first_nonpositive') -> 'IntegratedAutocorrelation'` | function | The integrated autocorrelation time of a chain ``x`` (1-D, one sample per step) and the standard error of its mean, |
 | `level_edge(weights) -> 'LevelEdge'` | function | The LEVEL EDGE of an ordered profile: the split that best separates it into a high group and a low one, by maximum between-class variance. |
 | `occupied_modes(weights) -> 'OccupiedModes'` | function | The RANK EDGE of an ordered spectrum: how many modes carry power, read from the profile own step rather than from a noise floor. |
 | `rayleigh_shape_factor(profile) -> 'float'` | function | The Rayleigh SHAPE FACTOR g = xi * a_delta (the paper's "shape factor g", Prop 4.5) -- the integral correlation length times the entropy-width diffraction limit. |
 | `resolved_dimension_interval(data: 'np.ndarray', mask: 'np.ndarray \| None' = None, *, band: 'float', sg: "'SpectralOptics \| None'" = None) -> 'CertifiedCount'` | function | Certified interval for the resolved-mode count ``K = #{eigenvalue > edge}`` given an input spectral-norm band ``band`` (an upper bound on ``\|\|C_input - C_true\|\|_2``). |
 | `shape_factor(W, profile, mask=None) -> 'float'` | function | The Abbe RESOLUTION FACTOR c = a_delta / phi_F (Rayleigh / Abbe: resolution = factor / aperture) -- the screen's own "1.22", read per-signal, not a universal constant. |
 | `spectral_batch(frames, *, null=None, far: 'float' = 0.05, seed: 'int' = 0) -> 'list'` | function | Read :func:`spectral_optics` for a BATCH of same-shape 2-D frames in one pass -- the column de-mean and the ``(N, N)`` covariances are formed batched (``(B, T, N)`` -> ``(B, N, N)``), then EACH frame's eigenspectrum + floor + optics is assembled by the SAME :func:`_spectral_from_cov` the per-frame ``spectral_optics`` calls. |
+| `spread_over_chains(values) -> 'float'` | function | The standard error of a mean taken over independent chains, from their spread: ``std(values, ddof=1) / sqrt(n)``. |
 
 ## The screen and its noise floor
 
@@ -97,8 +105,12 @@ Online DMD / Koopman: per-mode decay rates from a fixed-size sufficient statisti
 | `Dynamics(n_features: 'int', *, forgetting: 'float' = 1.0, rank: 'int \| None' = None, far: 'float' = 0.05, null=None)` | class | Streaming dynamical operator (online DMD / Koopman) on a sequence of feature vectors x_t in R^F (or C^F). |
 | `DynamicsState(Pxx: 'object', Pyx: 'object', first: 'object \| None', prev: 'object \| None', forgetting: 'float', n_frames: 'int', n_pairs: 'int', Px: 'object \| None' = None) -> None` | class | The full state of a Dynamics operator -- the complete tensors and counts, sufficient to resume, splice, or reconstruct the operator exactly. |
 | `HankelSpectrum(evals: 'object', isolation: 'float', psd: 'float', n: 'int') -> None` | class | Transfer/Koopman eigenvalues read from a scalar correlation sequence's own moments. |
-| `hankel_spectrum(c, n: 'int', *, rcond: 'float' = 1e-06) -> 'HankelSpectrum'` | function | The transfer-operator spectrum of a real correlation sequence via the reflection-positive moment pencil (a.k.a. |
-| `jackknife(samples, read, *, n_bins: 'int \| None' = None)` | function | Delete-one(-bin) jackknife point estimate and standard error of a scalar ``read``. |
+| `MatrixPencil(evals: 'np.ndarray', vectors: 'np.ndarray', psd: 'float') -> None` | class | The generalised eigenproblem ``C1 v = lambda C0 v`` of a correlator matrix pair. |
+| `ModePowers(mu: 'object', alpha: 'object', beta: 'object', power: 'object', share: 'object') -> None` | class | Each connected mode's power in the decay C(tau) = sum_k P_k mu_k^tau -- the same computation as ``Dynamics.reconstruct_decay`` -- sorted by power, largest first. |
+| `bootstrap(samples, read, *, draws: 'int \| None' = None, rng=0, indices=None) -> 'np.ndarray'` | function | Resampling with replacement: the replicates of ``read`` on resamples of ``samples``. |
+| `hankel_spectrum(c, n: 'int', *, rcond: 'float \| None' = None) -> 'HankelSpectrum'` | function | The transfer-operator spectrum of a real correlation sequence via the reflection-positive moment pencil (a.k.a. |
+| `jackknife(samples, read, *, n_bins: 'int \| None' = None, groups=None)` | function | Delete-one(-group) jackknife point estimate and standard error of a ``read``. |
+| `matrix_pencil(C0, C1, *, rcond: 'float \| None' = None) -> 'MatrixPencil'` | function | The generalised eigenproblem of a measured pair of correlator matrices, ``C1 v = lambda C0 v`` -- the same construction as :func:`hankel_spectrum`, which calls this on its Hankel moments. |
 
 ## The observable lift
 
@@ -139,8 +151,8 @@ The same read over a stack of frames, on CPU or GPU, equal to the per-frame resu
 | name | kind | summary |
 | --- | --- | --- |
 | `ResolvedBatch(K_signal: "'np.ndarray'", sigma_top: "'np.ndarray'", noise_floor: "'np.ndarray'", energy: "'np.ndarray'" = None, projector: "'object'" = None) -> None` | class | One batched resolved-screen read (output of :func:`resolved_batch`). |
-| `ResolvedScreen(F, *, far: 'float' = 0.05, null=None, seed: 'int' = 0, refresh_every: 'int' = 32, warmup: 'int' = 64, whiten: 'bool' = True, forgetting: 'float' = 1.0)` | class | A stateful, resumable resolved screen for a revisited screen (e.g. |
-| `ResolvedScreenBatch(B, F, *, far: 'float' = 0.05, null=None, seed: 'int' = 0, refresh_every: 'int' = 32, warmup: 'int' = 64, whiten: 'bool' = True, forgetting: 'float' = 1.0)` | class | The scalable stateful resolved screen -- ``B`` revisited screens (e.g. |
+| `ResolvedScreen(F, *, far: 'float' = 0.05, null=None, seed: 'int' = 0, refresh_every: 'int' = 32, whiten: 'bool' = True, forgetting: 'float' = 1.0)` | class | A stateful, resumable resolved screen for a revisited screen (e.g. |
+| `ResolvedScreenBatch(B, F, *, far: 'float' = 0.05, null=None, seed: 'int' = 0, refresh_every: 'int' = 32, whiten: 'bool' = True, forgetting: 'float' = 1.0)` | class | The scalable stateful resolved screen -- ``B`` revisited screens (e.g. |
 | `ResourceLimits(threads: 'int \| None' = None, memory_gb: 'float \| None' = None, gpu: 'bool' = True) -> None` | class | A caller's resource envelope for a :func:`resolved_batch` read |
 | `recommend_backend(B: 'int', T: 'int', F: 'int', *, data_on_gpu: 'bool' = False, cuda_available: 'bool \| None' = None) -> 'tuple[str, str]'` | function | Recommend ``"cpu"`` or ``"gpu"`` for a :func:`resolved_batch` read of a ``(B, T, F)`` stack (``F`` the folded feature width), with a one-line reason -- guidance for placing the tensor (``resolved_batch`` itself dispatches on where the data already lives). |
 | `resolved_batch(X, *, fold='auto', far: 'float' = 0.05, null=None, seed: 'int' = 0, energy: 'bool' = False, basis: 'bool' = False, subset=None, device='auto', limits=None, _allow_chunk: 'bool' = True) -> 'ResolvedBatch'` | function | Read a stack ``X: (B, T, F)`` onto the resolved screen |
@@ -179,9 +191,12 @@ numpy or torch, chosen by the input; determinism and working precision.
 
 | name | kind | summary |
 | --- | --- | --- |
+| `Basis(B: 'np.ndarray', centre: 'np.ndarray', scale: 'np.ndarray', power: 'np.ndarray', far: 'float' = 0.05) -> None` | class | ``K`` orthonormal rows ``B`` over ``F`` channels, with the per-channel ``centre`` and noise ``scale`` that define the coordinates they are orthonormal in, the ``power`` (whitened variance per row) of the record they were read from, and that read's ``far``. |
+| `Drift(K: 'int', contrast: 'float', share: 'float', projection: 'object', identified: 'bool' = True) -> None` | class | What a record holds that a basis does not span, read against the existing noise floor. |
 | `KINDS` | value | Built-in immutable sequence. |
+| `RoundTrip(defect: 'float', inverse: 'float', idempotent: 'float', lossless: 'float', captured: 'float') -> None` | class | The write path's certificate on one frame. |
 | `null_providers` | value | null_providers.py |
 
 ---
 
-78 public names. Generated by `python docs/generate_api.py` from `entroptics.__all__`; re-run it when the API changes.
+93 public names. Generated by `python docs/generate_api.py` from `entroptics.__all__`; re-run it when the API changes.

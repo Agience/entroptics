@@ -1,0 +1,13 @@
+{"file": "/home/builder/entroptics-work/rel/research/benchmarks/../../src/entroptics/__init__.py", "source_sha256": "b0f77e48d88dac2f5ae81809db41c9d7b9a393d3c8faf924e58c5e5397f3bde3"}
+{"flat": "8 gaussian channels", "records": 200, "false_alarm_rate": 0.005}
+{"flat": "8 gaussian + 2 constant", "records": 200, "false_alarm_rate": 0.005}
+{"flat": "8 gaussian + 8 constant", "records": 200, "false_alarm_rate": 0.005}
+{"flat": "8 gaussian + 8 poisson(0.2)", "records": 200, "false_alarm_rate": 0.005}
+{"flat": "64 gaussian + 8 constant", "records": 200, "false_alarm_rate": 0.01}
+{"counts": "poisson(3), 8 channels", "records": 120, "mp": 0.0}
+{"counts": "poisson(1), 8 channels", "records": 120, "mp": 0.008333333333333333}
+{"counts": "poisson(3), 32 channels", "records": 120, "mp": 0.0}
+{"counts": "poisson(3) + a planted mode", "records": 40, "detection_mp": 1.0}
+{"pencil": "AR(0.9), T=4000", "derived_default": true, "median_abs_error": {"rcond_1e-6": {"2": 0.00804829101879323, "5": 0.01784832578990775, "8": 0.13139919409731737, "12": 0.3111326928466065}, "default": {"2": 0.00793428980354316, "5": 0.010576641000284992, "8": 0.01574423103702466, "12": 0.03225688264386806}}}
+{"pencil": "two modes 0.95/0.6, T=4000", "derived_default": true, "median_abs_error": {"rcond_1e-6": {"2": 0.012466896254361315, "5": 0.013006350275272194, "8": 0.013567234655498972, "12": 0.19945999775106293}, "default": {"2": 0.012466896254361315, "5": 0.005595951926707199, "8": 0.006563712554736645, "12": 0.010841055188618276}}}
+{"pencil": "AR(0.9), T=500", "derived_default": true, "median_abs_error": {"rcond_1e-6": {"2": 0.014980900596907487, "5": 0.04528551267043318, "8": 0.058143708761170865, "12": 0.08603946202887564}, "default": {"2": 0.015358713566557047, "5": 0.02254513398862157, "8": 0.0228149888564389, "12": 0.03282215699885377}}}

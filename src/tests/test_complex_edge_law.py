@@ -46,26 +46,36 @@ def _binom_two_sided_p(k, n, p):
                if comb(n, j) * p ** j * (1 - p) ** (n - j) <= pk * (1 + 1e-12))
 
 
-def test_complex_screens_deliver_their_stated_false_alarm_level():
-    """The defect this branch exists for: complex FAR was 0.000 at every aspect ratio.
+def _binom_upper_p(k, n, p):
+    """Exact one-sided binomial p-value: the probability of k or more hits at rate p."""
+    from math import comb
+    return sum(comb(n, j) * p ** j * (1 - p) ** (n - j) for j in range(k, n + 1))
 
-    Scored by the EXACT binomial tail against the level that was requested, at a stated
-    false-failure budget -- the same kind of declared level as `far` itself, not a hidden
-    band.  Two earlier versions of this assertion were wrong in opposite directions: hand-
-    picked limits (0.005..0.11), and then a 4-sigma normal band which reaches BELOW ZERO at
-    n=300, p=0.05 and so could not tell 0.000 from 0.05 at all.  The negative control below
-    is what caught the second one."""
+
+def test_complex_screens_hold_their_stated_false_alarm_level():
+    """The defect this branch existed for: complex FAR was 0.000 at every aspect ratio.
+
+    The screen's Gram is a sample correlation matrix, whose top eigenvalue sits below the
+    Tracy-Widom law of the covariance at finite size, real and complex alike, so the read holds
+    its level with room (research/benchmarks/screen_null.py).  Scored by
+    the EXACT binomial tail at a stated false-failure budget: no shape exceeds the level, and
+    the pooled rate is not the 0.000 of the defect."""
     trials, far, budget = 300, 0.05, 1e-4
+    total = 0
     for N, F in ((200, 200), (400, 64), (64, 400), (128, 128)):
         k = int(round(_far(N, F, True, trials) * trials))
-        assert _binom_two_sided_p(k, trials, far) > budget, (N, F, k, trials)
+        assert _binom_upper_p(k, trials, far) > budget, (N, F, k, trials)
+        total += k
+    assert total > 0
 
 
 def test_the_far_test_can_actually_fail():
-    """A test that cannot fail is not a test.  Zero hits out of 300 at a nominal 0.05 -- what
-    the complex path delivered before the fix -- must be rejected overwhelmingly."""
+    """A test that cannot fail is not a test.  A read that fires at over twice its level is rejected
+    overwhelmingly, the nominal outcome passes, and zero hits out of 300 at a nominal 0.05 -- what
+    the complex path delivered before the fix -- is rejected two-sided."""
+    assert _binom_upper_p(33, 300, 0.05) < 1e-4            # 0.11: twice the level and more
+    assert _binom_upper_p(15, 300, 0.05) > 0.05            # the nominal outcome passes
     assert _binom_two_sided_p(0, 300, 0.05) < 1e-6
-    assert _binom_two_sided_p(15, 300, 0.05) > 0.05        # the nominal outcome passes
 
 
 def test_tw2_quantiles_match_chiani_table_3():

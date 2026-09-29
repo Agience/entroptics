@@ -1,9 +1,11 @@
 """
 Experiment 12 -- Scale profile: structure appears at the window that contains it.
 
-Ground truth: a signal whose ordered structure occupies a known extent.  Read through
-an aperture shorter than that extent, nothing resolves; read through one that contains
-it, a mode stands above the floor.  The resolved window of Definition 3.6 must track the planted extent.
+Ground truth: a signal whose ordered structure occupies a known extent.  The resolved window of
+Definition 3.6 -- the shortest window in which a mode stands above the floor -- is read against the
+planted period.  A partial period of a carrier shared across the channels is itself a shared mode,
+so a strong enough carrier can resolve in a window shorter than its period; the table reports where
+that happens rather than assuming it cannot.
 
 Deterministic (fixed seeds).  Re-runnable: `python exp12_scale_profile.py`.
 """
@@ -46,11 +48,13 @@ def run():
         rows)
     rho = C.spearman(PERIODS, res_windows)
     mono = all(a <= b for a, b in zip(res_windows, res_windows[1:]))
-    headline = (f"the resolved window tracks the planted period across {PERIODS} "
-                f"(Spearman {rho:+.2f}, monotone: {mono}); a window shorter than the "
-                f"structure resolves nothing.")
-    concl = ("Structure is reported at the scale that contains it, so the profile locates the "
-             "observation window a signal requires.")
+    shorter = [p for p, w in zip(PERIODS, res_windows) if w < p]
+    headline = (f"the resolved windows for planted periods {PERIODS} are {res_windows} "
+                f"(Spearman {rho:+.2f}, monotone: {mono}); {len(shorter)} of {len(PERIODS)} "
+                f"resolve in a window shorter than their period, since a partial period shared "
+                f"across {F} channels is already a mode at this amplitude.")
+    concl = ("The resolved window rises with the planted extent, and the shortest window that "
+             "resolves is set by the carrier's strength as well as its period.")
     return dict(
         title="12. Scale profile: structure versus observation window",
         setup=(f"a single ordered mode of known period over a unit noise floor, T={T}, F={F}; "

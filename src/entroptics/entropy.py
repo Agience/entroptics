@@ -1,6 +1,6 @@
 ﻿"""
 entropy.py -- Entropy geometry: the matched scale read from a signal's own
-Shannon entropy, plus the fold (fractional resample) and normalize.
+Shannon entropy, plus normalize (the fold itself is ``projection.project``'s partition of whole channels).
 
 This is the entropy side of Entroptics.  The optics side is reads.py / aperture.py;
 the projection side is projection.py.  Standalone: numpy only.
@@ -51,13 +51,6 @@ MAD_SCALE: float = 1.482602218505602   # 1/Phi^{-1}(0.75), float64-exact; derive
 # calibrated -- the same standard as MAD_SCALE, and checked against it in the tests.
 MAD_SCALE_C: float = 1.0 / _math.sqrt(_math.log(2.0))   # 1/sqrt(ln 2), derived here
 
-# MAD_LOGVAR: the asymptotic sampling variance of log(MAD-hat) from N Gaussian samples is
-# ~ MAD_LOGVAR / N.  This is the analytic influence-function variance 1/(16 f(D)^2 D^2) =
-# 1.36046, evaluated at D = Phi^{-1}(3/4) = 0.67449 with f the standard-normal density
-# (equivalently CV(MAD/sigma) = sqrt(1.36046)/sqrt(N) = 1.166/sqrt(N)).  Derived like
-# MAD_SCALE, not fitted; sets the shrinkage of noisy small-N per-channel scales toward the
-# pooled one (see normalize / _shrink_mad).
-MAD_LOGVAR: float = 1.36046
 
 
 def shannon_bits(weights, axis=None):
@@ -221,6 +214,34 @@ def joint_entropies(W_x, W_y, mask_x=None, mask_y=None) -> dict:
 #     to hold a mapping in their head. Each layer keeps its own noun for a frame -- entroptics `W`,
 #     prism `frame`, the aperture `rows` -- and only the subscript is shared, because the noun is
 #     that layer's vocabulary and the subscript is Shannon's.
+def _carried(xp, W, mask=None):
+    """``W`` at the power of two of its largest measured magnitude, in one memory layout.
+
+    The geometry squares the frame, so a frame at 1e155 (1e19 in float32) would overflow and one
+    at 1e-300 underflow; every quantity it reads is a ratio of those squares (an entropy of a
+    normalised marginal, a correlation), so carrying the frame by ``2^-e`` changes none of them --
+    a product by a power of two is exact in binary floating point.  The layout is fixed too: a sum
+    runs in a different order over a column-major array, and a read must not depend on how its
+    input was sliced."""
+    W = _env.asnum(W)
+    if mask is not None:                     # a masked cell is not read: it must not set the carry
+        W = xp.where(xp.as_tensor(mask, device=W.device) if _env.is_torch(xp) else np.asarray(mask, bool),
+                     xp.zeros_like(W), W)
+    if _env.is_torch(xp):
+        W = W.contiguous()
+        A = xp.abs(W)
+        ok = xp.isfinite(A) if mask is None else (xp.isfinite(A) & (mask == False))  # noqa: E712
+        peak = float(_env.to_numpy(xp.max(xp.where(ok, A, xp.zeros_like(A))))) if A.numel() else 0.0
+    else:
+        W = np.ascontiguousarray(W)
+        A = np.abs(W)
+        ok = np.isfinite(A) if mask is None else (np.isfinite(A) & ~np.asarray(mask, bool))
+        peak = float(np.max(np.where(ok, A, 0.0))) if A.size else 0.0
+    if not (peak > 0.0) or not np.isfinite(peak):
+        return W
+    return _pow2(xp, W, np.asarray(-np.frexp(peak)[1]))
+
+
 def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05) -> dict:
     """Read the natural matched scale of a 2-D observation W (T x F) from its own
     Shannon entropy.
@@ -245,8 +266,8 @@ def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05
 
     delta_F is the real (un-floored) matched-scale ratio -- one parameter-free scale derived
     from the signal's own Shannon entropy.  The feature fold (normalize/project)
-    resamples fractionally to round(2^H_F) cells, or takes the exact-integer reshape fast
-    path when the ratio is whole.
+    folds to round(2^H_F) cells, each a run of whole channels (``projection._fold_ortho``), equal
+    runs when the ratio is whole.
 
     Fold policy: only the feature axis folds; the ordered axis is kept at native resolution.
     The ordered reads -- coherence (adjacent-row similarity), the decay/OTF (lag structure),
@@ -265,7 +286,7 @@ def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05
     `geometry -> normalize -> project`: this read is taken on the RAW frame, and only then is
     the frame whitened per channel and folded.  The order is not incidental, because the two
     steps want opposite things -- `geometry` measures how unevenly the raw amplitudes are
-    spread across the channels, and `normalize` divides each channel by its OWN robust scale,
+    spread across the channels, and `normalize` divides each channel by its OWN RMS,
     whose whole job is to remove that unevenness.  Composed the other way, a channel carrying
     only noise is lifted to the amplitude of one carrying the signal and the concentration the
     fold exists to find is gone: measured on a planted line of known width, `n_F` tracks the
@@ -288,6 +309,8 @@ def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05
     """
     xp = _env.ns(W)                      # numpy or torch -- ONE code path (GPU when fed a tensor)
     T, F = int(W.shape[0]), int(W.shape[1])
+    W = _carried(xp, W, mask)           # one layout, at the power of two of its peak: exact, and
+                                        # every read below is a ratio, so nothing it returns moves
 
     P = _env.asnum(xp.abs(W))           # |W| as float (real, complex, negative all fine)
     have = xp.isfinite(P)               # present cells -- reused for the extents below
@@ -359,7 +382,7 @@ def feature_adjacency(W, mask=None) -> float:
     axis is continuous and adjacency carries meaning (a frequency axis, a spatial axis).
     ``~ 0`` the channels are exchangeable -- a nominal axis, where "next to" means nothing.
 
-    This is what licenses a fold.  Folding area-means adjacent cells, which preserves
+    This is what licenses a fold.  Folding merges adjacent cells, which preserves
     information only where the signal varies continuously across them; averaging two unrelated
     channels destroys both.  Continuity and sparsity are independent -- a narrow line on a
     frequency axis is sparse and folds perfectly well, while unordered channels are nominal and
@@ -535,7 +558,7 @@ def fold_width(H_F: float, T: int, F: int, W=None, mask=None, *, far: float = 0.
       concentration  ``H_F < log2(F) - fold_band`` -- there is something to fold at all, and
                      ``2^{H_F}`` says how far.
       continuity     :func:`feature_axis_is_continuous` -- adjacency along the feature axis
-                     means something, so area-meaning neighbouring cells preserves the signal.
+                     means something, so merging neighbouring cells preserves the signal.
                      Sparse-and-nominal (a few active but unrelated channels) is concentrated
                      exactly like sparse-and-continuous and must not fold: averaging unrelated
                      channels destroys both.  ``W=None`` skips the continuity test (callers that
@@ -639,111 +662,125 @@ def macheps(xp, ref) -> float:
     return float(np.finfo(dt if dt.kind in "fc" else _env.rdtype(np)).eps)
 
 
-def resolution_floor(xp, typical, ref):
-    """The scale below which a channel's spread cannot be told from the round-off in computing it.
-
-    A MAD carries the record's units, so no absolute number can test one: the same signal in volts
-    and in microvolts is the same signal, and a fixed cut would call every channel of the second
-    one dead. The test is relative to the frame's OWN pooled scale ``typical``, taken at the
-    resolution the working dtype actually has. Below ``typical * eps`` a channel's variation is
-    smaller than the arithmetic that produced it, so there is no scale there to whiten by.
-
-    Derived on both sides -- the pooled MAD is measured from the frame, the epsilon is read off the
-    array -- so it moves with the data and with the backend, and nothing here is picked."""
-    return typical * macheps(xp, ref)
-
-
-def mad_stats(xp, data, *, complex_median: bool = False):
-    """The per-channel whiten stats of a ``(N, F)`` frame: ``(centre, scale, centred)``.
-
-    The robust centre (per-channel median) and the James-Stein-shrunk MAD scale, in one place
-    because the same pair is wanted from two vantage points and the arithmetic must not differ
-    between them: :func:`normalize` divides a frame by them on the spot, while
-    ``batch._frozen_whiten`` freezes them off a warmup block so a growing stream keeps a stable
-    scale (the median/MAD of a growing axis is not incrementally updatable).
-
-    ``complex_median`` takes the median of the real and imaginary parts separately, which is what
-    a complex frame's centre is.  Backend-agnostic (numpy or torch)."""
-    if complex_median:
-        med = _env.median0(xp, xp.real(data)) + 1j * _env.median0(xp, xp.imag(data))
+def _pow2(xp, a, k):
+    """``a * 2^k`` exactly, ``k`` an integer numpy array broadcastable against ``a``.  Applied as two
+    factors of half the exponent each, so neither factor leaves the float range for any exponent
+    the dtype has; a product by a power of two is exact in binary floating point."""
+    k = np.asarray(k, dtype=np.int64)
+    h1 = k // 2
+    h2 = k - h1
+    rd = a.real.dtype
+    if _env.is_torch(xp):
+        f1 = xp.as_tensor(np.ldexp(1.0, h1), dtype=rd, device=a.device)
+        f2 = xp.as_tensor(np.ldexp(1.0, h2), dtype=rd, device=a.device)
     else:
-        med = _env.median0(xp, data)
-    centred = data - med[None, :]
-    # The MAD -> sigma constant is not one constant.  MAD_SCALE is 1/Phi^{-1}(0.75), the REAL
-    # Gaussian's; for a complex Gaussian |z|^2 ~ Exp(1) so median|z| = sqrt(ln 2) and the constant
-    # is 1/sqrt(ln 2).  Using the real one on complex data inflates the scale by 1.2343x, which is
-    # a 23% error in a number this file otherwise carries to 1e-7.
-    mad = _env.median0(xp, xp.abs(centred)) * (MAD_SCALE_C if complex_median else MAD_SCALE)
-    # `mad > 0` is exact: a MAD is a median of magnitudes, so it is >= 0 and is 0 only when the
-    # channel never moved off its own median.  The pooled scale of the channels that DID move then
-    # sets the floor for the rest -- see resolution_floor.
-    spread = mad > 0
-    typical = float(_env.median1d(xp, mad[spread])) if bool(spread.any()) else 0.0
-    floor = resolution_floor(xp, typical, mad)
-    pos = mad > floor
-    return med, _shrink_mad(xp, mad, pos, typical, int(data.shape[0])), centred
+        f1 = np.ldexp(1.0, h1).astype(rd)
+        f2 = np.ldexp(1.0, h2).astype(rd)
+    return (a * f1) * f2
 
 
-def _shrink_mad(xp, mad, pos, typical: float, N: int):
-    """James-Stein shrinkage of the per-channel MAD toward the pooled scale ``typical``.
+def _whiten_core(xp, data, bad=None, axis=0):
+    """The whitening statistics in carried units: ``(xs, cs, ss, e)`` with ``xs = data * 2^-e``,
+    centre ``cs * 2^e`` and scale ``ss * 2^e`` (see :func:`whiten_stats`), ``e`` the per-channel
+    exponent of the channel's peak magnitude (a numpy integer array, ``axis`` kept).
 
-    The per-channel MAD from ``N`` rows has log-sampling-variance ``V_samp ~
-    MAD_LOGVAR/N``.  Shrink each channel's log-MAD toward ``log(typical)`` by the
-    data-derived weight ``w = max(0, 1 - V_samp/V_obs)`` (``V_obs`` = observed
-    cross-channel variance of the log-MADs, James-Stein / empirical Bayes).  When the
-    channels are homoscedastic (``V_obs ~ V_samp``, e.g. iid noise with few rows)
-    ``w -> 0`` and every channel gets the same pooled scale, so a noisy small-N MAD
-    cannot disperse the whitened screen; when they genuinely differ (``V_obs >>
-    V_samp``) ``w -> 1`` and full per-channel whitening is preserved, each channel
-    equalised to unit noise.  Parameter-free.  Backend-agnostic (numpy or torch)."""
-    if typical <= 0.0:
-        return mad
-    # take the log only where there is a scale to take it of; an unresolvable channel is carried
-    # through as exactly 0.  A substituted value would be propagated by the shrinkage.
-    one = xp.ones_like(mad)
-    lm = xp.log(xp.where(pos, mad, one))
-    lm0 = float(np.log(typical))
-    if int(pos.sum()) > 1:
-        V_obs = float(_env.std0(xp, lm[pos])) ** 2
-        w = 0.0 if V_obs <= 0.0 else max(0.0, min(1.0, 1.0 - (MAD_LOGVAR / max(N, 1)) / V_obs))
+    Each channel is carried by the power of two of its own peak, which is exact, so the sums below
+    neither overflow nor underflow for any level the dtype holds, and ``(data - c) / s`` is
+    ``(xs - cs) / ss`` bit for bit.  ``axis`` is the ordered axis (0 for a ``(T, F)`` frame, 1 for
+    a ``(B, T, F)`` stack); the sums along it run in one fixed order whatever the caller's memory
+    layout -- a pairwise sum and a running sum differ in the last bits, and a read must not depend
+    on how its input was sliced.  ``bad`` (numpy, the frame's shape) leaves cells out of both
+    statistics; only the ``(T, F)`` numpy path takes it."""
+    if _env.is_torch(xp):
+        data = data.contiguous()
+        peak = xp.amax(xp.abs(data), dim=axis, keepdim=True)
+        e = np.frexp(np.asarray(_env.to_numpy(peak), dtype=np.float64))[1]
     else:
-        w = 0.0
-    return xp.where(pos, xp.exp(lm0 + w * (lm - lm0)), xp.zeros_like(mad))
+        data = np.ascontiguousarray(data)
+        mag = np.abs(data) if bad is None else np.where(bad, 0.0, np.abs(data))
+        peak = np.max(mag, axis=axis, keepdims=True) if data.shape[axis] else \
+            np.zeros(tuple(1 if a == axis else n for a, n in enumerate(data.shape)))
+        e = np.frexp(np.asarray(peak, dtype=np.float64))[1]
+    xs = _pow2(xp, data, -e)
+    if bad is None:
+        first = xs[:1] if axis == 0 else xs[:, :1]
+        if _env.is_torch(xp):
+            cs = first + (xs - first).mean(dim=axis, keepdim=True)
+            moved = xp.amax(xp.abs(xs - first), dim=axis, keepdim=True) > 0
+            m = (xp.abs(xs - cs) ** 2).mean(dim=axis, keepdim=True)
+        else:
+            cs = first + (xs - first).mean(axis=axis, keepdims=True)
+            moved = np.max(np.abs(xs - first), axis=axis, keepdims=True) > 0
+            m = (np.abs(xs - cs) ** 2).mean(axis=axis, keepdims=True)
+        # a channel that never moved is its own value exactly (its computed mean need not be)
+        cs = xp.where(moved, cs, first)
+        return xs, cs, xp.where(moved, xp.sqrt(m), xp.zeros_like(m)), e
+    B = np.asarray(bad, bool)
+    n = (~B).sum(axis=0, keepdims=True)                             # measured cells per channel
+    X0 = np.where(B, 0.0, xs)
+    idx = np.argmax(~B, axis=0)[None, :]                             # first measured cell
+    first = np.take_along_axis(X0, idx, axis=0)
+    cs = np.where(n > 0, first + np.where(B, 0.0, X0 - first).sum(axis=0, keepdims=True)
+                  / np.maximum(n, 1), 0.0)
+    moved = np.max(np.where(B, 0.0, np.abs(X0 - first)), axis=0, keepdims=True) > 0
+    m = np.where(B, 0.0, np.abs(X0 - cs) ** 2).sum(axis=0, keepdims=True) / np.maximum(n, 1)
+    cs = np.where(moved | (n == 0), cs, first)
+    return xs, cs, np.where(moved, np.sqrt(m), 0.0), e
+
+
+def whiten_stats(xp, data, bad=None):
+    """The per-channel whitening of a ``(T, F)`` frame: ``(centre, scale)``, each ``(F,)``.
+
+    The screen's floor is the Tracy-Widom edge of a matrix whose cells are i.i.d. with one variance,
+    so the whitening has one job under the null -- each channel i.i.d. in time, the channels
+    independent, each at its own level and of any marginal: centre every column exactly, and bring
+    every column to one scale.
+
+      centre  the channel's MEAN over its measured cells.  The exact column centring: any other
+              centre leaves a per-channel offset, and on skewed noise (exponential, lognormal,
+              counts) those offsets are a rank-one mode that grows with the record.
+      scale   the channel's RMS about that mean.  Every whitened column then has the same norm,
+              and the screen's Gram is a sample correlation matrix, whose largest eigenvalue
+              follows the Tracy-Widom law for i.i.d. entries of any marginal with finite fourth
+              moment (Bao, Pan & Zhou 2012; Pillai & Yin 2012).  The scale is blind to time order,
+              which is what keeps the null's directions exchangeable: a scale read from the order
+              (successive differences) weights a column by its own direction and hands the null a
+              mode along the smooth ones.  The cost is that a channel's own signal is part of its
+              scale, so a signal carried by a few channels is read against their total variance.
+
+    A channel whose measured values are all equal has no scale (``scale = 0``) and its centre is
+    that value exactly: it never moved.  No number stands between "moved" and "never moved", so the
+    rule carries no units.  Masked / non-finite cells are left out of both statistics.  Backend-agnostic on a
+    clean frame; a frame with missing cells takes the numpy path.  Computed in each channel's own
+    carried units (:func:`_whiten_core`), so any level the dtype holds is read."""
+    data = _env.asnum(data)
+    nonfinite = ~xp.isfinite(xp.abs(data))
+    bad = nonfinite if bad is None else (nonfinite | bad)
+    if bool(_env.to_numpy(bad).any()):
+        X = np.asarray(_env.to_numpy(data))
+        xs, cs, ss, e = _whiten_core(np, X, np.asarray(_env.to_numpy(bad), bool))
+        c, s = _pow2(np, cs, e)[0], _pow2(np, ss, e)[0]
+        if _env.is_torch(xp):
+            c = xp.as_tensor(c, device=data.device)
+            s = xp.as_tensor(s, device=data.device)
+        return c, s
+    xs, cs, ss, e = _whiten_core(xp, data)
+    return _pow2(xp, cs, e)[0], _pow2(xp, ss, e)[0]
 
 
 def normalize(W: np.ndarray, mask: np.ndarray | None = None, *, return_stats: bool = False):
-    """Per-channel robust (MAD) whitening at native resolution -- give each feature
-    channel a common, unit noise scale so the screen's noise floor is a clean iid
-    reference.  This is normalization only; the entropy-matched rescaling of both
-    axes is done together by ``projection.project`` (feature and ordered in one call).
+    """Whiten each feature channel onto one noise scale -- :func:`whiten_stats`'s mean centre and
+    RMS scale -- so the screen's floor reads a clean i.i.d. reference.  This is
+    normalization only; the entropy-matched fold is done by ``projection.project``.
 
-    Each channel's median is subtracted and it is divided by MAD * MAD_SCALE
-    (robust sigma).  Because a per-channel MAD from few rows is noisy, each channel's
-    scale is shrunk toward the pooled cross-channel scale by a data-derived weight
-    (``_shrink_mad``): homoscedastic noise pools to one stable scale so a small-N MAD
-    cannot disperse the screen and inflate the floor, while genuinely different
-    channels are each equalised to unit noise.  No analyst-chosen floor.  Masked /
-    non-finite cells are excluded from the statistics and marked missing (NaN), so ``project``'s fold averages only valid cells (a zero
-    would drag the average toward the noise mean).
-
-    Returns a (T, F) array (same shape as W) of whitened channels; masked cells NaN.
-
-    ``return_stats`` additionally returns the map that was applied: ``(whitened, centre,
-    scale)``, each of ``centre`` and ``scale`` a ``(F,)`` per-channel vector, so that
+    Returns a ``(T, F)`` array (same shape as ``W``) of whitened channels; masked / non-finite cells
+    NaN, so the fold never reads them.  ``return_stats`` also returns the map that was applied,
+    ``(whitened, centre, scale)``, each of ``centre`` and ``scale`` an ``(F,)`` vector, so that
 
         W[:, j] ~= whitened[:, j] * scale[j] + centre[j]
 
-    recovers the caller's units.  The whitening is the ONLY step between a caller's frame
-    and the screen that is not a fold, so without these two vectors a screen-side array --
-    ``Aperture.extract``'s ``clean`` is the one that is DATA rather than a measurement --
-    cannot be read back against the frame it came from.  The pair is computed either way;
-    the flag only decides whether it is returned rather than dropped.
-
-    A channel with no resolvable spread comes back with ``scale = 0`` and whitened cells of
-    0, and the map above still holds: that channel's every value IS its centre, which is what
-    was measured.  A ``scale`` of 0 is therefore not a failure to report, and inverting with
-    it is exact.
-    """
+    recovers the caller's units.  A channel that never moved comes back with ``scale = 0`` and
+    whitened cells of 0: its every value is its centre."""
     xp = _env.ns(W)
     is_complex = xp.is_complex(W) if _env.is_torch(xp) else np.iscomplexobj(W)
     data = _env.asnum(W, complex=is_complex)
@@ -751,64 +788,24 @@ def normalize(W: np.ndarray, mask: np.ndarray | None = None, *, return_stats: bo
     if mask is not None:
         bad = bad | mask
     if bool(bad.any()):
-        # robust masked / non-finite path (np.ma, numpy) -- the rare batch-with-gaps case.
-        out, cen, scl = _normalize_masked_np(_env.to_numpy(W), _env.to_numpy(bad))
+        Xn = np.asarray(_env.to_numpy(W)).astype(np.complex128 if is_complex else np.float64)
+        Bn = np.asarray(_env.to_numpy(bad), bool)
+        xs, cs, ss, e = _whiten_core(np, Xn, Bn)
+        with np.errstate(invalid="ignore", divide="ignore"):
+            out = np.where(ss > 0, (xs - cs) / np.where(ss > 0, ss, 1.0), 0.0)
+        out = np.where(Bn, np.nan, out)
+        c, s = _pow2(np, cs, e)[0], _pow2(np, ss, e)[0]
         if _env.is_torch(xp):
             import torch
             out = torch.as_tensor(out, device=W.device)
-            if return_stats:
-                cen = torch.as_tensor(cen, device=W.device)
-                scl = torch.as_tensor(scl, device=W.device)
-        return (out, cen, scl) if return_stats else out
-
-    # clean path -- backend-agnostic (numpy on CPU, torch on its device).
-    med, mad_eff, centered = mad_stats(xp, data, complex_median=is_complex)
-    safe = mad_eff > 0.0          # mad_stats already zeroed anything below the resolution floor
-    zero = _env.zeros(xp, tuple(int(s) for s in data.shape), complex=is_complex,
-                     ref=(data if _env.is_torch(xp) else None))
-    out = xp.where(safe[None, :], centered / xp.where(safe[None, :], mad_eff[None, :], 1.0), zero)
-    return (out, med, mad_eff) if return_stats else out
-
-
-def _normalize_masked_np(W, bad):
-    """Robust per-channel MAD whitening in numpy with a bad-cell mask (np.ma);
-    masked / non-finite cells -> NaN.  The rare batch-with-gaps path (see normalize).
-
-    Returns ``(whitened, centre, scale)`` -- the same triple the clean path returns, so
-    ``normalize(..., return_stats=True)`` reports the map from either branch.  The masked
-    branch computes its own median and its own per-channel-gapped shrinkage, so its stats
-    are not the clean path's and cannot be recovered by re-running that one."""
-    is_complex = np.iscomplexobj(W)
-    data = W.astype(np.complex128 if is_complex else np.float64).copy()
-    mask = np.asarray(bad, bool)
-    data[mask] = 0.0
-    data_ma = np.ma.array(data, mask=mask)
-    if is_complex:
-        med = (np.ma.median(data_ma.real, axis=0, keepdims=True).filled(0.0)
-               + 1j * np.ma.median(data_ma.imag, axis=0, keepdims=True).filled(0.0))
-    else:
-        med = np.ma.median(data_ma, axis=0, keepdims=True).filled(0.0)
-    centered = data - med
-    centered_ma = np.ma.array(centered, mask=mask)
-    mad_raw = (np.ma.median(np.abs(centered_ma), axis=0, keepdims=True).filled(0.0)) * (
-        MAD_SCALE_C if np.iscomplexobj(data) else MAD_SCALE)
-    spread = mad_raw > 0                      # exact -- see mad_stats
-    typical_mad = float(np.median(mad_raw[spread])) if np.any(spread) else 0.0
-    posm = mad_raw > resolution_floor(np, typical_mad, mad_raw)
-    # James-Stein shrink toward the pooled scale (see _shrink_mad), with a per-channel
-    # sampling variance: channel j with n_j valid cells has V_samp = MAD_LOGVAR/n_j, so a
-    # heavily-gapped channel (noisier MAD, fewer valid cells) is shrunk harder toward the
-    # pooled scale -- unlike a single row count, which would under-shrink gapped channels.
-    n_valid = np.maximum((~mask).sum(axis=0, keepdims=True).astype(float), 1.0)   # (1, F)
-    if typical_mad > 0.0 and int(np.count_nonzero(posm)) > 1:
-        lm = np.log(np.where(posm, mad_raw, 1.0)); lm0 = float(np.log(typical_mad))
-        V_obs = float(np.var(lm[posm]))
-        w = (np.zeros_like(mad_raw) if V_obs <= 0.0
-             else np.clip(1.0 - (MAD_LOGVAR / n_valid) / V_obs, 0.0, 1.0))
-        mad_eff = np.where(posm, np.exp(lm0 + w * (lm - lm0)), 0.0)
-    else:
-        mad_eff = np.maximum(mad_raw, typical_mad)
-    safe = mad_eff > 0.0
-    out = np.where(safe, centered / np.where(safe, mad_eff, 1.0), 0.0)
-    out[mask] = np.nan
-    return out, np.asarray(med).reshape(-1), np.asarray(mad_eff).reshape(-1)
+            c = torch.as_tensor(c, device=W.device)
+            s = torch.as_tensor(s, device=W.device)
+        return (out, c, s) if return_stats else out
+    xs, cs, ss, e = _whiten_core(xp, data)
+    safe = ss > 0.0
+    zero = _env.zeros(xp, tuple(int(v) for v in data.shape), complex=is_complex,
+                      ref=(data if _env.is_torch(xp) else None))
+    out = xp.where(safe, (xs - cs) / xp.where(safe, ss, xp.ones_like(ss)), zero)
+    if not return_stats:
+        return out
+    return out, _pow2(xp, cs, e)[0], _pow2(xp, ss, e)[0]

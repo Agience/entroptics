@@ -6,10 +6,12 @@ For each bright burst, three panels at native 16384-channel resolution (left to 
                        fit: Gaussian(s) in time x running-power-law in frequency). 
                        Retreived from the CHIME/FRB Catalog 1 HDF5 files
   2. raw            -- frb/wfall, the dedispersed waterfall cutout (the noisy measurement).
-  3. Entroptics     -- Aperture(raw).extract(): Gavish-Donoho shrinkage against the derived noise
-                       floor + a geometric persistent-structure cut (phi_F > phi_T), a parameter-free
-                       filter of the real data at native resolution.  Keeps the true burst
-                       morphology; removes only the noise / RFI modes.
+  3. Entroptics     -- Aperture(raw).extract(): every channel projected onto the resolved modes'
+                       time profiles (the hard projection of Def 8.4, modes above the derived noise
+                       floor) with a geometric persistent-structure cut (phi_F > phi_T), a
+                       parameter-free and lossless split of the real data at native resolution:
+                       raw = Entroptics + Removed, exactly.  Keeps the burst morphology; what the
+                       resolved modes do not account for is in Removed.
 
     python frb_panel.py <root>   ->  ./frb_panel.png, ./frb_panel.csv
 
@@ -71,24 +73,19 @@ def _load(path):
 
 
 def _entroptics(wf):
-    """Aperture front door on the live channels, mapped back to the full (freq,time) axis.
+    """Aperture front door on the live channels, placed on the full (freq,time) axis.
 
-    The read is taken on the folded screen (Def 2.2), which for these frames is narrower than the
-    live width.  It is mapped back through the fold's own index so the panels share the recorded
-    frequency axis; the mapping invents nothing, since the read is constant across each folded
-    group.  ``n_F`` is returned so the committed table records the width it was read at.
-
-    The FOLD is the only thing undone here.  ``extract`` returns the read in the waterfall's own
-    units, so the panels and the residual are on the recorded amplitude scale with nothing
-    rescaled by hand."""
+    The modes are read on the folded screen (Def 2.2), which for these frames is narrower than the
+    live width; ``n_F`` is returned so the committed table records the width they were read at.
+    ``extract`` carries them back and projects every live channel onto them, so the read comes back
+    at the recorded channel resolution and in the waterfall's own units: nothing is unfolded or
+    rescaled here.  ``idx`` is the fold's channel map, kept for the rebinned reference."""
     W = wf.T                                                     # (time, freq)
     live = np.isfinite(W).all(axis=0) & (np.nanstd(W, axis=0) > 0)
     n_live = int(live.sum())
-    clean, info = Aperture(W[:, live], window=None).extract()    # (time, n_F) on the folded screen
-    n_F = int(clean.shape[1])
+    clean, info = Aperture(W[:, live], window=None).extract()    # (time, n_live), native channels
+    n_F = int(info["screen_shape"][1])
     idx = (np.arange(n_live) * n_F) // n_live
-    if n_F != n_live:                                            # undo the fold for display only
-        clean = clean[:, idx]
     full = np.full_like(wf, np.nan)                              # (freq, time)
     full[live, :] = clean.T
     return full, info, n_live, n_F, live, idx
@@ -103,10 +100,9 @@ def _agreement(wf, read, live, idx, n_F, mod):
 
     Three things would make the comparison unfair, and all three are controlled.  All are scored
     on the SAME cells (the live channels), because the read is undefined on dead ones and scoring
-    each "wherever it is finite" scores them on different pixels.  The read arrives smoothed
-    along frequency -- it is piecewise-constant across each folded group -- while the model is
-    smooth too, so a plain box-average of the RAW to the same width is included: everything the
-    fold does and nothing the read does.
+    each "wherever it is finite" scores them on different pixels.  The model is smooth along
+    frequency, so a plain box-average of the RAW to the width the modes were read at is included
+    as a reference: what smoothing alone does to the agreement, with no read at all.
 
     And every series is scored with its PER-CHANNEL BASELINE REMOVED, because ``model_wfall`` has
     none: its per-channel median is numerically zero (at most 3.9e-06 over these four events,
@@ -226,11 +222,11 @@ def main():
         block = (f"{event}\nDM {dm:.1f}\n\n"
                  f"$K$ = {info['K_signal']}\ncontrast = {info['contrast']:.1f}$\\times$\n"
                  f"$z$ = {info['coherence']:.0f}\nkept {info['n_kept']} / dropped {info['n_dropped']}\n"
-                 f"read at {n_F} of {nlive}")
+                 f"modes read at {n_F} of {nlive}")
         fig.text(0.010, yc, block, va="center", ha="left", fontsize=8.4)
         ax0.set_ylabel("frequency (MHz)", fontsize=9)
 
-    fig.suptitle("Real CHIME/FRB bursts, read untuned at the width the instrument folds to",
+    fig.suptitle("Real CHIME/FRB bursts, read untuned: raw = Entroptics + Removed",
                  fontsize=11, y=0.972)
     fig.text(0.5, 0.008,
              "Data: CHIME/FRB Catalog 1 (CHIME/FRB Collab. 2021, ApJS 257, 59; arXiv:2106.04352), public release CANFAR CISTI.CANFAR/21.0007.",

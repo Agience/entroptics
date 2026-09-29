@@ -62,8 +62,8 @@ def run() -> dict:
         f"four shapes; at snr=0.5 (modes inside the bulk) it drops to "
         f"{acc_by_snr[0.5]:.3f}.  K=0 specificity (no false modes) is {spec:.3f} overall.")
     concl = ("K_signal recovers the planted mode count essentially perfectly once modes "
-             "clear the floor (snr in [1,2]); K=0 specificity is ~0.95, uniform across "
-             "aspect ratios (the derived floor is calibrated flat, with no fitted term).")
+             f"clear the floor (snr in [1,2]); K=0 specificity is {spec:.3f}, across "
+             "aspect ratios (the derived floor has no fitted term).")
 
     return dict(
         title="3. Planted low-rank modes <-> K_signal",

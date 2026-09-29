@@ -9,444 +9,180 @@
 [![DOI](https://img.shields.io/badge/DOI-10.5281%2Fzenodo.21273400-blue)](https://doi.org/10.5281/zenodo.21273400)
 [![Sponsor](https://img.shields.io/badge/Sponsor-Agience-EA4AAA?logo=githubsponsors&logoColor=white)](https://github.com/sponsors/Agience)
 
-## *The universe, in focus.*
+**Find the real structure in noisy multichannel data — how many components it holds, what they are,
+and how fast they decay and oscillate — without choosing a rank or tuning a threshold.**
 
-**Read any 2-D signal as a finite optical aperture whose resolution is fixed by the signal's own entropy.**
-
-Entroptics (entropy + optics) treats a 2-D array `W` of shape `(T, F)`, one **ordered** axis (time / evolution) and one **feature** axis (channels / frequency), as a finite optical aperture. The signal sets its own focus from the entropy of its power marginals. Every quantity Entroptics reports is then a standard optical / wave measurement (étendue, Strehl, OTF, diffraction limit, propagation constant), and the same reads apply to any structured 2-D field: a spectrogram, a waterfall, an embedding stack, a market panel, an image.
-
-It is a small, standalone library, **numpy only** at the core (scipy and torch optional), built entirely from geometry and standard theorems. Parameter-free and domain-agnostic.
-
-## Statement of need
-
-Selecting a rank is a prerequisite for a large class of analyses, and it is usually done with a threshold the analyst picks or a criterion that needs a known noise level. In practice a pipeline then carries a constant that was tuned on one instrument and is silently wrong on another.
-
-Existing tools reflect this. `scikit-learn`'s PCA offers a variance-explained fraction or Minka's MLE; [`optht`](https://github.com/erichson/optht) implements the Gavish–Donoho optimal hard threshold, whose unknown-noise form estimates its scale from the median singular value; and the Wax–Kailath AIC and MDL criteria, standard in array processing, are derived for *n* snapshots of *p* variables with *n* > *p* and are undefined otherwise.
-
-**Entroptics is for people who need a rank, a resolution and a reconstruction from records whose instrument they do not control, or across many substrates at once** — radio-astronomy waterfalls, spectrograms, sensor panels, embedding stacks — where a per-substrate constant is exactly what cannot be supplied. Its distinguishing property is that **no constant in it is fitted to data or calibrated to a substrate**: every fixed number is a derived mathematical quantity (a χ² median, an influence-function variance, a universal Tracy–Widom quantile) or a criterion stated in the documentation. What you supply is an operating point — a false-alarm level α, and the null it is taken against.
-
-Two further needs it addresses are more specific. It handles the wide, short regime (*F* ≫ *T*) that a dedispersed burst cutout or a short multichannel record presents, where the finite-size Tracy–Widom edge holds the top eigenvalue but the asymptotic Marchenko–Pastur edge does not. And it treats a masked or never-measured cell as **absent** throughout, so every read divides by the extent actually observed rather than the array's nominal shape.
-
-The intended audience is researchers and practitioners in signal processing, radio astronomy and applied statistics. For the DMD component specifically, [PyDMD](https://github.com/PyDMD/PyDMD) and [PyKoopman](https://github.com/dynamicslab/pykoopman) are more complete DMD libraries and are the better choice if DMD is your problem; Entroptics differs in maintaining the operator as a fixed sufficient statistic whose read cost is independent of stream length, and in truncating at its own derived floor rather than a supplied tolerance.
+Give Entroptics any 2-D array: time × sensors, a spectrogram, a radio waterfall, a stack of
+embeddings. It tells you how many independent components stand above the noise, separates them from
+the noise exactly, and reads each one's frequency and decay rate. The only setting is the
+false-alarm rate you are willing to accept (5% by default).
 
 ## Install
 
 ```bash
-pip install entroptics              # core (numpy only)
-pip install "entroptics[torch]"     # + GPU / torch tensors
-pip install "entroptics[scipy]"     # + exact MAD constant
+pip install entroptics              # numpy only
+pip install "entroptics[torch]"     # + torch tensors and the GPU
 ```
 
-Requires Python ≥ 3.10 and numpy ≥ 2.0. From a checkout, `pip install -e ".[dev]"` adds pytest,
-scipy and torch; `[figures]` adds matplotlib and h5py, which `research/figures/*.py` needs and the
-library core does not.
+Python ≥ 3.10 and numpy ≥ 2.0. From a checkout, `pip install -e ".[dev]"` adds the test and
+figure dependencies.
 
-## The apparatus
+## Why use it
 
-The optical chain: **a beam passes through an aperture, a lens converts it, and a screen receives it as a projection.**
+- **No knobs.** The number of components is decided against the level pure noise of the same shape
+  would reach, at the false-alarm rate you set.
+- **It finds the right count.** On planted components above the noise, it recovers the true number
+  in all 36 cases tested, where Gavish–Donoho, AIC and MDL get 89–95% right
+  ([validation](research/validation/RESULTS.md), experiment 17).
+- **Calibrated on noise.** On pure noise it reports a component at or below the rate you ask for:
+  Gaussian, Student-t, skewed and count noise, at equal or unequal channel levels
+  ([benchmarks](research/benchmarks/README.md)).
+- **Lossless.** The signal it keeps plus the residual it returns is your input, to floating-point
+  round-off.
+- **Frequency and decay together.** It reads how fast each component dies away as well as its
+  frequency, between the FFT's bins, across gaps in the record, and next to a much stronger tone
+  ([vs the FFT](research/benchmarks/README.md#against-the-fft)).
+- **Messy data welcome.** Missing cells, dead or stuck channels, channels at very different levels,
+  few samples across many channels.
+- **Light and fast.** numpy only; torch (and a GPU) when you pass a tensor. Streams at O(F²) per
+  frame, with state you can save, resume and splice.
 
-A screen is viewed differently from each side, and `Projection` is that view made concrete — one signal on its own entropy-matched grid. 
+## When to reach for it
 
-| | |
-|---|---|
-| **`Aperture`** | What **bounds** a beam, and the read of everything *about* it (read-only). The single front door: batch `Aperture(W)` or streaming `Aperture(window=…).update(frame)`. Per-axis and screen-area reads, the mode spectrum, the diffraction limit, and a streaming dynamical operator for exact decay rates. Its size *is* the beam's étendue. |
-| **`Projection`** | The screen **as one side sees it** — one signal on its own entropy-matched grid (read-only). Folds the signal onto its entropy-matched grid and reads its SVD factorization, coherence, and the modes above the noise floor. A denoised view is the `extract` filter — a projection onto those resolved modes. |
-| **`Lens`** | A system's **conversion**: `entry` (surface → the screen's coordinates) and `inverse` (back out), plus that system's own laws — `energy`, `zero`, `null`. All domain code lives here. |
-| **`Screen`** | Where beams **land**: the surface two or more systems share, and the crossing measurements between them. |
-| **`Beam`** | What a side **carries**: energy, étendue, and the directions it occupies. A bundle of beams — each mode is itself a `Beam`, down to a leaf spanning one direction. |
-
-`ap.projection()` and `Projection(W).aperture()` cross between the single-signal views.
-
-### Which to reach for
-
-| you have | you want | use |
+| you have | you want | call |
 |---|---|---|
-| one signal | its structure, resolution, decay rates, étendue | **`Aperture`** |
-| one signal | its factorization, embedding, or a denoised view | **`Projection`** (or `Aperture.extract`) |
-| two or more systems | them to meet, convert, couple, or trade energy | **`Screen`** |
-| a surface to convert | it mapped onto a screen's coordinates and back | **`Lens`** |
+| a multichannel record | how many real components it holds | `Aperture(W).projection().K_signal` |
+| a noisy record | the signal apart from the noise | `Aperture(W).extract()` |
+| one signal, or a few channels | its frequencies and decay rates | `koopman_lift(x, d).modes()`, `Aperture(W).dynamics().modes()` |
+| a reference recording | a basis to compress later data with, and an alarm when new structure appears | `Aperture(W).basis()`, `.encode`, `.drift` |
+| a live stream | the same reads, updated frame by frame | `Aperture(window=...).update(frame)` |
+| many frames at once | the count for each, in one call (numpy or GPU) | `resolved_batch(X)` |
 
-A `Screen` earns its place only when the question is *between* signals. For one signal it adds a
-lens registration and a placement for a reading `Aperture` or `Projection` gives directly.
+## Examples
 
-### The screen
-
-`N` lenses carry `N` conversions and no pairwise table exists. Every screen read runs on the native, un-folded frame.
-
-```python
-from entroptics import Screen
-
-s = Screen()                                                  # far= sets the reader's level
-s.register("A", entry=to_concept_a, inverse=from_concept_a)   # a lens IS its conversion
-s.register("B", entry=to_concept_b, inverse=from_concept_b,
-           energy=my_energy_law, zero=my_zero, null=my_floor)  # ...and its own laws
-
-concept   = s.place("A", surface_a)      # A.entry   : signal -> concept
-surface_b = s.render("B", concept)       # B.inverse : concept -> B's signal
-```
-
-**Reads between sides**
-
-```python
-s.couple("A", "B")        # the MEASURED signed coupling (exact permutation null); 0 unresolved
-s.coupling("A", "B")      # the evidence behind it: z, sign, strength, phase, tightness
-s.transfer("A", "B")      # absorbed vs transmitted, the signed flux, and which concepts
-                          # the energy condensed into
-s.uncondensed("A", "B")   # what did NOT condense, as a frame ready for another screen
-```
-
-**Reads about one side**
-
-```python
-s.beam("A")               # what it carries: energy, flow, etendue, modes, basis, profile
-s.aperture("A")           # the full optics of that side
-s.directions("A")         # the directions it resolves, against ITS OWN floor
-s.energy("A")             # its energy flow, by ITS OWN law
-```
-
-**Certificates on a lens**
-
-```python
-s.certify("A", surface)   # imaging: does inverse . entry return the surface?
-s.lossless("A", surface)  # the same as a bare relative residual
-s.realise("A", "B")       # what the crossing actually delivers vs the étendue bound
-s.linear("A")             # does the lens pass the beam's modes independently?
-```
-
-**The screen as a whole**
-
-```python
-s.read()                  # the aperture measurement of the joint frame
-s.basis()                 # the shared surface's coordinates
-s.balance()               # each side at its own zero, and whether that zero closes
-s.resolution()            # the settled state; None when nothing clears the floor
-```
-
-The sides need not share an ordered axis — bank transactions run on real time, language on information flow, and they still meet on the shared basis. Only the row-paired reads (`couple`, `joint`, `read`, `resolution`) need a common order, and they say so.
-
-**Who decides what.** A lens declares its own noise (`null`) — a detector and a market count signal differently. The false-alarm level `far` is the reader's, by Neyman–Pearson. The caller owns the loop: these reads are pull, and the handoff in either direction is a plain `(T, D)` frame.
-
-## Quickstart
-
-### Batch
+### How many components, and the signal apart from the noise
 
 ```python
 import numpy as np
 from entroptics import Aperture
 
-W = np.random.default_rng(0).standard_normal((256, 64))
+rng = np.random.default_rng(1)
+signal = rng.standard_normal((600, 3)) @ rng.standard_normal((3, 40))   # 3 sources over 40 sensors
+W = signal + rng.standard_normal((600, 40))                             # plus noise
 
 ap = Aperture(W)
+ap.projection().K_signal                    # 3
+Aperture(rng.standard_normal((600, 40))).projection().K_signal         # 0 on pure noise
 
-o = ap.optics()               # the full intrinsic read, as a dict (33 fields)
-ap.phi, ap.magnification      # fill fraction and its reciprocal (scale duality)
-ap.etendue, ap.space_bandwidth
-ap.strehl                     # dominant-mode coherence
-ap.T, ap.F                    # per-axis AxisRead(H, n, delta, phi, sigma)
-ap.spectral                   # contrast, attenuation α, phase β, dispersion, resolved_power, dominance
-ap.a_delta, ap.correlation_length, ap.mercer   # diffraction limit + certificate
-ap.scale_profile()            # structure vs observation window (resolution vs aperture size)
+clean, info = ap.extract()                  # clean + info["residual"] == W, to 4e-16
+# distance from the true signal: 0.562 for the raw record, 0.184 for clean
 ```
 
-### The projection
+### Frequencies and decay rates of a single signal
 
 ```python
-sc = ap.projection()
-sc.K_signal        # SVD modes standing above the noise floor
-sc.coherence       # ordered-axis structure z-score (deterministic)
-sc.footprints      # per-mode (phi_T, phi_F) localization of each resolved mode
+from entroptics import koopman_lift
+
+t = np.arange(1024)
+y = np.exp(-0.01 * t) * np.cos(2 * np.pi * 0.0402 * t) + 0.02 * np.random.default_rng(2).standard_normal(1024)
+m = koopman_lift(y[:, None], 16).modes()    # modes of the signal's 16-step delay coordinates
+# the strongest mode: frequency 0.04022, decay 0.0102 (true 0.0402, 0.010)
 ```
 
-### The filter
-
-Pull the resolved signal out of the field — a projection onto its own screen modes.
+### Learn a basis once, apply it to later data
 
 ```python
-clean, info = ap.extract()          # the whole frame, since `Aperture(W)` reads all of it
-info["K_signal"]                    # resolved modes above the floor
-info["contrast"]                    # leading singular value over the floor (σ₁ / Φ)
-info["n_kept"], info["n_dropped"]   # transient modes kept, persistent (RFI) modes dropped
+rng = np.random.default_rng(1)
+mix = np.linalg.qr(rng.standard_normal((40, 3)))[0].T     # 3 hidden sources over 40 channels
+gain = np.exp(rng.uniform(-0.5, 0.5, 40))                   # unequal channel noise
+
+def frames(T):
+    return (rng.standard_normal((T, 3)) * [6, 4, 3]) @ mix + gain * rng.standard_normal((T, 40))
+
+b = Aperture(frames(600)).basis()   # b.K, b.F == 3, 40
+later = frames(600)
+
+A = b.encode(later)                  # (600, 3): three numbers per row instead of forty
+resolved, residual = b.split(later)  # resolved + residual == later
+b.drift(later).K                     # 0: the basis still spans what arrives
+new = np.linalg.qr(rng.standard_normal((40, 1)))[0][:, 0]
+b.drift(frames(600) + np.outer(1.5 * rng.standard_normal(600), new)).K   # 1: a new component
 ```
 
-`clean = U · diag(S̃) · Vᴴ` uses the data's own screen modes `U, Vᴴ` and the Gavish–Donoho optimal singular-value shrinkage `S̃` against the derived floor: idempotent, with the persistent narrowband (`φ_F ≤ φ_T`) modes dropped, and exact recovery **where the signal stands well clear of the derived floor**.
-
-That last condition is worth stating plainly, because "noise-free" is not what governs it. The floor is estimated from the data, so a signal that fills the ordered axis contributes to its own floor estimate and is shrunk against it. Measured on an exactly rank-1 signal with **no noise added**, varying only its concentration in time:
-
-| `σ_top / floor` | recovery error |
-|---|---|
-| 1.2e+07 | 5.4e-15 |
-| 1972 | 1.8e-07 |
-| 5.8 | 1.7e-02 |
-| 2.6 | 4.4e-02 |
-
-Recovery is exact once the top mode stands ~10³ above the floor, and the error peaks near the Gavish–Donoho threshold (`σ_top/floor ≈ 2.5`), where up to ~12% of amplitude is attenuated. A sparse burst reaches `σ_top/floor ≈ 5.6e+04` and recovers to 2e-10; a sine filling the whole record reaches only 2.45 and loses 12%. Check `Projection(W).sigma_top / Projection(W).noise_floor` if exactness matters.
-
-**`clean` comes back in `W`'s own units.** The modes are read on the screen, and the screen is `project(normalize(W))` — each channel's median removed and its robust scale divided out — so the projection lands on the whitened grid. That whitening is inverted before `extract` returns, and `info["centre"]` / `info["scale"]` report the map that did it. So `clean` plots against `W`, and:
+### Streaming
 
 ```python
-removed = W - clean          # exactly what the filter discarded: noise and the dropped modes
-```
-
-Two things follow, and both are the definition rather than caveats:
-
-- **The entropy fold is not inverted.** It is what makes the screen the screen, its shape is in `info["screen_shape"]`, and undoing it would synthesise cells that were never resolved.
-- **`clean` is the per-channel baseline plus the resolved modes.** A channel's median is not a mode — `normalize` removes it before the SVD runs, so no cut was ever offered it. A persistent narrowband tone has its *modulation* dropped by the `φ_F ≤ φ_T` cut while its DC level stays in the baseline. Wanting that gone too is baseline estimation, a different read.
-
-### Streaming, resume, splice
-
-Feed frames from the first one and propagate; the exact-rate operator updates online.
-
-```python
-ap = Aperture(window=512)          # window bounds the optics snapshot
-for frame in signal:               # each frame an F-vector (numpy or torch)
+ap = Aperture(window=512)
+for frame in stream:                 # each frame a vector of F channels (numpy or torch)
     ap.update(frame)
 
-ap.rates()                         # long_range (slowest) & short_range (fastest) decay
-ap.predict(frame)                  # one-step forecast A·x (A = ap.propagator_full())
-
-s = ap.state()                     # export the full operator state …
-ap2 = Aperture.from_state(s)       # … and resume exactly (bit-for-bit)
-
-whole = a.splice(b)                # a, b: two Aperture streams → the concatenated-stream operator (exact at forgetting=1)
+ap.rates()                           # the slowest and fastest decay in the stream
+s = ap.state()                       # save, and later resume exactly with Aperture.from_state(s)
 ```
 
-## What it reads
+Every output shown above is what [`readme_examples.py`](research/benchmarks/readme_examples.py)
+prints ([output](research/benchmarks/readme_examples.txt)).
 
-All reads are intrinsic — derived from `W` alone — and each is tied to a standard theorem.
+## Statement of need
 
-### One screen, in focus
+Choosing how many components a record holds is the first step of a large class of analyses. It is
+usually done with a rank or threshold the analyst picks, or with a criterion that needs a known
+noise level, so a pipeline carries a constant tuned on one instrument and silently wrong on another.
+Entroptics is for records whose instrument you do not control, or many substrates at once:
+radio-astronomy waterfalls, spectrograms, sensor panels, embedding stacks. It is measured against
+the standard selectors (the Gavish–Donoho optimal threshold, Wax–Kailath AIC and MDL) in the
+[validation](research/validation/RESULTS.md). For dynamic mode
+decomposition as such, [PyDMD](https://github.com/PyDMD/PyDMD) and
+[PyKoopman](https://github.com/dynamicslab/pykoopman) are more complete.
 
-| | reads | what it says |
-|---|---|---|
-| **Scale** | `ap.phi`, `ap.magnification` = `1/phi` | the fill fraction and its reciprocal reach |
-| | `ap.H_T`/`H_F`, `n_T`/`n_F`, `delta_T`/`delta_F` | per-axis entropy, matched grid width, cell scale |
-| **Aperture area** | `ap.etendue` = `phi_F · phi_T` | the bounded 2-D area the screen carries |
-| | `ap.space_bandwidth` = `n_F · n_T` | degrees of freedom it *can* carry — a capacity |
-| **Coherence** | `ap.strehl`, `ap.phi_T`/`phi_F`, `ap.sigma_T`/`sigma_F` | dominant-mode power fraction, per-axis fills, leading singular values |
-| | `Projection.coherence` | closed-form z against the exact row-permutation null |
-| **Concentration** | `ap.concentration` | `intensity` (σ₁²), `focus` (axial), `resultant` (directional) |
+## Know its limits
 
-`space_bandwidth` is a capacity, not a content: an unfolded screen reports `T·F` whatever sits on
-it. What the screen actually fills is `ap.etendue * ap.space_bandwidth` — 1 for a single mode on
-an **unfolded** screen, rising with the modes present. The 1 is the large-`T` limit: measured on a
-rank-1 signal it reads 1.020 at `T = 256`, 1.012 at 512 and 1.006 at 1024.
+- **Noise correlated across channels or along time** (a common-mode drift, 1/f noise) is structure
+  as far as the count is concerned. Remove it, or read a noise reference, first.
+- **A component has to span channels.** A component confined to about `(1 + √(F/T))²` channels or
+  fewer is not counted, however strong: two channels when records are long, nine for 64 samples
+  across 256 channels.
+- **Very heavy right tails** (lognormal, Pareto noise) exceed the false-alarm rate you set, most on
+  long records.
+- **A weak component beside a dominant one** is counted against the whole record's energy, and can
+  fall under the line.
 
-**When the feature axis folds, the product reads `F_eff / F` of that, and the shortfall is
-informative rather than an error.** `space_bandwidth` is the *unfolded* capacity while `etendue`
-is measured on the screen, so a fold dilutes the product by exactly its own ratio. Measured over
-200 rank-1 draws with random channel weights: 187 did not fold and read 1.0197; the 13 that did
-read 0.381, 0.509 and 0.637 at `F_eff` of 3, 4 and 5 — each exactly `F_eff/F` of 1.0197, recovering
-1.017–1.020 when multiplied back. So a product well below 1 on a single-mode signal says the
-screen folded, and `ap.projection().F_eff` says by how much.
+## How it works
 
-### The mode spectrum
+Entroptics treats the array as a finite optical aperture. The signal's own entropy sets the
+resolution it is read at; the count of components is taken against the Tracy–Widom edge — the
+universal law for the largest eigenvalue of noise — at your false-alarm rate; and the dynamics are
+read as an operator whose modes carry each component's frequency, decay and power. Every read is a
+classical result (Wiener–Khinchin, Abbe/Rayleigh, Tracy–Widom, Koopman) specialised to finite data,
+and the governing lemmas are machine-checked in Lean 4.
 
-`ap.spectral` reads the correlation spectrum against a derived noise floor:
+## Reproducing the numbers
 
-- `contrast`, `top_share`, `resolved_modes`, `noise_floor`, `resolved_power` (summed eigenvalue
-  excess above the floor), `dominance` = `(λ₁−1)/(F−1)`.
-- the propagation constant `γ = α + iβ` — attenuation `α`, phase `β` — and `dispersion`.
-- `ap.attenuation_interval(band)` returns a Weyl-certified interval for `α`.
-
-The floor comes from a `null=` provider (`entroptics.null_providers`): the derived
-Marchenko–Pastur / Johnstone default `mp` when `null` is unset, or the deterministic
-data-derived Tukey fence via `null=null_providers.robust`.
-
-### The diffraction limit
-
-- `ap.decay` — the OTF, an FFT-free autocorrelation.
-- `ap.a_delta` (entropy width `1/2^{H(C²)}`) and `ap.correlation_length` (the decay length ξ).
-- `ap.mercer` — a model-free temporal-vs-spectral cross-check.
-- `ap.rayleigh_shape_factor` (`g = xi * a_delta`), `ap.fresnel_number(window)`, `ap.shape_factor`
-  (the Abbe factor `a_delta / phi_F`).
-- `ap.decay_scatter` — the decay is a sum over per-channel autocovariances, so the channels are
-  replicates of it and their disagreement measures the read's own uncertainty. No null, nothing
-  subtracted. `noise_share` far below `tail_share` means the correlation is structure the channels
-  agree on; the two converging means the width is scatter, and `a_delta` overstates the correlation
-  length. The cure is more channels.
-
-### How it moves, and at what scale
-
-- **Dynamics**, `Aperture.rates()`: exact per-mode decay rates `α_k = −log|μ_k|` and frequencies
-  `β_k = arg(μ_k)` from a streaming online-DMD / Koopman operator; splice-able and resumable.
-  `Aperture.dominant_decay_rate` reads the slowest mode's rate `α_1 = −log|μ_1|` straight off that
-  spectrum, isolating that one mode. A lag-window read returns a blend of all of them. `Aperture.propagator_full()` and
-  `predict(x)` expose and apply the full one-step operator `A = P_yx · P_xx⁺`.
-- **Multi-scale**, `ap.scale_profile()`: structure as a function of observation window —
-  `K_signal`, `coherence`, `a_delta`, `phi_T` per window, plus `resolved_window` and
-  `dominant_window` (in ordered-axis cells).
-- **Sweep**, `Aperture.sweep()`: fix the aperture to a bounded capacity and sweep it where the
-  coherence gate finds structure; noise-only patches are skipped. Returns per-band `span`, entropy
-  `width` and tail decay `tau`, in dimensionless window samples.
-
-### Recovering the signal
-
-- **Projection**, `Projection` (`footprints`, `significance`, `read`), and `Aperture.tensor()` — a
-  delay-embedded Tucker/HOSVD exposing within-window fine structure the averaged screen loses.
-- **Filter**, `Aperture.extract()`: project the field onto its own resolved screen modes with
-  Gavish–Donoho optimal shrinkage against the derived floor, dropping persistent narrowband
-  (`phi_F <= phi_T`) interference. Returns `(clean, info)`; `clean` is a linear projection of the
-  measured data — it synthesises nothing — and `info` carries `K_signal`, `contrast`, `coherence`
-  and the kept/dropped modes. `clean` comes back in the **input's own units** — the per-channel
-  whitening the modes are read through is inverted before returning.
-
-### Other shapes of input
-
-- **N-D fields**, `entroptics.fields`: `slabs(field, plane_axes)` and
-  `over_planes(field, plane_axes, read=, reduce=)` reduce a higher-D field to the 2-D screen
-  **while keeping each plane intact** (what feature reads need, since they use within-plane
-  correlation); `pool(field, ordered_axis)` flattens sites as samples, which is what ordered reads
-  need.
-- **A stack at once**, `resolved_batch(X)` for `X: (B, T, F)`: the same resolved read over many
-  frames, backend-optimal — numpy on the CPU (bit-identical to a per-frame `Projection`), a torch
-  tensor on its device. Two cost tiers: the cheap survey gate (`K_signal`, `sigma_top`,
-  `noise_floor`) always, the resolved `basis` and per-row `energy` on demand and only for frames
-  that cleared the gate. `ResolvedScreen` / `ResolvedScreenBatch` are the stateful siblings for a
-  screen you revisit (an LLM KV head across turns): append rows, refresh the basis lazily, resume
-  from `state()`. `ResourceLimits` bounds threads, memory and GPU use; chunking is
-  output-transparent.
-- **Koopman lift**, `entroptics.lift`: `delay_embed(W, d)` builds Takens/Hankel coordinates
-  `(T,F) → (T-d+1, d·F)`, and `koopman_lift(W, d)` fits the operator there — the path from a
-  nonlinear or near-orthogonal trajectory to a linear one. An oscillator that resolves no modes
-  raw resolves them after the lift.
-
-### Records that are not a 2-D field
-
-- **Spectral proximity**, `entroptics.proximity`: a magnitude-carrying, width-free digest of a
-  frame's spectrum (`mp_spectrum`, `spectral_distance`, `bulk_edge`, `effective_width`) and a
-  probe over a set of them (`SpectrumProbe`).
-- **Symbol sequences**, `entroptics.sequence`: the ordered-axis reads on a symbol stream —
-  `entropy_rate`, `block_entropies`, `lempel_ziv_rate`, `redundancy_rate`, `effective_length`,
-  `surrogate_test`.
-
-## Real data: fast radio bursts
-
-`research/figures/frb_panel.py` applies the plain library, with zero tuning, to the public CHIME/FRB Catalog 1 waterfalls at native 16384-channel resolution. It supplies only observer facts — dead channels are **dropped, never zero-filled** — and passes the surviving channels to the aperture front door. The catalog waterfalls arrive already dedispersed; Entroptics adds no dedispersion, no derotation, and no domain physics of its own.
-
-```python
-from entroptics import Aperture
-
-live = np.isfinite(W).all(axis=0) & (np.nanstd(W, axis=0) > 0)   # observer fact: the RFI mask
-clean, info = Aperture(W[:, live], window=None).extract()        # everything downstream is the library
-info["K_signal"], info["contrast"], info["coherence"]
-```
-
-`extract` is the Gavish-Donoho projection onto the resolved modes with the `φ_F > φ_T` persistent-structure cut: the noise sea is attenuated and persistent narrowband interference removed, with the burst morphology intact. The read comes back on the waterfall's own amplitude scale, so the "Removed" panel is a plain `wf - clean` with nothing rescaled by hand. The per-burst reads behind the figure are in [`research/figures/frb_panel.csv`](research/figures/frb_panel.csv), and the method is §12.1 of [the paper](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf).
-
-## Why it's principled
-
-Every read is a classical result specialised to finite, discrete data. The backbone: a signal's autocorrelation *is* its optical transfer function (**Wiener–Khinchin** → **Fourier optics**), so the diffraction limit is one over that OTF's bandwidth (**Abbe/Rayleigh**). The full derivation, and the Lean-checked lemmas, are in the [paper](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf).
-
-## Backends & determinism
-
-- **One code path, numpy or torch.** Feed a numpy array → runs on CPU; feed a torch tensor → runs on its device (GPU), staying on-device; torch is imported lazily only when a tensor appears.
-- **Deterministic.** The coherence is a closed-form permutation-null z-score, so results are reproducible and bit-identical across numpy and torch (to floating-point round-off).
-- **Complex-safe** end to end. Reads take the record as given and infer nothing from it — whether you hold a field or an intensity is a fact about your instrument, not about the sign of your samples. For the incoherent read of an amplitude record, pass the intensity (`decay(W ** 2)`). `Aperture.sweep()` finds and reads its bands on a field like any other record — `span`, `coherence`, `contrast`, `K`, `noise_floor`, `phi_T/F` — and the span takes you back to the original vectors, complex intact. Its `peak`, `width` and `tau_decay` come off a per-sample brightness, which a field does not carry, so those three return `-1`/`NaN`; pass `abs(W)` or `abs(W)**2` when you want them.
-
-## Axis convention
-
-Every input `W` has shape `(T, F)`:
-
-- axis-0 (rows, `_T`) is the **ordered** / evolution axis, "time" is a *role*, not literal physics;
-- axis-1 (cols, `_F`) is the **feature** / channel axis, "frequency" is likewise a role.
-
-Any 2-D array with one ordered axis works.
-
-## Absent data
-
-Mark what was never observed — either as `NaN` in `W`, or with a boolean `mask` where `True` means
-*not observed*. The two say the same thing, and a mask works over a value that is finite and wrong
-(a saturated sample, an RFI-flagged channel that still holds a reading):
-
-```python
-ap = Aperture(W, mask=flags)        # flags[t, f] True  ->  that cell was not observed
-```
-
-Every read then divides by the **measured extent** — the rows and columns that carry at least one
-observation — not by the array's shape. A read taken through a mask equals the same frame with
-those channels deleted, to floating point.
-
-Absence is not an observation of zero. Substituting `0` for an unobserved channel is a different
-frame: zero is a real reading of no power, it belongs in the extent, and it widens the axis the
-signal is scored against. Mark it absent and the reads are unmoved; fill it with zeros and they move, correctly.
-
-## Per-channel structure
-
-Multiplying the whole record by a constant changes nothing. Every **dimensionless** read — a
-z-score, a share, a mode count, a correlation, a focus — is identical from `1e+30` down to
-`1e-140`, and every **dimensioned** one scales exactly as its own dimension (a noise floor as
-`c`, a variance as `c²`). A constant baseline changes nothing either; the reads are taken on the
-centred block.
-
-That is a property test rather than a claim: [`src/tests/test_scale_invariance.py`](src/tests/test_scale_invariance.py)
-sweeps both halves, and carries a control that each read still separates structure from noise —
-a read that returned a constant would be trivially scale-free and useless, so invariance alone
-is not enough to pass.
-
-*Per-channel* structure is different. A channel with ten times another channel's gain is, to the
-instrument, a channel carrying ten times the power — there is nothing in the data that says whether
-that is the sky or the amplifier. So the reads describe it, because it is part of the frame they
-were handed. `phi_F` is the exception: the feature-axis correlation has unit diagonal, so it
-rescales every channel by construction.
-
-If per-channel gain or baseline is instrumental, remove it before you read:
-
-```python
-from entroptics.entropy import normalize
-ap = Aperture(normalize(W))          # per-channel median removed, robust scale equalised
-```
-
-## Tests
-
-```bash
-pip install -e ".[dev]"
-pytest
-```
-
-The suite (`src/tests/`) pins the full optics read as a golden contract, checks numpy↔torch parity, the mathematical invariants (étendue = φ_F·φ_T, exact decay-rate recovery, PSD autocovariance, axial-vs-directional concentration, the read-side filter's exact projection and idempotence), round-trips (tensor reconstruct, factor pack/unpack), determinism, and degenerate-input robustness.
-
-Four files pin the claims this README makes about *how* the reads behave, each with a control that
-makes it able to fail:
-
-| file | what it holds |
-|---|---|
-| `test_scale_invariance.py` | dimensionless reads identical across `1e+30`–`1e-140`; dimensioned ones exact to `c^dim`; and every read must still separate structure from noise, so invariance alone cannot pass |
-| `test_fold_band_calibration.py` | `fold_band`'s stated false-fold rate on pure noise, and the power that must survive it — the significance and sufficiency terms are separated, because calibration alone cannot test the second |
-| `test_coupling_reduces_to_pearson.py` | at one shared coordinate `coupling.strength` **is** Pearson's r and `z` is `r√(T−1)`; what the read adds there is the decision layer, and that is asserted too |
-| `test_resolved_modes_is_not_a_rank.py` | `resolved_modes` counts modes above a **noise** floor — it is not a matrix rank and not a model-order selector; pinned so nothing is built on it expecting one |
-
-## Formal certification
-
-The governing lemmas of the theory ([`research/PAPER.pdf`](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf)) are **machine-checked in Lean 4 / Mathlib** ([`research/lean/`](https://github.com/Agience/entroptics/tree/main/research/lean), 44 theorems): the fill-fraction and Strehl bounds, positive-semidefiniteness of the biased autocovariance (peak-at-zero-lag OTF), the exact permutation-null mean of the coherence, the Weyl-certified attenuation interval, axial≠directional concentration, and exact decay-rate recovery + additive splicing. `lake build` compiles with **no `sorry`**, resting only on Mathlib's standard axioms.
+The tests, the validation suite and every benchmark generate their inputs from a fixed seed, with no
+download: `pytest`, `python research/validation/run_all.py`, and the scripts in
+[`research/benchmarks/`](research/benchmarks/README.md). The two FRB figure routines read the public
+CHIME/FRB Catalog 1 waterfalls ([how to fetch them](research/supplemental/frb/README.md)).
 
 ## Documentation
 
-- **[API reference](docs/API.md)** — every public name, with its signature and what it does. Generated from the library itself by `python docs/generate_api.py`, so it cannot drift from the code.
-- **[`research/PAPER.pdf`](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf)** — the paper: definitions, proofs, and the provenance of every constant (§11.1). Typeset, with the mathematics rendered. Same text in Markdown: [`research/PAPER.md`](research/PAPER.md).
-- **[`research/validation/RESULTS.md`](research/validation/RESULTS.md)** — what each read recovers against a planted ground truth.
-- **[`research/supplemental/`](research/supplemental/)** — the applications and statistics papers, each with a `reproduce.py` and a `verify.py`.
+- **[The guide](docs/GUIDE.md):** every read and what it means, the conventions for inputs and
+  missing data, and what the library guarantees.
+- **[Benchmarks](research/benchmarks/README.md):** false-alarm rates, the comparison with the FFT,
+  and costs, each from a committed script.
+- **The paper** — [Markdown](research/PAPER.md) · [HTML](research/PAPER.html) ·
+  [PDF](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf): the derivations, and
+  where every constant comes from.
+- **[API reference](docs/API.md)** and the **[CHANGELOG](CHANGELOG.md)**.
+- **[Validation](research/validation/RESULTS.md):** what each read recovers against a planted truth.
 
 ## Getting help
 
-- **Questions and bug reports:** open an issue at [github.com/Agience/entroptics/issues](https://github.com/Agience/entroptics/issues). A report is most useful with the array shape, the backend (numpy or torch), and the read you called.
-- **Security issues:** email **connect@agience.ai** rather than opening a public issue.
-- **Contributions:** see [CONTRIBUTING.md](CONTRIBUTING.md).
-- **Conduct:** participation is governed by the [Code of Conduct](CODE_OF_CONDUCT.md).
-
-## What runs without a download
-
-The library, its test suite and the full validation suite need **no external data** — every input is generated from a fixed seed:
-
-```bash
-pytest                                    # 675 tests
-python research/validation/run_all.py     # 19 experiments -> RESULTS.md
-```
-
-Two figure routines are the exception. `research/figures/frb_panel.py` and `frb_spotcheck.py` read the **CHIME/FRB Catalog 1 waterfalls**, a separate public download from the CANFAR archive (CISTI.CANFAR/21.0007) that is not part of this repository and is far too large to ship. They refuse, with instructions, if it is not configured — see [`research/supplemental/frb/README.md`](research/supplemental/frb/README.md) for the fetch and the one line of configuration. Everything else in the repository runs from a clean checkout.
-
-## Contributing
-
-Bug reports, validation experiments, backend-parity fixes, and new reads (with their theorems) are welcome — see [CONTRIBUTING.md](CONTRIBUTING.md). The short version: the library is parameter-free, deterministic, and numpy-only at the core, and contributions must keep it that way — every constant needs a provenance, every claim needs a theorem, and the golden-contract tests must stay bit-identical across backends.
+- **Questions and bug reports:** open an issue at
+  [github.com/Agience/entroptics/issues](https://github.com/Agience/entroptics/issues), with the array
+  shape, the backend and the read you called.
+- **Security issues:** email **connect@agience.ai**.
+- **Contributions:** see [CONTRIBUTING.md](CONTRIBUTING.md); participation is governed by the
+  [Code of Conduct](CODE_OF_CONDUCT.md).
 
 ## Star history
 
@@ -457,8 +193,6 @@ Bug reports, validation experiments, backend-parity fixes, and new reads (with t
    <img alt="Star History Chart" src="https://api.star-history.com/chart?repos=Agience/entroptics&type=date&legend=top-left&sealed_token=DRxmKEUu-jgYDGrGi5K7vVFwrww1YJiMFU2_nv85yGjwPbsvhmTkOSlVv2aQQGkVDHXd2jlGQnjZDHbYYOXwfObR6iE9wTeV5jyplb30xZ3GFdD1ebDZIAonKgIvYBZ5vH8Z7T-2lSgsWrktUeeoPUdPPRELXBa4LY0ILQatLXzOLeWpq4dU5eVFXTcH" />
  </picture>
 </a>
-
-Security issues: email **connect@agience.ai** rather than opening a public issue.
 
 Licensed under Apache-2.0 — see [`LICENSE.md`](https://github.com/Agience/entroptics/blob/main/LICENSE.md),
 [`NOTICE`](https://github.com/Agience/entroptics/blob/main/NOTICE), [`PATENTS.md`](https://github.com/Agience/entroptics/blob/main/PATENTS.md)

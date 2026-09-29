@@ -45,7 +45,8 @@ from .entropy import geometry, live_view
 from .projection import (Projection, ProjectionRead, read, footprints,
                      mode_significance, ModeSignificance)
 from .extract import filter_projection
-from .dynamics import Dynamics, DecayRates, DynamicsState, dynamics as _dynamics
+from .basis import Basis, RoundTrip, Drift, basis_of
+from .dynamics import Dynamics, DecayRates, ModePowers, DynamicsState, dynamics as _dynamics
 from . import reads
 from .reads import (
     phi, magnification, scale_duality, duality_of, occupied_modes, OccupiedModes,
@@ -54,9 +55,10 @@ from .reads import (
     etendue, strehl, space_bandwidth,
     spectral_optics, SpectralOptics, principal_directions, attenuation_interval, CertifiedInterval,
     resolved_dimension_interval, CertifiedCount, SpectralAccumulator,
-    concentration_band, concentration, Concentration,
+    concentration_band, concentration, Concentration, empirical_bernstein, EmpiricalBernstein,
     Coupling,
-    decay, diffraction_limit, DiffractionLimit, decay_scatter, DecayScatter,
+    decay, diffraction_limit, DiffractionLimit, decay_scatter, DecayScatter, effective_rates, crossing_lag,
+    cross_covariance, integrated_autocorrelation, IntegratedAutocorrelation, spread_over_chains,
     mercer_certificate, MercerCertificate,
     rayleigh_shape_factor, fresnel_number, shape_factor, optics,
     scale_profile, ScaleProfile,
@@ -699,28 +701,36 @@ class Aperture:
                       null=null if null is not None else self._effective_null("projection"),
                       seed=self._seed if seed is None else int(seed))   # native backend
 
-    def extract(self, *, far: float | None = None, reject_persistent: bool = True,
-                shrink: bool = True):
-        """The read-side FILTER, through the front door: pull the resolved signal out of the
-        aperture's window at NATIVE resolution.  Projects the data onto the projection's modes above
-        the derived floor whose footprint is transient-like -- ``reject_persistent`` drops the
-        phi_F <= phi_T persistent modes (narrowband RFI); ``shrink`` applies Gavish & Donoho (2017)
-        optimal singular-value shrinkage against the derived floor (else a hard floor cut).
+    def extract(self, *, far: float | None = None, reject_persistent: bool = True):
+        """The read-side FILTER, through the front door: split the aperture's window into its
+        resolved modes and the residual, on ``W``'s own grid, in ``W``'s own units.
 
-        Nothing is synthesised: ``clean`` is a linear PROJECTION of the MEASURED data onto its own
-        resolved modes (``clean = U diag(Sd) Vt``, U/Vt from the data's own projection).  Returns
-        ``(clean, info)`` -- ``info`` carries K_signal, contrast, and the kept/dropped mode indices
-        with their phi_T/phi_F.  The filter itself is :func:`extract.filter_projection`, which takes
-        the projection this aperture already holds.
-
-        ``clean`` comes back in ``W``'s OWN units.  The modes are read on the whitened screen, so
-        the projection lands there; the per-channel whitening is undone before returning, and the
-        ``centre`` / ``scale`` that did it are reported in ``info``.  The entropy fold is a
-        different matter and is left in place -- it is what makes the screen the screen, its shape
-        is in ``info["screen_shape"]``, and inverting it would synthesise cells that were never
-        resolved."""
+        The hard projection onto the resolved modes (Def 8.4): every channel projected onto the
+        resolved modes' ordered-axis profiles, read on the screen and carried back to the data's grid
+        by the fold's adjoint.  It is an orthogonal projection: nothing is lost (``clean + info["residual"] == W`` wherever ``W``
+        was measured), nothing is synthesised, and the singular values are never altered.
+        ``reject_persistent`` moves the phi_F <= phi_T persistent modes (narrowband RFI) into the
+        residual.  Returns ``(clean, info)``; ``info`` carries the residual, K_signal, contrast,
+        the kept/dropped modes with their phi_T/phi_F, and the whitening's per-channel ``centre``
+        and ``scale``.  The filter itself is :func:`extract.filter_projection`, which takes the
+        projection this aperture already holds."""
         return filter_projection(self.projection(far=far),           # `far=None` -> self.far
-                                 reject_persistent=reject_persistent, shrink=shrink)
+                                 reject_persistent=reject_persistent)
+
+    def basis(self, modes=None, *, far: float | None = None) -> Basis:
+        """The WRITE PATH, through the front door: the resolved modes as an exact encode / decode
+        pair over ``W``'s channels -- the record's Karhunen-Loeve transform, restricted to what its
+        read resolved.
+
+        ``basis.encode(frame)`` gives each row's ``K`` mode coordinates, ``basis.decode(A)`` the
+        frame they describe, in ``W``'s units; ``basis.split(frame)`` returns ``(resolved,
+        residual)`` with ``resolved + residual == frame``.  Each row is coded on its own, so the
+        basis can be shared ahead of time and applied to later frames; ``basis.drift(frame)`` reads,
+        against the existing floor, what a later frame holds that the basis does not span, and
+        ``basis.certify(frame)`` measures the round trip.  ``modes`` selects resolved screen modes
+        by index (default: all ``K_signal``); the cut is the caller's, stated in the call.  See
+        :class:`basis.Basis`."""
+        return basis_of(self.projection(far=far), modes)
 
 
 
@@ -807,7 +817,8 @@ class Aperture:
 
         instead to BATCH the fold across frames (:func:`projection.read_batch`).
 
-        :func:`projection.probe_signal` is an SVD-free variant (still folds; conservative)."""
+        :func:`projection.probe_signal` is the same gate on a raw frame, stopping at the singular
+        values."""
 
         return bool(self.projection(far=far, null=null).has_signal)   # `far=None` -> self.far
 
@@ -907,18 +918,20 @@ __all__ = [
     # spectrum / propagation
     "SpectralOptics",
     "attenuation_interval", "CertifiedInterval", "concentration_band",
+    "empirical_bernstein", "EmpiricalBernstein",
     "resolved_dimension_interval", "CertifiedCount", "SpectralAccumulator",
     "Concentration",
     "Coupling",
     # decay (OTF) + diffraction limit + Mercer certificate
-    "diffraction_limit", "DiffractionLimit",
+    "diffraction_limit", "DiffractionLimit", "effective_rates", "crossing_lag", "cross_covariance",
+    "integrated_autocorrelation", "IntegratedAutocorrelation", "spread_over_chains",
     # `decay_scatter` is NOT exported: it takes a frame, so a top-level copy would be a second
     # path to `Aperture.decay_scatter`.  The primitive stays reachable as `reads.decay_scatter`.
     "DecayScatter",
     "MercerCertificate",
     "rayleigh_shape_factor", "fresnel_number", "shape_factor",
     # dynamical operator (exact decay rates, streaming, splice-able)
-    "Dynamics", "DecayRates", "DynamicsState",
+    "Dynamics", "DecayRates", "ModePowers", "DynamicsState", "Basis", "RoundTrip", "Drift",
     # per-mode localization footprints (the shape of each resolved mode)
     "footprints",
     # per-mode significance (the evidence the floor thresholds; alpha is the reader's)

@@ -72,7 +72,13 @@ def _environment() -> str:
     import platform as _pl
     try:
         import entroptics as _e
-        ver = getattr(_e, "__version__", "unknown")
+        import hashlib as _hl
+        from pathlib import Path as _P
+        _h = _hl.sha256()
+        for _p in sorted(_P(_e.__file__).parent.glob("*.py")):   # the source that ran, LF-normalised
+            _h.update(_p.name.encode())
+            _h.update(_p.read_bytes().replace(bytes([13, 10]), bytes([10])))
+        ver = f"source sha256 {_h.hexdigest()}"
     except Exception:                                   # pragma: no cover - reporting only
         ver = "unimportable"
     try:
@@ -80,7 +86,7 @@ def _environment() -> str:
     except Exception:                                   # pragma: no cover - numpy-version dependent
         blas = "unknown"
     return (f"Produced {_dt.date.today().isoformat()} by `python research/validation/run_all.py` "
-            f"with entroptics {ver} (numpy backend), numpy {_np.__version__}, BLAS {blas}, "
+            f"with entroptics at {ver} (numpy backend), numpy {_np.__version__}, BLAS {blas}, "
             f"OPENBLAS_NUM_THREADS={os.environ.get('OPENBLAS_NUM_THREADS', 'unset')}, "
             f"Python {_pl.python_version()} on {_pl.system()} {_pl.machine()}.")
 

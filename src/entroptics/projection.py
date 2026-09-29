@@ -45,7 +45,7 @@ import numpy as np
 
 from . import environment as _env
 from .entropy import (geometry, normalize, downsample, upsample, shannon_bits, fold_width,
-                      MAD_SCALE, MAD_LOGVAR, _shrink_mad, macheps)
+                      macheps)
 # The noise floor is a caller-suppliable null provider (a FloorContext -> float callback);
 # null_providers ships the derived defaults (mp/robust) + the plumbing.  The shared
 # primitives are re-exported here under their private names (``_tw1_sf`` etc.) so a caller
@@ -54,6 +54,7 @@ from .beam import Beam
 from .null_providers import (                          # noqa: F401 (re-exported)
     _TW1_UPPER_Q, johnstone as _johnstone, tw1_quantile as _tw1_quantile,
     tw1_sf as _tw1_sf, noise_sigma2 as _noise_sigma2, apply_floor as _apply_floor,
+    noise_sigma2_from_spectrum as _noise_sigma2_from_spectrum,
     debias_denominator as _debias_denominator, screen_floor_sq as _screen_floor_sq,
 )
 
@@ -95,11 +96,59 @@ def project(data: np.ndarray, delta_T: float, delta_F: float) -> np.ndarray:
     T, F = data.shape
     N = max(1, int(round(T / delta_T)))
     F_eff = max(1, int(round(F / delta_F)))
-    out = _fold_axis(data, N, axis=0)
-    out = _fold_axis(out, F_eff, axis=1)
-    xp = _env.ns(out)
-    out = xp.where(xp.isfinite(xp.abs(out)), out, xp.zeros_like(out))    # all-missing cell -> 0
+    xp = _env.ns(data)
+    out = xp.where(xp.isfinite(xp.abs(data)), data, xp.zeros_like(data))  # a missing cell at its centre
+    out = _fold_axis(out, N, axis=0)
+    out = _fold_ortho(xp, out, F_eff, axis=1)
     return _env.as_compute(xp, out)   # pin the screen to the set precision (float64 default => no-op)
+
+
+def _groups(n_in: int, n_out: int) -> np.ndarray:
+    """The boundaries of the partition fold of ``n_in`` channels onto ``n_out`` cells: cell ``j``
+    holds the whole channels ``b[j] .. b[j+1] - 1``, ``b[j] = floor(j n_in / n_out)``, so every
+    cell is a contiguous run and the runs differ in length by at most one."""
+    return (np.arange(int(n_out) + 1) * int(n_in)) // int(n_out)
+
+
+def fold_variance(n_in: int, n_out: int) -> float:
+    """The mean per-cell variance :func:`project`'s ordered-axis fold leaves i.i.d. unit cells at:
+    ``tr(R^T R) / n_out`` for the area-mean ``R`` when the axis coarsens, 1 when it is kept or
+    refined (a hold repeats cells).  The feature axis's partition fold always leaves 1."""
+    n_in, n_out = int(n_in), int(n_out)
+    if n_out >= n_in:
+        return 1.0
+    tr, step = 0.0, max(1, (1 << 22) // max(n_in, 1))
+    for i0 in range(0, n_in, step):                     # rows of R in blocks, never all of it
+        i1 = min(n_in, i0 + step)
+        E = np.zeros((i1 - i0, n_in))
+        E[np.arange(i1 - i0), np.arange(i0, i1)] = 1.0
+        tr += float(np.sum(np.asarray(downsample(E, n_out, 1), float) ** 2))
+    return tr / n_out
+
+
+def _fold_ortho(xp, A, F_eff: int, axis: int):
+    """Fold the last axis of ``A`` onto ``F_eff`` cells by PARTITION: each cell is a contiguous run
+    of whole channels (:func:`_groups`), summed and divided by the square root of its length.
+
+    The fold's columns are orthonormal by construction -- the runs are disjoint -- so independent
+    unit-variance channels fold to independent unit-variance cells, exactly, which is the premise
+    the floor reads.  An area mean does not have it: cells of unequal size carry unequal noise,
+    and a cell that takes a fraction of a channel shares it with its neighbour, so the folded
+    columns are correlated (a record whose channels merely sat at different levels folded, and
+    then read structure in half of pure-noise records).  A channel is a discrete unit, so a cell
+    takes whole ones.  O(T F), no factorisation.  ``axis`` is the last axis of ``A``."""
+    n_in = int(A.shape[axis])
+    if F_eff >= n_in:
+        return A if F_eff == n_in else upsample(A, F_eff, axis)
+    b = _groups(n_in, F_eff)
+    size = np.diff(b).astype(float)
+    if _env.is_torch(xp):
+        idx = xp.as_tensor(np.repeat(np.arange(F_eff), np.diff(b)), device=A.device)
+        shape = list(A.shape); shape[axis] = F_eff
+        out = xp.zeros(shape, dtype=A.dtype, device=A.device).index_add_(axis, idx, A)
+        return out / xp.as_tensor(np.sqrt(size), dtype=out.real.dtype, device=A.device)
+    out = np.add.reduceat(np.asarray(A), b[:-1], axis=axis)
+    return out / np.sqrt(size).astype(np.asarray(out).real.dtype, copy=False)
 
 
 def noise_floor(screen: np.ndarray, *, far: float = 0.05, null=None,
@@ -115,8 +164,8 @@ def noise_floor(screen: np.ndarray, *, far: float = 0.05, null=None,
     ``null_providers.robust``, ``null_providers.permutation()``, or your own provider
     (a local reference / physics null) to score the floor differently -- it is evaluated
     on this screen, so under a per-window / streaming read it is local, not global.  ``s``
-    is the precomputed singular spectrum (reused where a provider needs it; ``mp`` does
-    not); resampling providers are deterministic per ``seed``.  Backend-agnostic."""
+    is the precomputed singular spectrum (computed when a provider needs it and it is not given);
+    resampling providers are deterministic per ``seed``.  Backend-agnostic."""
     if len(screen.shape) != 2 or int(screen.shape[0]) * int(screen.shape[1]) == 0:
         return float("inf")
     N, F = int(screen.shape[0]), live_columns(screen)
@@ -137,7 +186,7 @@ def live_columns(screen) -> int:
 
     Counting them biases the floor in two opposing directions at once, which is worse than
     either alone because the errors do not announce themselves by cancelling: the de-biased
-    per-cell variance divides the median row energy by a denominator in F, so dead columns add
+    per-cell variance divides the screen's energy by the cell count N*F, so dead columns add
     no energy but do add F and ``sigma^2`` comes out too small (the floor sinks, noise reads as
     signal), while ``johnstone(N, F)`` returns the edge of a wider ensemble than was measured
     (the floor lifts, signal reads as noise).
@@ -183,7 +232,7 @@ def mode_significance(screen: np.ndarray, s: np.ndarray | None = None) -> ModeSi
         empty = sv[:0].copy()
         return ModeSignificance(deviate=empty, pvalue=empty)
     mu, sig_J = _johnstone(N, F)
-    sigma2 = _noise_sigma2(xp, screen, N, F)
+    sigma2 = _noise_sigma2(xp, screen, N, F, s=sv)
     if not (sigma2 > 0.0):
         # A screen with no energy has no noise ensemble to stand above, so no mode is evidence.
         # This is the ONE consumer that divides by sigma^2, and handling the degenerate case HERE
@@ -398,6 +447,41 @@ class Projection:
                 if not mask.any():
                     mask = None
 
+        # A channel the whitening cannot give a scale (scale 0: every measured value is the same --
+        # it never moved) carries nothing to the screen, which
+        # reads the centred record -- yet its level would still steer the entropy fold and dilute
+        # the columns it is folded into, and the floor would count it as a unit-noise dimension.
+        # With two constant channels beside eight of noise the read claimed structure in 52% of
+        # noise-only records (96% with eight).  So it leaves the screen the way a dead channel does:
+        # out of the geometry, the fold and the floor.  It was measured, though, so ``_flat_cols``
+        # records it apart from the dead ones, and a filter keeps it at its centre.
+        # Taking a flat channel out can leave a row whose only measured cells were on it; that row
+        # is then dead, and dropping it changes the measured cells the other channels' statistics
+        # are read over.  The set is taken to its closure (it only shrinks, so at most F passes).
+        self._flat_cols = None
+        stats = normalize(W, mask, return_stats=True)
+        flat = np.asarray(_env.to_numpy(stats[2])) == 0
+        while flat.any() and not flat.all():
+            W, xp = _env.to_numpy(W), np
+            lr_full = np.ones(self.T, bool) if self._live_rows is None else self._live_rows.copy()
+            lc_full = np.ones(self.F, bool) if self._live_cols is None else self._live_cols.copy()
+            flat_full = np.zeros(self.F, bool) if self._flat_cols is None else self._flat_cols.copy()
+            flat_full[np.flatnonzero(lc_full)[flat]] = True
+            self._flat_cols = flat_full
+            lc_full = lc_full & ~flat_full
+            W = W[:, ~flat]
+            if mask is not None:
+                mask = mask[:, ~flat]
+                dead = np.all(mask, axis=1)
+                if dead.any():
+                    lr_full[np.flatnonzero(lr_full)[dead]] = False
+                    W, mask = W[~dead], mask[~dead]
+                if not mask.any():
+                    mask = None
+            self._live_rows, self._live_cols = lr_full, lc_full
+            stats = normalize(W, mask, return_stats=True)          # whiten what remains
+            flat = np.asarray(_env.to_numpy(stats[2])) == 0
+
         geom = geometry(W, mask)
         self.H_T = geom["H_T"]
         self.H_F = geom["H_F"]
@@ -407,7 +491,9 @@ class Projection:
         self.delta_F = geom["delta_F"]
         self._geom = geom
 
-        data, centre, scale = normalize(W, mask, return_stats=True)
+        data, centre, scale = normalize(W, mask, return_stats=True) if stats is None else stats
+        # Every whitened column has sum |z|^2 = T, so |z| <= sqrt(T) and the screen's squares stay
+        # far inside the float range at any record's level and in any working precision.
         self.screen = project(data, self.delta_T, self.delta_F)
         self.centre, self.scale = self._screen_units(centre, scale)
 
@@ -419,12 +505,14 @@ class Projection:
         # K_signal, so use ``svdvals`` (no U / Vt). The full SVD basis, the beam, and
         # the coherence are heavy and deferred to first access -- a streaming monitor that
         # reads K_signal / has_signal never pays for them (the high-speed capture path).
-        self.S = _env.svdvals(xp, self.screen)
-        self.noise_floor = noise_floor(self.screen, far=far, null=null, s=self.S, seed=seed)
-        self.sigma_top = float(self.S[0]) if int(self.S.shape[0]) else 0.0
-        sig = self.S[self.S > self.noise_floor]
+        S = _env.svdvals(xp, self.screen)
+        floor = noise_floor(self.screen, far=far, null=null, s=S, seed=seed)
+        sig = S[S > floor]
         self.K_signal = int(sig.shape[0])
         self.H_screen = shannon_bits(sig ** 2) if int(sig.shape[0]) else 0.0
+        self.S = S
+        self.noise_floor = floor
+        self.sigma_top = float(self.S[0]) if int(self.S.shape[0]) else 0.0
 
     def _screen_units(self, centre, scale):
         """Carry the whitening map onto the screen's feature grid: ``(centre, scale)``.
@@ -440,8 +528,9 @@ class Projection:
         The map is the channel's own in two of the fold's three regimes, both of which leave a
         screen column standing for exactly ONE whitened channel: ``F_eff == F`` returns the
         input unchanged, and ``F_eff > F`` is a nearest-block hold, which holding the stats the
-        same way inverts.  When the axis COARSENS, screen column ``j`` is the mean of
-        ``(W[:, i] - c_i) / s_i`` over its group and the map is the group's common scale.  That
+        same way inverts.  When the axis COARSENS, screen column ``j`` is ``sqrt(n_j)`` times the
+        mean of ``(W[:, i] - c_i) / s_i`` over its run of ``n_j`` channels, and the map is the run's
+        common scale over ``sqrt(n_j)``.  That
         is the right map rather than a fallback, for two reasons that hold together:
 
           * It is EXACT for whatever is common across the group.  If the group's whitened
@@ -455,10 +544,20 @@ class Projection:
             WITHIN-group scale ratio stayed at ~1.3 while the across-band ratio reached 60.
             The regime that would strain this map is the regime that does not fold."""
         F_eff = int(self.screen.shape[1])
-        if F_eff == int(centre.shape[0]):
+        n_in = int(centre.shape[0])
+        if F_eff == n_in:
             return centre, scale
-        fold = lambda v: _fold_axis(v.reshape(1, -1), F_eff, axis=1).reshape(-1)
-        return fold(centre), fold(scale)
+        if F_eff > n_in:
+            fold = lambda v: _fold_axis(v.reshape(1, -1), F_eff, axis=1).reshape(-1)
+            return fold(centre), fold(scale)
+        # a coarsened column j is sum_i z_i / sqrt(n_j) over its run: the run's mean centre, and its
+        # mean scale over sqrt(n_j), read a component common to the run back into the caller's units
+        xp = _env.ns(centre)
+        rt = np.sqrt(np.diff(_groups(n_in, F_eff)).astype(float))
+        if _env.is_torch(xp):
+            rt = xp.as_tensor(rt, dtype=scale.dtype, device=scale.device)
+        mean = lambda v: _fold_ortho(xp, v.reshape(1, -1), F_eff, axis=1).reshape(-1) / rt
+        return mean(centre), mean(scale) / rt
 
     def refloor(self, null):
         """This same projection, floored by a different ``null`` provider.
@@ -495,11 +594,11 @@ class Projection:
         other = object.__new__(type(self))
         other.__dict__.update(self.__dict__)
         other.null = null
-        other.noise_floor = noise_floor(self.screen, far=self._far, null=null,
-                                        s=self.S, seed=self._seed)
-        sig = self.S[self.S > other.noise_floor]
+        floor = noise_floor(self.screen, far=self._far, null=null, s=self.S, seed=self._seed)
+        sig = self.S[self.S > floor]
         other.K_signal = int(sig.shape[0])
         other.H_screen = shannon_bits(sig ** 2) if int(sig.shape[0]) else 0.0
+        other.noise_floor = floor
         return other
 
     # ── heavy outputs: lazy (first access only; the monitoring path never touches them) ──
@@ -522,7 +621,7 @@ class Projection:
     @property
     def has_signal(self) -> bool:
         """True iff the top singular value clears the noise floor (`K_signal > 0`) -- the cheap
-        monitor read. For an SVD-free gate on a raw frame (before building a Projection), use the
+        monitor read. For the same gate on a raw frame without building a Projection, use the
         module-level `probe_signal(W, ...)`."""
         return self.sigma_top > self.noise_floor
 
@@ -631,34 +730,25 @@ def read(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05,
     return Projection(W, mask=mask, far=far, null=null, seed=seed).read()
 
 
-def _sigma_top_upper(screen) -> float:
-    """A rigorous, SVD-free upper bound on the top singular value of ``screen``:
-    ``sqrt(||screen||_1 * ||screen||_inf)`` (max column abs-sum times max row abs-sum) -- the
-    spectral norm is bounded by the geometric mean of the 1- and inf- operator norms.  O(NF)."""
-    xp = _env.ns(screen)
-    A = xp.abs(screen)
-    col = float(A.sum(axis=0).max()) if int(screen.shape[1]) else 0.0
-    row = float(A.sum(axis=1).max()) if int(screen.shape[0]) else 0.0
-    return math.sqrt(col * row)
-
-
 def probe_signal(W, mask=None, *, far: float = 0.05, null=None, seed: int = 0) -> bool:
-    """SVD-free signal gate for high-speed / streaming capture.  Builds the entropy-matched fold
-    and the noise floor (both O(NF); no SVD for the derived / reference nulls), then tests a
-    rigorous upper bound on the screen's top singular value against the floor.  Returns True iff
-    signal may be present -- so a monitor can decide whether to build the full :class:`Projection`
-    (and pay the SVD / embedding / coherence) without one.  Conservative: never False when
-    ``Projection(W, ...).K_signal > 0`` (the bound only over-estimates the true top singular value),
-    so gating on it cannot drop a real detection.  A masked / gapped frame returns True (defer to
-    the full Projection).  ``null`` scores the floor as in :func:`noise_floor`; a sampled provider
-    that needs the spectrum computes one internally (no saving for those)."""
+    """Signal gate for high-speed / streaming capture: the fold, the screen's singular values and
+    the noise floor, and nothing else -- no basis, embedding or coherence.  Returns True iff the
+    top singular value clears the floor, so a monitor can decide whether to build the full
+    :class:`Projection` without one.  The floor and the count read the spectrum, so the gate costs
+    the singular values; what it saves is everything after them.  A masked / gapped frame returns True (defer to the full Projection).  ``null``
+    scores the floor as in :func:`noise_floor`."""
     xp = _env.ns(W)
     if mask is not None or not bool(xp.all(xp.isfinite(xp.abs(W)))):
         return True                                    # masked / gapped -> defer to the full Projection
+    from .entropy import whiten_stats
+    flat = np.asarray(_env.to_numpy(whiten_stats(xp, W)[1])) == 0      # as Projection leaves them out
+    if flat.any() and not flat.all():
+        W = W[:, xp.as_tensor(~flat, device=W.device) if _env.is_torch(xp) else ~flat]
     geom = geometry(W, mask)
     screen = project(normalize(W, mask), geom["delta_T"], geom["delta_F"])
-    floor = noise_floor(screen, far=far, null=null, s=None, seed=seed)
-    return _sigma_top_upper(screen) > floor
+    S = _env.svdvals(xp, screen)
+    floor = noise_floor(screen, far=far, null=null, s=S, seed=seed)
+    return bool(int(S.shape[0]) and float(S[0]) > floor)
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -667,7 +757,7 @@ def probe_signal(W, mask=None, *, far: float = 0.05, null=None, seed: int = 0) -
 # The per-frame Python loop (wrapper plane reduction, ensemble traces) pays call + object
 # overhead per frame and vectorizes nothing.  ``read_batch`` folds + svd-values + floors a
 # stack of same-shape frames in one vectorized pass -- bit-identical to reading each frame
-# with ``Projection`` (the fold is per-column, the per-channel medians are per-frame, so batching
+# with ``Projection`` (the fold is per-column, the per-channel stats are per-frame, so batching
 # only changes the loop nesting, never a float).  It is the small-F ensemble lever the GPU
 # cannot provide (cuSOLVER has no occupancy on many tiny SVDs).  numpy only: frames that are
 # masked / non-finite / complex / a different shape fall back to the per-frame ``Projection``.
@@ -704,6 +794,8 @@ def fold_target_batch(xp, stack, *, far: float = 0.05) -> np.ndarray:
     per-group control flow).  ``H_F`` is read per frame via the same ``shannon_bits`` ``geometry``
     uses, so the fold width matches the per-frame ``Projection`` exactly on either backend."""
     B, N, F = int(stack.shape[0]), int(stack.shape[1]), int(stack.shape[2])
+    from .entropy import _carried
+    stack = _env.stack(xp, [_carried(xp, stack[b]) for b in range(B)], 0)   # as geometry carries
     P = _env.asnum(xp.abs(stack)); P = P * P                       # |W|^2 (compute precision)
     marg = _env.sum_ax(xp, P, 1)                                   # (B, F) feature power marginal
     tot = _env.sum_ax(xp, marg, 1)                                 # (B,) on xp
@@ -733,51 +825,24 @@ def fold_target_batch(xp, stack, *, far: float = 0.05) -> np.ndarray:
 
 
 def normalize_batch(xp, stack):
-    """Per-channel robust MAD whiten of a real, finite ``(B, N, F)`` stack -- ``entropy.normalize``'s
-    clean path over axis 1, fully batched (no per-frame Python loop) for the common case where every
-    channel is present, bit-identical on numpy to the per-frame ``normalize``.  The James-Stein
-    ``_shrink_mad`` reduces exactly to a batched form when ``pos`` is all-True per frame (full median
-    / population log-MAD variance); only frames that actually have a dead channel (below the resolution floor)
-    fall back to the per-frame ``_shrink_mad``.  So a clean GPU stack pays no per-frame launches."""
-    from .entropy import resolution_floor
+    """Whiten a real, finite ``(B, N, F)`` stack -- ``entropy.normalize``'s clean path over axis 1,
+    batched: each frame's channels centred on their mean and scaled by their RMS about it, through
+    the same core (:func:`entropy._whiten_core`), so it is bit-identical on numpy to
+    the per-frame read."""
+    from .entropy import _whiten_core
     data = _env.asnum(stack)
-    med = _env.median_ax(xp, data, 1, keep=True)                 # (B,1,F) per-channel median over N
-    centered = data - med
-    mad = _env.median_ax(xp, xp.abs(centered), 1) * MAD_SCALE     # (B, F)
-    B, F, N = int(mad.shape[0]), int(mad.shape[1]), int(data.shape[1])
-    typical = _env.median_ax(xp, mad, 1)                         # (B,) full per-frame median
-    pos = mad > resolution_floor(xp, typical, mad)[:, None]      # (B, F) -- see mad_stats
-    # ── batched shrink (exact where every channel is positive) ──
-    lm = xp.log(xp.where(pos, mad, xp.ones_like(mad)))           # (B, F) log-MAD where there is one
-    lm0 = xp.log(xp.where(typical > 0.0, typical, xp.ones_like(typical)))    # (B,)
-    V_obs = _env.std_ax(xp, lm, 1) ** 2                          # (B,) population var of log-MAD
-    ratio = (MAD_LOGVAR / max(N, 1)) / _env.clampmin(xp, V_obs, 1e-300)
-    w = _env.cliprange(xp, 1.0 - ratio, 0.0, 1.0)
-    w = xp.where(V_obs > 0.0, w, xp.zeros_like(w))               # V_obs<=0 -> no shrink weight
-    mad_eff = xp.where(pos, xp.exp(lm0[:, None] + w[:, None] * (lm - lm0[:, None])),
-                       xp.zeros_like(mad))                                  # (B, F)
-    # ── per-frame fallback only for frames with a dead channel (rare on a clean stack) ──
-    # detect bad frames in one batched reduction (a per-frame ``pos[b].all()`` would serialise B
-    # GPU syncs); the Python loop below then runs only for the frames that need it.
-    allpos = _env.sum_ax(xp, (~pos).to(mad.dtype) if _env.is_torch(xp) else (~pos).astype(mad.dtype), 1)
-    bad = np.nonzero(np.asarray(_env.to_numpy(allpos)) > 0)[0]
-    for b in bad:
-        m = mad[b]
-        spread = m > 0
-        typ = float(_env.median1d(xp, m[spread])) if bool(spread.any()) else 0.0
-        mad_eff[b] = _shrink_mad(xp, m, m > resolution_floor(xp, typ, m), typ, N)
-    safe = mad_eff > 0.0
-    div = xp.where(safe, mad_eff, xp.ones_like(mad_eff))[:, None, :]
-    zero = _env.zeros(xp, tuple(int(s) for s in data.shape),
+    xs, cs, ss, _ = _whiten_core(xp, data, axis=1)
+    safe = ss > 0.0
+    zero = _env.zeros(xp, tuple(int(v) for v in data.shape),
                       ref=(data if _env.is_torch(xp) else None))
-    return xp.where(safe[:, None, :], centered / div, zero)
+    return xp.where(safe, (xs - cs) / xp.where(safe, ss, xp.ones_like(ss)), zero)
 
 
 def project_batch(xp, data, F_eff: int):
     """Fold a whitened real ``(B, N, F)`` stack to ``(B, N, F_eff)`` -- ``project`` over the
     feature axis (axis 2); the ordered axis is never folded (delta_T=1).  Backend-agnostic."""
-    out = _fold_axis(data, F_eff, axis=2)
-    out = xp.where(xp.isfinite(xp.abs(out)), out, xp.zeros_like(out))
+    out = xp.where(xp.isfinite(xp.abs(data)), data, xp.zeros_like(data))
+    out = _fold_ortho(xp, out, F_eff, axis=2)
     return _env.as_compute(xp, out)
 
 
@@ -813,8 +878,17 @@ def read_batch(frames, *, far: float = 0.05, null=None, seed: int = 0) -> list[B
         N, F = shape0
         F_eff_all = fold_target_batch(np, stack, far=far)
         data = normalize_batch(np, stack)                                    # (B, N, F)
+        # a frame with a channel the whitening could not scale leaves that channel out of its
+        # screen (Projection._flat_cols): read it per frame, exactly as Projection reads it
+        zero = np.all(data == 0, axis=1)                                      # (B, F)
+        solo = zero.any(axis=1) & ~zero.all(axis=1)
+        for k in np.flatnonzero(solo):
+            sc = Projection(frames[int(idx[k])], far=far, null=null, seed=seed)
+            out[int(idx[k])] = BatchRead(sc.K_signal, sc.sigma_top, float(sc.noise_floor), sc.S)
         for Fe in np.unique(F_eff_all):                                       # group by fold width
-            sel = np.where(F_eff_all == Fe)[0]
+            sel = np.where((F_eff_all == Fe) & ~solo)[0]
+            if not sel.size:
+                continue
             screen = project_batch(np, data[sel], int(Fe))                   # (Bg, N, Fe)
             S = np.linalg.svd(screen, compute_uv=False)                       # (Bg, min(N,Fe))
             if null is None:                                                  # batched mp floor
@@ -824,7 +898,8 @@ def read_batch(frames, *, far: float = 0.05, null=None, seed: int = 0) -> list[B
                                    for j in range(len(sel))])
             for j, k in enumerate(sel):
                 s = S[j]; fl = float(floors[j])
-                out[int(idx[k])] = BatchRead(int((s > fl).sum()), float(s[0]) if s.shape[0] else 0.0, fl, s)
+                K = int((s > fl).sum())
+                out[int(idx[k])] = BatchRead(K, float(s[0]) if s.shape[0] else 0.0, fl, s)
     return out
 
 
@@ -833,9 +908,5 @@ def _mp_floor_batch(screen: np.ndarray, S: np.ndarray, N: int, F_eff: int, far: 
     batch -- the same edge :func:`noise_floor` computes per frame, vectorized over the batch.
     Shares the de-biasing denominator and the Johnstone edge with the per-frame ``mp`` provider
     (via ``null_providers``) so the batch and per-frame floors cannot drift."""
-    row_energy = (np.abs(screen) ** 2).sum(axis=2)                            # (B, N)
-    # the same relative guard the per-frame path uses, per batch element, so the two stay
-    # bit-identical -- see null_providers.noise_sigma2
-    sigma2 = ((np.median(row_energy, axis=1) + row_energy.sum(axis=1) * macheps(np, screen))
-              / _debias_denominator(N, F_eff))                                    # (B,)
+    sigma2 = _noise_sigma2_from_spectrum(np.asarray(S, dtype=np.float64) ** 2, N, F_eff)
     return np.sqrt(_screen_floor_sq(sigma2, N, F_eff, far))
