@@ -41,11 +41,15 @@ figure dependencies.
   round-off.
 - **Frequency and decay together.** It reads how fast each component dies away as well as its
   frequency, between the FFT's bins, across gaps in the record, and next to a much stronger tone
-  ([vs the FFT](research/benchmarks/README.md#3-how-does-it-compare-with-the-fft)).
+  ([vs the FFT](research/benchmarks/README.md#3-against-the-fft-on-tones)).
 - **Messy data welcome.** Missing cells, dead or stuck channels, channels at very different levels,
   few samples across many channels.
 - **Light and fast.** numpy only; torch (and a GPU) when you pass a tensor. Streams at O(F²) per
-  frame, with state you can save, resume and splice.
+  frame, with state you can save, resume and splice. On multichannel records it is faster than the
+  FFT at the same job: with 16 channels and 16384 samples or more, its count, frequencies and decay
+  rates take 1.6–2.6× less time than an FFT pipeline that computes them, and from 262144 samples
+  about what the bare FFT alone takes. On a single channel the FFT pipeline is faster
+  ([cost](research/benchmarks/README.md#2-cost)).
 
 ## When to reach for it
 
@@ -167,8 +171,8 @@ CHIME/FRB Catalog 1 waterfalls ([how to fetch them](research/supplemental/frb/RE
 
 - **[The guide](docs/GUIDE.md):** every read and what it means, the conventions for inputs and
   missing data, and what the library guarantees.
-- **[Benchmarks](research/benchmarks/README.md):** false-alarm rates, the comparison with the FFT,
-  and costs, each from a committed script.
+- **[Benchmarks](research/benchmarks/README.md):** counting against the standard rank selectors,
+  cost and accuracy against the FFT, and false-alarm rates, each from a committed script.
 - **The paper** — [Markdown](research/PAPER.md) · [HTML](research/PAPER.html) ·
   [PDF](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf): the derivations, and
   where every constant comes from.
