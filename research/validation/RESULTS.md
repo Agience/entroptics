@@ -8,7 +8,7 @@ seeded and deterministic; regenerate with `python research/validation/run_all.py
 
 Scripts: `common.py` (seeded ground-truth generators), `exp1..exp19_*.py`.
 
-Produced 2026-09-29 by `python research/validation/run_all.py` with entroptics at source sha256 b0f77e48d88dac2f5ae81809db41c9d7b9a393d3c8faf924e58c5e5397f3bde3 (numpy backend), numpy 2.5.3, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.14.4 on Linux x86_64.
+Produced 2026-09-29 by `python research/validation/run_all.py` with entroptics at source sha256 fb714bb838adba12e9c942f3e6d0cbbdbed7f12312dbc256fbd1011965be22a0 (numpy backend), numpy 2.5.3, BLAS scipy-openblas, OPENBLAS_NUM_THREADS=1, Python 3.14.4 on Linux x86_64.
 
 
 ## Headline numbers

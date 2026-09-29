@@ -1022,6 +1022,13 @@ class HankelSpectrum:
     n:         int      # moment order (the pencil is (n+1) x (n+1))
 
     @property
+    def kept(self) -> int:
+        """How many of H0's ``n + 1`` directions the cut kept: the order the read actually has.
+        Below ``n + 1``, the directions left out were within the record's own noise, and the
+        eigenvalues are those of the kept subspace -- an order-``kept`` read, whatever ``n``."""
+        return int(np.asarray(self.evals).size)
+
+    @property
     def leading(self) -> float:
         """The dominant transfer eigenvalue lambda_1 (the slowest, spectral-gap mode)."""
         e = np.asarray(self.evals)
@@ -1082,6 +1089,11 @@ class MatrixPencil:
     evals:   np.ndarray   # transfer eigenvalues, descending
     vectors: np.ndarray   # (n, k) generalised eigenvectors, columns in the order of evals
     psd:     float        # C0 conditioning, min/max eigenvalue: >= 0 iff PSD (< 0: lost positivity)
+
+    @property
+    def kept(self) -> int:
+        """How many of ``C0``'s directions the cut kept (the size of the problem actually solved)."""
+        return int(np.asarray(self.evals).size)
 
 
 def matrix_pencil(C0, C1, *, rcond: float | None = None) -> MatrixPencil:

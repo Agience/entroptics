@@ -41,7 +41,7 @@ figure dependencies.
   round-off.
 - **Frequency and decay together.** It reads how fast each component dies away as well as its
   frequency, between the FFT's bins, across gaps in the record, and next to a much stronger tone
-  ([vs the FFT](research/benchmarks/README.md#against-the-fft)).
+  ([vs the FFT](research/benchmarks/README.md#3-how-does-it-compare-with-the-fft)).
 - **Messy data welcome.** Missing cells, dead or stuck channels, channels at very different levels,
   few samples across many channels.
 - **Light and fast.** numpy only; torch (and a GPU) when you pass a tensor. Streams at O(F²) per

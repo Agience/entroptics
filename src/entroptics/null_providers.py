@@ -654,7 +654,18 @@ def _norm_isf(p: float) -> float:
     return -_norm_ppf(p)
 
 
-def reference_null(reference_top_values, *, far: float | None = None) -> Callable[[FloorContext], float]:
+def _check_shape(shape, ctx: "FloorContext", who: str):
+    """Refuse a screen of a different shape from the one a reference was calibrated at: a top
+    singular value is an absolute level, and its null moves with the screen's (N, F)."""
+    if shape is not None and tuple(int(v) for v in ctx.shape) != tuple(int(v) for v in shape):
+        raise ValueError(
+            f"{who} was calibrated on {tuple(shape)} screens and is applied to a "
+            f"{tuple(int(v) for v in ctx.shape)} one; its floor is a top singular value at the "
+            f"calibration shape. Calibrate a reference per screen shape.")
+
+
+def reference_null(reference_top_values, *, far: float | None = None,
+                   shape=None) -> Callable[[FloorContext], float]:
     """A deterministic O(1) null calibrated on a signal-free reference: the floor is
     ``center + z(far)*scale`` with ``center, scale`` the mean and std of the reference's
     top-mode values (``top_spectrum_value`` of each signal-free realisation) and ``z(far)``
@@ -664,13 +675,20 @@ def reference_null(reference_top_values, *, far: float | None = None) -> Callabl
     no ``draws >> 1/far`` requirement, unlike a sampled ``permutation`` floor).  It generalises
     ``mp``: the same closed-form edge, its noise model calibrated on the caller's reference
     instead of an i.i.d.-Gaussian bulk -- the correct floor when you have a quiet window / vacuum
-    ensemble.  ``far=None`` uses ``ctx.far``; a value pins the level."""
+    ensemble.  ``far=None`` uses ``ctx.far``; a value pins the level.
+
+    ``shape`` is the ``(N, F)`` of the screens the reference values were read from (the screen the
+    read sees, after any fold).  Given, a screen of any other shape is refused: the floor is an
+    absolute top singular value, and a different shape has a different null.  The reference has to
+    be read by the same library version as the screens it thresholds, since the screen's units
+    follow its whitening."""
     sv = np.asarray(reference_top_values, dtype=float).ravel()
     center = float(sv.mean()); scale = float(sv.std() + 1e-30)
     def _provider(ctx: FloorContext) -> float:
+        _check_shape(shape, ctx, "reference_null")
         return center + _norm_isf(ctx.far if far is None else far) * scale
     _provider.__name__ = "reference_null"
-    _provider.center = center; _provider.scale = scale
+    _provider.center = center; _provider.scale = scale; _provider.shape = shape
     return _provider
 
 
@@ -686,13 +704,16 @@ class ReferenceNull:
     each push decays the accumulated weight by ``forgetting`` first, so the null tracks the local,
     drifting noise as an aperture sweeps across regions (the effective sample is ~1/(1-forgetting)
     recent values).  ``forgetting < 1`` is the region-dynamic mode -- calibrate off nearby signal-
-    free (low-coherence) patches and the far ones fade out."""
+    free (low-coherence) patches and the far ones fade out.  ``shape``: as in
+    :func:`reference_null`, the calibration screens' ``(N, F)``, and a screen of another shape is
+    refused."""
 
     def __init__(self, reference_top_values=None, *, far: float | None = None,
-                 forgetting: float = 1.0):
+                 forgetting: float = 1.0, shape=None):
         if not (0.0 < forgetting <= 1.0):
             raise ValueError(f"forgetting must be in (0, 1]; got {forgetting}")
         self._far = far
+        self.shape = None if shape is None else tuple(int(v) for v in shape)
         self._forget = float(forgetting)
         self._n = 0.0                       # float: effective (possibly faded) sample weight
         self._mean = 0.0
@@ -725,6 +746,7 @@ class ReferenceNull:
         return self._n
 
     def __call__(self, ctx: FloorContext) -> float:
+        _check_shape(self.shape, ctx, "ReferenceNull")
         return self.center + _norm_isf(ctx.far if self._far is None else self._far) * self.scale
 
 

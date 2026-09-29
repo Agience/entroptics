@@ -10,6 +10,30 @@ Released versions are archived on Zenodo under the concept DOI
 [10.5281/zenodo.21273400](https://doi.org/10.5281/zenodo.21273400), which resolves to the latest
 version.
 
+## [0.2.6] - 2026-09-29
+
+The reference null's shape guard, the pencil's kept order, and the benchmark page with figures.
+No read's value changes.
+
+### Added
+- **`reference_null(..., shape=(N, F))` and `ReferenceNull(..., shape=(N, F))`**: the shape of the
+  screens the reference was read from. A screen of any other shape is refused with a `ValueError`,
+  since the floor is an absolute top singular value and a different shape has a different null.
+  Without `shape`, nothing changes.
+- **`HankelSpectrum.kept` and `MatrixPencil.kept`**: how many of the pencil's directions the cut
+  kept, which is the order the read actually has. Where it is below `n + 1`, the directions left
+  out were within the record's own noise.
+- `research/benchmarks/figures.py`: the benchmark page's figures and winner tables, drawn from the
+  committed outputs; the page opens each measurement with its question and answer.
+- A regression test that a reference-calibrated floor counts structure and not the noise's
+  marginal: a skewed marginal alone stays at the level, and a correlated mode is still found. Both
+  checks fail on the whitening before 0.2.5.
+
+### Changed
+- A `reference_null` floor pinned on screens read by 0.2.3 or earlier is in that whitening's units.
+  Under 0.2.5 the screen's energy no longer carries the marginal's (RMS / MAD)^2, so a pinned
+  reference has to be re-read with the library that reads the screens.
+
 ## [0.2.5] - 2026-09-29
 
 The write path, the operator's Fourier view, and reads that downstream analyses had been carrying by
@@ -401,6 +425,7 @@ surface is unchanged from 0.2.2.
 - An empty spectrum reads NaN instead of `1/n`.
 - A zero-length axis raises `ValueError` instead of an internal error.
 
+[0.2.6]: https://github.com/Agience/entroptics/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Agience/entroptics/compare/v0.2.3...v0.2.5
 [0.2.3]: https://github.com/Agience/entroptics/compare/v0.2.2...v0.2.3
 [0.2.2]: https://github.com/Agience/entroptics/compare/v0.2.1...v0.2.2
