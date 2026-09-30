@@ -28,7 +28,7 @@ def test_screen_has_signal_matches_k_signal():
 
 
 def test_aperture_has_signal_matches_screen():
-    # planes short enough (< the 128 window) that the Aperture never truncates -> equals Projection.
+    # a finite record is read whole (no window), so the Aperture's read equals Projection's.
     for W in _mix(N=96, seed=2):
         ap = Aperture(W)
         assert ap.has_signal() == Projection(W).has_signal

@@ -16,6 +16,11 @@ from entroptics.projection import Projection, read_batch
 T = 256
 
 
+#: At most this many noise records of 100 may read structure: the level, three binomial standard
+#: errors up.  The default floor is exact, so its rate sits AT 0.05, not under it.
+LEVEL = 0.05 + 3.0 * (0.05 * 0.95 / 100) ** 0.5
+
+
 def _rate(make, n=100, null=None):
     return np.mean([Projection(make(np.random.default_rng(i)), null=null).K_signal > 0 for i in range(n)])
 
@@ -23,13 +28,13 @@ def _rate(make, n=100, null=None):
 @pytest.mark.parametrize("k", [2, 8])
 def test_constant_channels_do_not_manufacture_structure(k):
     rate = _rate(lambda r: np.concatenate([r.standard_normal((T, 8)), np.full((T, k), 3.0)], 1))
-    assert rate <= 0.08                        # 0.52 / 0.96 before; 0.03 with no constant channel
+    assert rate <= LEVEL                        # 0.52 / 0.96 before; 0.03 with no constant channel
 
 
 def test_sparse_channels_do_not_manufacture_structure():
     rate = _rate(lambda r: np.concatenate([r.standard_normal((T, 8)),
                                            r.poisson(0.2, (T, 8)).astype(float)], 1))
-    assert rate <= 0.08                        # 0.385 before
+    assert rate <= LEVEL                        # 0.385 before
 
 
 def test_a_flat_channel_reads_as_if_it_were_absent():
@@ -77,10 +82,12 @@ def _median_row_floor(ctx):
 
 
 def test_the_default_floor_holds_its_level_on_count_noise():
-    """The default floor reads the mean cell energy, which estimates the per-cell variance for
-    noise of any marginal; count noise holds the level, and a planted mode is still found."""
+    """The closed-form floor reads the mean cell energy, which estimates the per-cell variance for
+    noise of any marginal; count noise holds the level under it and under the default (exact
+    permutation) floor, and a planted mode is still found."""
     pois = lambda r: r.poisson(1.0, (T, 8)).astype(float)        # noqa: E731
-    assert _rate(pois) <= 0.08
+    assert _rate(pois, null=NP.mp) <= LEVEL
+    assert _rate(pois) <= LEVEL
     assert _rate(pois, null=_median_row_floor) >= 0.25            # negative control: the median floor
 
     def planted(r):

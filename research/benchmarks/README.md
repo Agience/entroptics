@@ -11,19 +11,19 @@ is committed beside it. The figures and tables are drawn from those outputs by
 |---|---|---|---|
 | [Counting components exactly](#1-counting-components) (27 planted cases) | **1.000** | AIC 0.946, Gavish–Donoho 0.935, MDL 0.889 | **Entroptics** |
 | [Components reported in correlated noise](#1-counting-components), nothing planted (lower is better) | **9.0** | Gavish–Donoho 17.9, MDL 18.9, AIC 44.7 | **Entroptics** |
-| [Cost of a full read](#2-cost), 16 channels, T = 16384 to 1M | **1.85–207 ms** (counts 3 of 4 at T = 262144) | FFT pipeline, 3.5–516 ms | **Entroptics**, 1.6–2.6× faster |
+| [Cost of a full read](#2-cost), 16 channels, T = 16384 to 1M | **1.89–212 ms** (counts 3 of 4 at T = 262144) | FFT pipeline, 3.6–534 ms | **Entroptics**, 1.8–2.7× faster |
 | [Decay rates of damped tones](#3-against-the-fft-on-tones) (8 tones) | **best on 5** (fixed depth) | FFT pipeline, best on 3 | **Entroptics** |
 | [Placing tone frequencies](#3-against-the-fft-on-tones) (15 tones) | **best on 8** | FFT pipeline, best on 7 | **Entroptics** |
 | [Counting tones](#3-against-the-fft-on-tones) (7 records) | exact on 3, closer on 2 | FFT pipeline: exact on 4, closer on 1 | even |
-| [Cost of a full read](#2-cost), 16 channels, T up to 4096 | 0.63–0.89 ms | **FFT pipeline, 0.30–0.79 ms** | FFT |
-| [Cost of a full read](#2-cost), one channel | 0.64–328 ms | **FFT pipeline, 0.11–26 ms** | FFT, 5.6–16× faster |
+| [Cost of a full read](#2-cost), 16 channels, T up to 4096 | 0.64–0.88 ms | **FFT pipeline, 0.28–0.80 ms** | FFT |
+| [Cost of a full read](#2-cost), one channel | 0.74–329 ms | **FFT pipeline, 0.12–28 ms** | FFT, 6.2–15× faster |
 
 Two more checks of the count:
-- **[Pure noise](#4-pure-noise).** Entroptics reports a component in at most 2% of noise records
-  when you allow 5%, for every kind of noise tested except very heavy right tails (lognormal,
-  Pareto: 8.5–36%).
+- **[Pure noise](#4-pure-noise).** Entroptics reports a component in the 5% of noise records you
+  allow, for every kind of noise tested, very heavy right tails included: 4.1–6.2% pooled over six
+  record shapes. The closed-form edge it used to take reached 36% (lognormal) and 16% (Pareto).
 - **[Planted signals](#5-planted-signals).** A component spread across the channels is found in
-  90–100% of records.
+  95–100% of records.
 
 ### The methods
 
@@ -85,15 +85,15 @@ The fastest full read is in bold.
 
 | T | FFT alone (a spectrum only) | FFT pipeline | FFT pipeline, 16× padded | Entroptics, streaming |
 |---|---|---|---|---|
-| 1024 | 0.030 ms | **0.298 ms** (K 4) | 2.15 ms (K 4) | 0.628 ms (K 4) |
-| 4096 | 0.154 ms | **0.791 ms** (K 4) | 12.3 ms (K 4) | 0.890 ms (K 3) |
-| 16384 | 0.961 ms | 3.50 ms (K 4) | 76.6 ms (K 4) | **1.85 ms** (K 4) |
-| 65536 | 5.81 ms | 20.6 ms (K 4) | 341 ms (K 4) | **8.62 ms** (K 4) |
-| 262144 | 41.7 ms | 115 ms (K 4) | 1.52 s (K 4) | **44.2 ms** (K 3) |
-| 1048576 | 201 ms | 516 ms (K 6) | — | **207 ms** (K 4) |
+| 1024 | 0.029 ms | **0.277 ms** (K 4) | 2.13 ms (K 4) | 0.636 ms (K 4) |
+| 4096 | 0.166 ms | **0.799 ms** (K 4) | 13.3 ms (K 4) | 0.883 ms (K 3) |
+| 16384 | 0.921 ms | 3.60 ms (K 4) | 85.2 ms (K 4) | **1.89 ms** (K 4) |
+| 65536 | 6.26 ms | 22.0 ms (K 4) | 349 ms (K 4) | **9.32 ms** (K 4) |
+| 262144 | 44.3 ms | 122 ms (K 4) | 1.57 s (K 4) | **45.6 ms** (K 3) |
+| 1048576 | 214 ms | 534 ms (K 6) | — | **212 ms** (K 4) |
 
-- **Speed.** From T = 16384 the streaming read is faster than the FFT pipeline: 1.6–1.9× at
-  16384, and 2.3–2.6× from 65536 in every sweep. From T = 262144 it costs about what the FFT alone
+- **Speed.** From T = 16384 the streaming read is faster than the FFT pipeline: 1.8–2.0× at
+  16384, and 2.1–2.7× from 65536 in every sweep. From T = 262144 it costs about what the FFT alone
   does, and the FFT alone returns no count and no decay rates.
 - **Why it scales.** It folds each frame into a fixed-size summary, so its cost grows in step with
   T. The FFT's cost grows as T log T, once per channel, and the pipeline then works through the
@@ -105,18 +105,18 @@ The fastest full read is in bold.
 
 | T | FFT alone (a spectrum only) | FFT pipeline | FFT pipeline, 16× padded | Entroptics, fixed depth | Entroptics, automatic depth |
 |---|---|---|---|---|---|
-| 1024 | 0.0049 ms | **0.115 ms** (K 4) | 0.252 ms (K 4) | 0.641 ms (K 4) | 6.03 ms (K 4) |
-| 4096 | 0.0124 ms | **0.155 ms** (K 4) | 0.754 ms (K 4) | 0.940 ms (K 4) | 19.6 ms (K 4) |
-| 16384 | 0.0519 ms | **0.321 ms** (K 4) | 3.10 ms (K 4) | 2.26 ms (K 4) | 400 ms (K 4) |
-| 65536 | 0.300 ms | **1.06 ms** (K 6) | 17.3 ms (K 6) | 11.2 ms (K 4) | 30.7 s (K 4) |
-| 262144 | 1.30 ms | **4.64 ms** (K 4) | 124 ms (K 4) | 70.4 ms (K 4) | — |
-| 1048576 | 8.66 ms | **26.1 ms** (K 4) | 600 ms (K 4) | 328 ms (K 4) | — |
+| 1024 | 0.0048 ms | **0.118 ms** (K 4) | 0.258 ms (K 4) | 0.737 ms (K 4) | 2.23 ms (K 4) |
+| 4096 | 0.0136 ms | **0.155 ms** (K 4) | 0.804 ms (K 4) | 1.02 ms (K 4) | 15.0 ms (K 4) |
+| 16384 | 0.0559 ms | **0.318 ms** (K 4) | 3.43 ms (K 4) | 2.38 ms (K 4) | 412 ms (K 4) |
+| 65536 | 0.303 ms | **1.13 ms** (K 6) | 19.9 ms (K 6) | 11.3 ms (K 4) | 30.6 s (K 4) |
+| 262144 | 1.30 ms | **4.69 ms** (K 4) | 124 ms (K 4) | 70.8 ms (K 4) | — |
+| 1048576 | 8.25 ms | **28.4 ms** (K 4) | 586 ms (K 4) | 329 ms (K 4) | — |
 
-- **The FFT pipeline wins on one channel,** 5.6–16× faster than the fixed-depth read.
+- **The FFT pipeline wins on one channel,** 6.2–15× faster than the fixed-depth read.
 - **Against the padded pipeline** (the 16×-padded one, whose accuracy section 3 reports), the
   fixed-depth read is faster from T = 16384. It also counts right at every length.
 - **The automatic depth** reads a deeper window the longer a tone persists. Its cost grows much
-  faster than T: from 400 ms at T = 16384 to 30.7 s at 65536, where it is timed with one call per
+  faster than T: from 412 ms at T = 16384 to 30.6 s at 65536, where it is timed with one call per
   sweep.
 
 Script: [`operator_vs_fft.py`](operator_vs_fft.py) → [`operator_vs_fft.jsonl`](operator_vs_fft.jsonl)
@@ -198,38 +198,46 @@ Script: [`operator_vs_fft.py`](operator_vs_fft.py) → [`operator_vs_fft.jsonl`]
 **The test.** Feed Entroptics records with nothing in them and count how often it reports a
 component anyway. You choose how often that is acceptable: 5% by default.
 
-**The result.** At most 2% for every kind of noise tested except very heavy right tails (lognormal,
-Pareto).
+**The result.** At the 5% you allow, for every kind of noise tested, very heavy right tails
+included. The closed-form edge Entroptics took before 0.2.7, beside it, over-reads heavy tails.
 
 ![How often a component is reported in pure noise](fig_null.png)
 
-Over 200 records per case, taking the worst of six record shapes (256 × 8 to 20 × 1000).
+Over 200 records per shape, six record shapes (256 × 8 to 20 × 1000) pooled per kind of noise; `±` is
+the binomial standard error of the pooled rate at 5%. "Within" allows the rate that noise across the
+13 kinds, at the release gate's family-wise level.
 
-| noise | a component reported | within the 5% you allowed? |
-|---|---|---|
-| Gaussian | 1.5% | yes |
-| Gaussian, channels at different levels (e^-1 .. e^1) | 2.0% | yes |
-| Gaussian, channels at different levels (e^-2 .. e^2) | 2.0% | yes |
-| complex Gaussian, channels at different levels | 2.0% | yes |
-| Student t (5), occasional large values | 1.5% | yes |
-| exponential, lopsided | 2.0% | yes |
-| χ² (1), lopsided | 1.5% | yes |
-| Poisson (1), counts | 1.0% | yes |
-| Poisson (5), counts | 1.0% | yes |
-| Poisson (5), counts at different levels | 1.5% | yes |
-| lognormal (σ = 1), very heavy right tail | 8.5% | no |
-| lognormal (σ = 1.5), very heavy right tail | 36% | no |
-| Pareto (3), very heavy right tail | 16% | no |
+| noise | Entroptics (exact floor) | closed-form edge | within the 5% you allowed? |
+|---|---|---|---|
+| Gaussian | 4.5% ± 0.6 | 0.9% | yes |
+| Gaussian, channels at different levels (e^-1 .. e^1) | 5.1% ± 0.6 | 1.2% | yes |
+| Gaussian, channels at different levels (e^-2 .. e^2) | 5.3% ± 0.6 | 1.3% | yes |
+| complex Gaussian, channels at different levels | 5.0% ± 0.6 | 1.0% | yes |
+| Student t (5), occasional large values | 5.4% ± 0.6 | 0.6% | yes |
+| exponential, lopsided | 4.1% ± 0.6 | 0.8% | yes |
+| χ² (1), lopsided | 4.9% ± 0.6 | 0.8% | yes |
+| Poisson (1), counts | 4.1% ± 0.6 | 0.2% | yes |
+| Poisson (5), counts | 5.5% ± 0.6 | 0.6% | yes |
+| Poisson (5), counts at different levels | 4.8% ± 0.6 | 1.0% | yes |
+| lognormal (σ = 1), very heavy right tail | 6.2% ± 0.6 | 4.3% | yes |
+| lognormal (σ = 1.5), very heavy right tail | 5.6% ± 0.6 | 14.1% | yes |
+| Pareto (3), very heavy right tail | 4.4% ± 0.6 | 5.5% | yes |
 
 **Why it holds.** Every channel is scaled to the same size before the count, so the count asks only
-whether channels move together. In noise, the largest pattern that can appear by chance follows a
-known law (Tracy–Widom), and Entroptics draws its line where pure noise crosses it 5% of the time.
+whether channels move together. Entroptics answers by shuffling each channel in time -- which keeps
+every channel's values and destroys their alignment -- and reading the shuffled record the same way,
+nineteen times. Pure noise is then one of twenty equally likely records, so the real one lands above
+the highest shuffle one time in twenty, whatever the noise's distribution: that is the 5%.
 
-Very heavy right tails reach that law slowly (lognormal) or not at all (Pareto (3), whose fourth
-moment is infinite). Their extreme values cross the line more often the longer the record: at 1024
-samples × 64 channels, 36% for lognormal (σ = 1.5) and 16% for Pareto (3).
+The closed-form edge instead assumes the law a Gaussian record's largest pattern follows
+(Tracy–Widom). Light tails reach it with room to spare, which is why it reports so little; very heavy
+right tails reach it slowly (lognormal) or not at all (Pareto (3), whose fourth moment is infinite),
+and their extreme values cross it more often the longer the record: at 1024 samples × 64 channels,
+36% for lognormal (σ = 1.5) and 16% for Pareto (3). It remains the floor where only a covariance is
+held, and `null=null_providers.mp` asks for it.
 
-Script: [`screen_null.py`](screen_null.py) → [`screen_null.jsonl`](screen_null.jsonl).
+Script: [`screen_null.py`](screen_null.py) → [`screen_null.jsonl`](screen_null.jsonl). Its masked
+rows show the same level with cells missing: 4.4% pooled over 72 masked cases.
 
 ## 5. Planted signals
 
@@ -239,10 +247,10 @@ exactly, over three record shapes and two channel-level profiles.
 | planted signal | found | counted exactly |
 |---|---|---|
 | a persistent mode across all channels | 100% | 100% |
-| a narrow broadband burst | 90–100% | 90–100% |
+| a narrow broadband burst | 95–100% | 95–100% |
 | three modes just above the noise | 100% | 72–100% |
 | two strong modes | 100% | 99–100% |
-| a narrowband line in two channels | 0–15% | 0–15% |
+| a narrowband line in two channels | 4–35% | 4–35% |
 
 A component has to span enough channels to stand above the noise: more than about `(1 + √(F/T))²`.
 That is two channels on a long record, and nine for 64 samples across 256 channels. A line confined
@@ -262,6 +270,9 @@ Script: [`screen_null.py`](screen_null.py) (the `detect` records).
 | [`operator_read.py`](operator_read.py) | printed | the research prototype of the automatic-depth read |
 | [`readme_examples.py`](readme_examples.py) | `readme_examples.txt` | every README example, run as printed |
 | [`figures.py`](figures.py) | `fig_*.png` | the figures and tables on this page, from the outputs above |
+| [`baseline.py`](baseline.py) | `baseline_metrics.json` | the release baseline: sensitivity on a ladder of planted strengths, and accuracy, each with its sampling error |
+| [`cost.py`](cost.py) | `cost_metrics.json` | the release baseline: instructions (valgrind) and peak bytes per read |
+| [`gate.py`](gate.py) | exit status | a candidate against the baseline, by `entroptics.gate.compare`: fails on any metric worse beyond its noise |
 
 ```bash
 python research/benchmarks/operator_vs_fft.py        # any script; needs scipy for the FFT pipeline

@@ -7,10 +7,8 @@ screen at the TW1 quantile with the real Wishart centring delivered a false-alar
 Neyman-Pearson contract, so a delivered level that is not the requested one is the defect,
 whether or not it happens to cost a detection.
 
-Constants: Chiani (2014), arXiv:1209.3394 / J. Multivariate Anal. 129:69-81.
-  Table 1  Gamma parameters (k, theta, alpha) for TW1 / TW2 / TW4
-  Table 2  TW1 percentiles (which _TW1_UPPER_Q is read off)
-  Table 3  TW2 percentiles (a cross-check on the derived quantile; not read into the code)
+References: Chiani (2014), arXiv:1209.3394 / J. Multivariate Anal. 129:69-81.
+  Table 3  TW2 percentiles (a cross-check on the exact law; not read into the code)
   eq (33)-(34)  the Wishart centring adjustment: a1 = a2 = -1/2 real, a1 = a2 = 0 complex
 """
 import math
@@ -31,7 +29,7 @@ def _far(N, F, complex_, trials=300):
         W = g.standard_normal((N, F))
         if complex_:
             W = (W + 1j * g.standard_normal((N, F))) / np.sqrt(2.0)   # same total power
-        hits += Projection(W).K_signal >= 1
+        hits += Projection(W, null=npv.mp).K_signal >= 1        # the TW edge law under test
     return hits / trials
 
 
@@ -79,25 +77,13 @@ def test_the_far_test_can_actually_fail():
 
 
 def test_tw2_quantiles_match_chiani_table_3():
-    """The DERIVED quantile against an independent published reference.
-
-    The code carries no TW2 quantile table -- every level is obtained by inverting the survival
-    function, whose Gamma parameters are themselves a moment match to TW2's mean, variance and
-    skewness.  So this asserts the derivation lands on Chiani (2014) Table 3, which is a real
-    check; the previous version asserted a lookup returned what had been looked up, which is not.
-    The tolerance is the Gamma approximation's own stated CDF error, ~7e-3."""
-    for far, published in ((0.10, -0.59), (0.05, -0.23), (0.01, 0.48), (0.001, 1.31)):
-        assert abs(npv.tw2_quantile(far) - published) < 0.01, (far, npv.tw2_quantile(far))
-
-    # and the Gamma parameters must BE the moment match, not numbers that drifted from it
-    k = 4.0 / npv._TW2_SKEW ** 2
-    th = npv._TW2_VAR ** 0.5 * npv._TW2_SKEW / 2.0
-    assert abs(npv._TW2_G_K - k) < 1e-9 and abs(npv._TW2_G_TH - th) < 1e-12
-    assert abs(npv._TW2_G_LOC - (npv._TW2_MEAN - k * th)) < 1e-9
-
-    # no level is privileged: the function must have no step at any level
-    for far in (0.05, 0.0501, 0.0499):
-        assert abs(npv.tw2_quantile(far) - npv._tw_quantile_invert(far, npv.tw2_sf)) < 1e-12
+    """The exact TW2 quantile against the published TW2 percentiles (Chiani 2014 Table 3;
+    Bornemann 2010) to the four decimals they are quoted to; and the quantile and the survival are
+    one law, with no step at any level."""
+    for far, published in ((0.10, -0.5969), (0.05, -0.2325), (0.01, 0.4776)):
+        assert abs(npv.tw2_quantile(far) - published) < 1e-4, (far, npv.tw2_quantile(far))
+    for far in (0.05, 0.0501, 0.0499, 1e-9):
+        assert abs(npv.tw2_sf(npv.tw2_quantile(far)) / far - 1.0) < 1e-12
     # TW2's tail is thinner than TW1's
     assert npv.tw2_quantile(0.05) < npv.tw1_quantile(0.05)
     assert npv.tw_quantile(0.05, complex_=True) == npv.tw2_quantile(0.05)
@@ -158,7 +144,7 @@ def test_the_real_path_did_not_move():
     g = np.random.default_rng(11)
     for shape in ((64, 24), (128, 128), (40, 90)):
         W = g.standard_normal(shape)
-        sc = Projection(W)
+        sc = Projection(W, null=npv.mp)
         N, F = sc.screen.shape
         s2 = npv.noise_sigma2(np, sc.screen, N, F)
         expect = math.sqrt(npv.screen_floor_sq(s2, N, F, 0.05))

@@ -1,0 +1,89 @@
+{
+ "meta": {
+  "kind": "resources+throughput",
+  "reps": 3,
+  "numpy": "2.5.3"
+ },
+ "metrics": {
+  "throughput.instructions.projection.256x32": {
+   "value": 32550656.333333336,
+   "se": 80480.33333333395,
+   "better": "lower"
+  },
+  "resources.peak_bytes.projection.256x32": {
+   "value": 431629.0,
+   "se": 180.0,
+   "better": "lower"
+  },
+  "throughput.instructions.projection.1024x64": {
+   "value": 198247410.1666667,
+   "se": 74431.16666667163,
+   "better": "lower"
+  },
+  "resources.peak_bytes.projection.1024x64": {
+   "value": 3414113.5,
+   "se": 23.5,
+   "better": "lower"
+  },
+  "throughput.instructions.projection.32x512": {
+   "value": 319186849.5,
+   "se": 409956.16666668653,
+   "better": "lower"
+  },
+  "resources.peak_bytes.projection.32x512": {
+   "value": 7586464.0,
+   "se": 54.0,
+   "better": "lower"
+  },
+  "throughput.instructions.spectral.1024x64": {
+   "value": 280401709.8333333,
+   "se": 85353.5,
+   "better": "lower"
+  },
+  "resources.peak_bytes.spectral.1024x64": {
+   "value": 2768168.0,
+   "se": 32.0,
+   "better": "lower"
+  },
+  "throughput.instructions.rates.2000x32": {
+   "value": 137740849.6666667,
+   "se": 42986.666666671634,
+   "better": "lower"
+  },
+  "resources.peak_bytes.rates.2000x32": {
+   "value": 1620392.0,
+   "se": 24.0,
+   "better": "lower"
+  },
+  "throughput.instructions.extract.64x256": {
+   "value": 265196292.83333334,
+   "se": 110123.5,
+   "better": "lower"
+  },
+  "resources.peak_bytes.extract.64x256": {
+   "value": 2840261.0,
+   "se": 12.0,
+   "better": "lower"
+  },
+  "throughput.instructions.resolved_batch.32x128x16": {
+   "value": 407879824.0,
+   "se": 101806.0,
+   "better": "lower"
+  },
+  "resources.peak_bytes.resolved_batch.32x128x16": {
+   "value": 3230099.0,
+   "se": 88.0,
+   "better": "lower"
+  },
+  "throughput.instructions.resolved_screen.400x32": {
+   "value": 327515776.8333334,
+   "se": 148433.83333334327,
+   "better": "lower"
+  },
+  "resources.peak_bytes.resolved_screen.400x32": {
+   "value": 151526.0,
+   "se": 1020.0,
+   "better": "lower"
+  }
+ }
+}

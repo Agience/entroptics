@@ -19,7 +19,6 @@ import numpy as np
 import pytest
 
 from entroptics import Aperture
-from entroptics.aperture import MIN_WINDOW
 from entroptics.entropy import geometry, fold_width, feature_adjacency
 from entroptics.reads import phi, phi_F, phi_T
 
@@ -201,10 +200,9 @@ def test_the_mask_is_trimmed_to_the_same_window_as_the_data():
 def test_a_finite_record_is_read_whole_and_a_stream_is_bounded():
     """`window` follows what the aperture was handed. A caller who passes a complete record gets a
     read of that record; a caller feeding frames gets the coherent window, which is what bounds
-    memory on a stream that has no end. Handing over a record and being read 128 rows of it was
-    the surprise this removes."""
+    memory on a stream that has no end."""
     rng = np.random.default_rng(11)
-    W = rng.standard_normal((4 * MIN_WINDOW, 16))
+    W = rng.standard_normal((512, 16))
 
     batch = Aperture(W)
     assert batch.window is None
@@ -213,7 +211,7 @@ def test_a_finite_record_is_read_whole_and_a_stream_is_bounded():
     stream = Aperture()
     for row in W:
         stream.update(row)
-    assert stream.window == MIN_WINDOW
+    assert stream.window == 16 + 1                     # the fewest frames that carry all 16 directions
     assert stream.W.shape[0] <= W.shape[0]            # bounded by the coherent window
 
     assert Aperture(W, window=64).window == 64        # an explicit window still wins

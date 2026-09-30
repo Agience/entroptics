@@ -13,28 +13,37 @@ import pytest
 
 from entroptics import Projection, Aperture
 from entroptics.projection import footprints
+from entroptics import null_providers as nulls
 
 
-def _far(N, F, trials=200):
+def _far(N, F, trials=200, null=None):
     """P(K_signal >= 1) on pure iid Gaussian noise (deterministic seeds)."""
     hits = 0
     for i in range(trials):
         W = np.random.default_rng(1000 + i).standard_normal((N, F))
-        hits += Projection(W).K_signal >= 1
+        hits += Projection(W, null=null, seed=i).K_signal >= 1
     return hits / trials
 
 
+# Both floors: the default (exact permutation) and the closed-form edge, whose per-cell variance
+# is the part an estimate could bias.
+FLOORS = [None, nulls.mp]
+
+
+@pytest.mark.parametrize("null", FLOORS)
 @pytest.mark.parametrize("N,F", [(1000, 20), (500, 50), (200, 50), (128, 128), (20, 1000)])
-def test_floor_far_calibrated_across_aspect_ratios(N, F):
+def test_floor_far_calibrated_across_aspect_ratios(N, F, null):
     # Target FAR is 5%; assert well under 15% at every aspect ratio. An uncalibrated
     # (biased) floor can give 0.40 at (1000,20) and 0.20 at (20,1000).
-    assert _far(N, F) < 0.15
+    assert _far(N, F, null=null) < 0.15
 
 
-def test_floor_far_not_trivially_zero():
+@pytest.mark.parametrize("null", FLOORS)
+def test_floor_far_not_trivially_zero(null):
     # A floor that never fires would also pass the bound above; confirm it is a real
     # ~5% test by checking the pooled FAR over shapes is in a sane band, not 0.
-    pooled = np.mean([_far(N, F, trials=150) for (N, F) in [(200, 50), (128, 128), (256, 256)]])
+    pooled = np.mean([_far(N, F, trials=150, null=null)
+                      for (N, F) in [(200, 50), (128, 128), (256, 256)]])
     assert 0.005 < pooled < 0.12
 
 
@@ -49,15 +58,16 @@ def test_floor_detects_planted_mode():
         assert Projection(W).K_signal >= 1
 
 
-def test_floor_holds_under_heteroscedastic_noise():
-    # Channels with 10x different noise scales must still whiten to a calibrated floor
-    # (the shrinkage keeps a noisy small-N per-channel MAD from exploding the floor).
+@pytest.mark.parametrize("null", FLOORS)
+def test_floor_holds_under_heteroscedastic_noise(null):
+    # Channels with 10x different noise scales must still whiten to a calibrated floor: the RMS
+    # whitening gives every channel one scale, whatever its level.
     hits = 0
     for i in range(150):
         rng = np.random.default_rng(2000 + i)
         scales = np.exp(rng.uniform(-math.log(10), math.log(10), 60))
         W = rng.standard_normal((150, 60)) * scales[None, :]
-        hits += Projection(W).K_signal >= 1
+        hits += Projection(W, null=null, seed=i).K_signal >= 1
     assert hits / 150 < 0.20
 
 
@@ -133,17 +143,22 @@ def test_spectral_mp_edge_far_calibrated_moderate_sampling():
         assert hits / 200 < 0.15
 
 
-def test_tw1_survival_matches_tabulated_quantiles():
-    # the Chiani Gamma approximation P(TW1 > q_alpha) must return alpha at the tabulated
-    # upper quantiles (the same q used by the floor), within the approximation error.
-    from entroptics.projection import _tw1_sf, _TW1_UPPER_Q
-    for far, q in _TW1_UPPER_Q.items():
-        assert abs(_tw1_sf(q) - far) < 0.005
+def test_tw1_survival_and_quantile_are_one_exact_law():
+    # the floor's quantile and the p-values are the same exact law: P(TW1 > q(far)) == far to
+    # round-off, and q lands on the published TW1 percentiles (Bejan 2005; Chiani 2014 Table 2)
+    # to the four decimals they are quoted to
+    from entroptics.null_providers import tw1_quantile, tw1_sf
+    for far, published in ((0.10, 0.4501), (0.05, 0.9793), (0.025, 1.4538), (0.01, 2.0234)):
+        q = tw1_quantile(far)
+        assert abs(q - published) < 1e-4, (far, q)
+        assert abs(tw1_sf(q) / far - 1.0) < 1e-12
 
 
 def test_mode_significance_consistent_with_k_signal():
-    # the resolved count must equal the number of modes whose p-value clears far:
+    # the resolved count must equal the number of modes whose p-value clears far -- under the
+    # default floor (exact Monte Carlo p-values from its own draws) and under mp (Tracy-Widom):
     # the evidence read and the thresholded count are the same object at the same far.
+    from entroptics import null_providers as nulls
     for (N, F, r) in [(200, 50, 0), (128, 128, 0), (300, 60, 3), (20, 1000, 0)]:
         rng = np.random.default_rng(N + F)
         W = rng.standard_normal((N, F))
@@ -151,17 +166,22 @@ def test_mode_significance_consistent_with_k_signal():
             u = rng.standard_normal(N); u /= np.linalg.norm(u)
             v = rng.standard_normal(F); v /= np.linalg.norm(v)
             W = W + 3.0 * (math.sqrt(N) + math.sqrt(F)) * np.outer(u, v)
-        sc = Projection(W)
-        sig = sc.significance
-        assert int((sig.pvalue < 0.05).sum()) == sc.K_signal          # far=0.05 default
-        assert (sig.pvalue >= 0.0).all() and (sig.pvalue <= 1.0).all()
-        assert sig.deviate.shape == sig.pvalue.shape == sc.S.shape
+        heavy = np.exp(1.5 * rng.standard_normal((N, F)))          # lognormal: mp's edge fails here
+        gaps = rng.random((N, F)) < 0.2
+        for X, M in ((W, None), (W, gaps), (heavy, None), (heavy, gaps)):
+            for null in (None, nulls.mp, nulls.permutation(), nulls.by_kind(spectral=nulls.mp)):
+                sc = Projection(X, mask=M, null=null)
+                sig = sc.significance
+                assert int((sig.pvalue <= 0.05).sum()) == sc.K_signal      # far=0.05 default
+                assert (sig.pvalue >= 0.0).all() and (sig.pvalue <= 1.0).all()
+                assert sig.deviate.shape == sig.pvalue.shape == sc.S.shape
 
 
 def test_mode_significance_is_alpha_free_evidence():
-    # the evidence (deviate, pvalue) does not depend on any threshold; only the count does.
+    # the closed-form evidence (deviate, pvalue) does not depend on any threshold; only the count
+    # does.  (The permutation floor's evidence resolves steps its level sizes: 1 / (n + 1).)
     W = np.random.default_rng(5).standard_normal((150, 40))
-    sig = Aperture(W).significance
+    sig = Aperture(W, null=nulls.mp).significance
     # a stronger far resolves at least as many modes as a weaker one, from the same p-values
     assert int((sig.pvalue < 0.10).sum()) >= int((sig.pvalue < 0.01).sum())
 
@@ -190,17 +210,17 @@ def test_footprint_count_matches_k_signal():
 
 # ── the noise floor as a caller-suppliable null provider (screen floor / K_signal) ──
 
-from entroptics import null_providers as nulls
 
 
-def test_default_null_is_mp_and_unchanged():
-    # the default null provider must be mp, reproducing the reference floor and K_signal
-    # exactly (the whole suite/golden rests on this); passing mp explicitly matches None.
+def test_default_null_is_the_exact_permutation_test():
+    # With the screen in hand the default floor is the exact permutation test at its fewest
+    # draws: passing ``permutation()`` explicitly matches ``None``, on a read and on a bare screen.
     from entroptics.projection import noise_floor
     W = np.random.default_rng(11).standard_normal((120, 40))
     sc = Projection(W)
-    assert Projection(W, null=nulls.mp).K_signal == sc.K_signal
-    assert noise_floor(sc.screen) == noise_floor(sc.screen, null=nulls.mp)
+    assert Projection(W, null=nulls.permutation()).noise_floor == sc.noise_floor
+    assert noise_floor(sc.screen) == noise_floor(sc.screen, null=nulls.permutation())
+    assert nulls.fewest_draws(0.05) == 19 and nulls.fewest_draws(0.01) == 99
 
 
 def test_permutation_provider_states_the_same_null_as_mp():
@@ -214,7 +234,7 @@ def test_permutation_provider_states_the_same_null_as_mp():
         T, F = 150, 30
         A = r.standard_normal((F, F))                      # full-rank random mixing
         X = r.standard_normal((T, F)) @ A                  # correlated bulk, not low-rank
-        m = Projection(X)                                                          # default mp
+        m = Projection(X, null=nulls.mp)
         p = Projection(X, null=nulls.permutation(draws=80), seed=0)
         assert m.K_signal >= 1 and abs(p.K_signal - m.K_signal) <= 1
         assert abs(float(p.noise_floor) / float(m.noise_floor) - 1.0) < 0.05
@@ -277,10 +297,12 @@ def test_stateful_provider_update_runs_in_the_stream():
 
 
 def test_spectral_null_provider_matches_default():
-    # the correlation floor takes the same provider contract; None == mp explicitly.
+    # the correlation floor takes the same provider contract; with the samples in hand the default
+    # is the exact permutation test, None == permutation() explicitly.
     from entroptics.reads import spectral_optics
     W = np.random.default_rng(2).standard_normal((120, 40))
-    assert spectral_optics(W).noise_floor == spectral_optics(W, null=nulls.mp).noise_floor
+    assert (spectral_optics(W).noise_floor
+            == spectral_optics(W, null=nulls.permutation()).noise_floor)
     assert spectral_optics(W, null=nulls.robust).resolved_modes >= 0
 
 
@@ -328,8 +350,9 @@ def test_by_kind_rejects_unknown_cut_point():
 
 
 def test_reference_null_is_deterministic_and_sharpens():
-    # the reference-calibrated Gaussian null: floor = center + z(far)*scale from a signal-free
-    # reference's top-mode values.  Deterministic, and sharpens analytically to any far.
+    # the reference-calibrated null: floor = the exact rank over a signal-free reference's
+    # top-mode values.  Deterministic; a sharper far takes a higher rank, and a far below
+    # 1 / (n + 1) claims nothing (an infinite floor), rather than extrapolating a tail.
     from entroptics.null_providers import reference_null, apply_floor, ReferenceNull, top_spectrum_value
     r = np.random.default_rng(0)
     ref = [top_spectrum_value(r.standard_normal((100, 20)), "projection") for _ in range(80)]
@@ -337,21 +360,24 @@ def test_reference_null_is_deterministic_and_sharpens():
     def floor(far):
         return apply_floor(prov, spectrum=None, data=None, shape=(100, 20), far=far, kind="projection")
     assert floor(0.05) == floor(0.05)                       # deterministic (no RNG)
-    assert floor(1e-5) > floor(0.05) > floor(0.5)           # sharper far -> higher floor, analytically
-    # the stateful Welford form matches the batch calibration
+    assert floor(1e-5) == np.inf > floor(0.05) > floor(0.5)   # sharper far -> higher rank
+    # the stateful form holds the same values and gives the same floor
     rn = ReferenceNull(ref)
-    assert rn.center == pytest.approx(prov.center) and rn.scale == pytest.approx(prov.scale, rel=1e-6)
+    assert rn.center == pytest.approx(prov.center) and rn.scale == pytest.approx(prov.scale, rel=1e-12)
     assert rn.n_reference == len(ref)
+    assert apply_floor(rn, spectrum=None, data=None, shape=(100, 20), far=0.05,
+                       kind="projection") == floor(0.05)
 
 
 def test_derived_edge_serves_arbitrary_sharp_far():
     # the false-alarm level travels with the null and may be sharpened without limit: the
-    # TW1 quantile is inverted from the survival function for any far outside the tabulated
-    # set (e.g. 1e-5 = 99.999%), and sharper far -> larger quantile -> higher floor.
+    # TW1 quantile is exact at any far (e.g. 1e-5 = 99.999%), and sharper far -> larger quantile ->
+    # higher floor.
     qs = [nulls.tw1_quantile(f) for f in [0.10, 0.05, 1e-3, 1e-5, 1e-7]]
     assert all(np.isfinite(qs)) and all(x < y for x, y in zip(qs, qs[1:]))   # monotone, no raise
     W = np.random.default_rng(7).standard_normal((120, 40))
-    assert Projection(W, far=1e-5).K_signal <= Projection(W, far=0.05).K_signal      # sharper -> stricter
+    assert (Projection(W, far=1e-5, null=nulls.mp).K_signal          # sharper -> stricter
+            <= Projection(W, far=0.05, null=nulls.mp).K_signal)
 
 
 def test_stateful_provider_sharpens_alpha_over_the_run():
@@ -414,12 +440,14 @@ def test_the_projection_cut_point_is_named_projection():
 
 def test_a_reference_calibrated_aperture_uses_the_projection_statistic():
     """The reference null the aperture builds for its projection must match one built by hand
-    in the projection's own units."""
+    in the projection's own units: each reference record read as a screen -- whitened, and at the
+    width the thresholded screen was read at."""
     from entroptics import reference_null, top_spectrum_value
     rng = np.random.default_rng(5)
     ref = [rng.standard_normal((256, 16)) for _ in range(40)]
     W = _signal_frame(seed=1)
-    by_hand = reference_null([top_spectrum_value(r, "projection") for r in ref])
+    assert Projection(W).screen.shape[1] == 16 == Projection(ref[0]).screen.shape[1]
+    by_hand = reference_null([top_spectrum_value(Projection(r).screen, "projection") for r in ref])
     assert Aperture(W, reference=ref).projection().noise_floor == \
            pytest.approx(Projection(W, null=by_hand).noise_floor, rel=1e-12)
 
@@ -535,7 +563,83 @@ def test_weighted_effective_draws_nothing_at_all():
             bad()
 
 
-def test_default_floor_is_untouched_by_the_new_provider():
-    from entroptics import null_providers as npv
-    W = np.random.default_rng(11).standard_normal((64, 24))
-    assert float(Projection(W).noise_floor) == float(Projection(W, null=npv.mp).noise_floor)
+def test_the_default_floor_holds_its_level_where_mp_does_not():
+    """On lognormal noise the closed-form edge claims structure far above its level; the default
+    (exact permutation) floor holds it, as an exact test must for any noise law."""
+    hits_d, hits_mp = 0, 0
+    n = 200
+    for i in range(n):
+        W = np.exp(1.5 * np.random.default_rng(700 + i).standard_normal((256, 32)))
+        hits_d += Projection(W, seed=i).K_signal > 0
+        hits_mp += Projection(W, null=nulls.mp).K_signal > 0
+    assert hits_d / n <= 0.05 + 3 * math.sqrt(0.05 * 0.95 / n)
+    assert hits_mp / n > 0.05 + 3 * math.sqrt(0.05 * 0.95 / n)       # the control: mp over level
+
+
+def test_sampled_floor_is_the_exact_monte_carlo_rank():
+    """The sampled floor is the ``n + 1 - floor(far (n + 1))``-th smallest of its ``n`` surrogate
+    top values -- the order statistic that makes the test exact at every ``n`` -- not an
+    interpolated quantile, which sits below it and lets the observed record over its level.  Each
+    draw is ranked by its screen's standardized deviate with its round-off bound, and the rank is
+    stated back in the observed screen's units with the observed read's bound added."""
+    from entroptics import null_providers as nulls
+    X = np.random.default_rng(3).standard_normal((64, 8))
+
+    def floor(draws, far=0.05):
+        return nulls.apply_floor(nulls.permutation(draws=draws), spectrum=None, data=X,
+                                 shape=X.shape, far=far, kind="projection", seed=5)
+
+    def rank(draws, k):
+        rng = np.random.default_rng(5)
+        sc = np.sort([nulls._scored(nulls.shuffle_in_time(X, rng), "projection")
+                      for _ in range(draws)])
+        return nulls._observed_floor(float(sc[k - 1]), X, "projection")
+
+    assert floor(39) == pytest.approx(rank(39, 38), rel=1e-13)         # k = 40 - 2 = 38: the second largest of 39
+    assert floor(19) == pytest.approx(rank(19, 19), rel=1e-13)         # k = 19: the largest of 19
+    assert floor(199) == pytest.approx(rank(199, 190), rel=1e-13)       # k = 200 - 10 = 190
+    assert floor(18) == math.inf              # no rank of 19 is rare enough for far = 0.05
+
+
+@pytest.mark.parametrize("bits", [64, 32])
+def test_a_statistic_the_shuffle_keeps_is_never_evidence(monkeypatch, bits):
+    """One live channel: its norm is exactly what a time shuffle keeps, so the observed top value and
+    every draw differ only by the order the sums were taken in -- by how much depends on the
+    arithmetic (some summation orders tie exactly).  The round-off bound covers that difference,
+    in the data's own precision, so the channel never resolves, and the bound is not vacuous."""
+    from entroptics import null_providers as nulls
+    monkeypatch.setattr("entroptics.environment._PRECISION", bits)     # restored after the test
+    dt = np.dtype(f"float{bits}")
+
+    def record(i):
+        return (np.random.default_rng(i).standard_normal((256, 1)) * 5
+                + np.sin(np.arange(256) / 7)[:, None]).astype(dt)
+
+    assert sum(Projection(record(i), seed=i).K_signal > 0 for i in range(100)) == 0
+    # the bound covers every draw's departure from the observed value, and is positive
+    for i in range(20):
+        X = (record(i) - record(i).mean()).astype(dt)
+        v = nulls.top_spectrum_value(X, "projection")
+        bound = nulls._roundoff(X, "projection", v)
+        assert bound > 0
+        rng = np.random.default_rng(i)
+        for _ in range(19):
+            d = nulls.top_spectrum_value(nulls.shuffle_in_time(X, rng), "projection")
+            assert abs(d - v) <= 2 * bound                # each side carries its own bound
+
+def test_a_reference_of_planes_reads_a_narrower_fold_at_its_own_width():
+    """A reference pinned on planes of one shape reads a plane of that shape whose screen folds
+    narrower, without refusing it, against the reference read at that narrower width."""
+    from entroptics import reference_null
+    from entroptics.null_providers import _plane_top
+    rng = np.random.default_rng(0)
+    ref = [rng.standard_normal((8, 8)) for _ in range(40)]
+    prov = reference_null(ref, shape=(8, 8))
+    x = rng.standard_normal((8, 8)) * np.array([6, 6, 6, 1, 1, 1, 1, 1.0])
+    p = Projection(x, null=prov)
+    w = p.screen.shape[1]
+    assert w < 8                                             # the fold is narrower than the plane
+    tops = np.array([_plane_top(r, "projection", w) for r in ref])
+    assert p.noise_floor == pytest.approx(nulls._rank_of(tops, 0.05), rel=1e-12)
+    with pytest.raises(ValueError):                          # a different record length is refused
+        Projection(rng.standard_normal((12, 8)), null=prov)

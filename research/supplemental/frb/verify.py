@@ -30,7 +30,8 @@ means = {k: float(v) for k, v in _ag[-1].items() if k != "event" and v}
 agreement = [r for r in _ag if r["event"] != "mean"]
 # frb_panel.csv carries a trailing full-precision mean row for the correlation columns;
 # the per-event checks below are over the events only.
-events = [r for r in csv.DictReader(open(TABLES / "events.csv")) if r["event"] != "mean"]
+events = [r for r in csv.DictReader(open(TABLES / "events.csv"))
+          if r["event"] != "mean" and not r["event"].startswith("#")]   # a trailing comment row
 _sp = list(csv.reader(open(TABLES / "spotcheck.csv")))
 spot = [dict(zip(_sp[1], r)) for r in _sp[2:]]          # row 0 is the provenance comment
 
@@ -117,7 +118,7 @@ check("width read at, range", 5949, lo, 0.5)
 check("width read at, range", 10972, hi, 0.5)
 lo, hi = _rng(events, "contrast")
 check("four-event contrast, range", 1.17, lo)
-check("four-event contrast, range", 2.02, hi)
+check("four-event contrast, range", 2.03, hi)
 lo, hi = _rng(events, "T")
 check("four-event T, range", 19, lo, 0.5)
 check("four-event T, range", 38, hi, 0.5)
@@ -127,7 +128,7 @@ check("four events on the figure", 4, len(events), 0.5)
 resolved = [r for r in spot if int(r["K_signal"]) >= 1]
 blank = [r for r in spot if int(r["K_signal"]) == 0]
 check("waterfalls drawn", 12, len(spot), 0.5)
-check("resolved K_signal >= 1", 7, len(resolved), 0.5)
+check("resolved K_signal >= 1", 8, len(resolved), 0.5)
 lo, hi = _rng(blank, "contrast")
 check("unresolved contrast, range", 0.99, lo)
 check("unresolved contrast, range", 1.00, hi)

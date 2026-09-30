@@ -468,13 +468,16 @@ def test_attenuation_interval_certifies_the_constant(W):
 
 
 def test_reference_null_scores_a_context_at_its_own_level():
-    """``ReferenceNull`` is a provider: called on a context it returns the floor its calibration
-    sample implies, and a higher sample lifts the floor."""
+    """``reference_null`` is a provider: called on a context it returns the floor its calibration
+    sample implies -- the exact rank over it -- and a higher sample lifts the floor.  A sample too
+    small for any rank to be rare enough at the level claims nothing."""
     from entroptics.null_providers import reference_null
-    low = reference_null([1.0, 1.1, 0.9, 1.05, 0.95, 1.0])
-    high = reference_null([10.0, 11.0, 9.0, 10.5, 9.5, 10.0])
+    low = reference_null(np.linspace(0.9, 1.1, 19))
+    high = reference_null(np.linspace(9.0, 11.0, 19))
     ctx = _ctx(np.zeros((12, 4)))
     assert 0.0 < low(ctx) < high(ctx)
+    assert low(ctx) == 1.1                                   # 19 values at far = 0.05: the largest
+    assert reference_null(np.linspace(0.9, 1.1, 18))(ctx) == np.inf
 
 
 def test_spectrum_probe_length_is_its_channel_count():
@@ -506,22 +509,24 @@ def test_reference_null_class_is_a_streaming_provider_with_fading_memory():
     from entroptics.null_providers import ReferenceNull
     ctx = _ctx(np.zeros((12, 4)))
 
-    quiet, loud = ReferenceNull([1.0] * 8), ReferenceNull([10.0] * 8)
+    quiet, loud = ReferenceNull([1.0] * 19), ReferenceNull([10.0] * 19)
     assert 0.0 < quiet(ctx) < loud(ctx)                    # the provider interface
+    assert ReferenceNull([1.0] * 18)(ctx) == np.inf        # too few values for any rank at far
 
     assert not hasattr(ReferenceNull([1.0] * 4), "update")  # cannot self-calibrate on the signal
 
-    # the noise level moves from 1 to 10 under both, and only the fading null follows it:
-    # perfect memory still carries the old values, so its floor is inflated by the SPREAD of a
-    # sample that is really two populations, while the fading one settles on the level now.
-    remembering = ReferenceNull([1.0] * 40, forgetting=1.0)
-    fading = ReferenceNull([1.0] * 40, forgetting=0.5)
-    for _ in range(20):
-        remembering.push(10.0)
-        fading.push(10.0)
-    assert abs(fading(ctx) - 10.0) < abs(remembering(ctx) - 10.0)
-    assert fading(ctx) == pytest.approx(10.0, abs=0.5)      # tracks the drift
-    assert remembering(ctx) > fading(ctx)                   # and is not just a slower version
+    # the noise level falls from 10 to 1 under both, and only the fading null follows it down:
+    # perfect memory still holds the loud values, and they set its upper rank, while the fading
+    # one holds its effective count of recent values -- (1 + 0.9) / (1 - 0.9), rounded up on the
+    # float 0.9 actually is, 20 of them.
+    remembering = ReferenceNull([10.0] * 40, forgetting=1.0)
+    fading = ReferenceNull([10.0] * 40, forgetting=0.9)
+    for _ in range(25):
+        remembering.push(1.0)
+        fading.push(1.0)
+    assert fading.n_reference == 20 and remembering.n_reference == 65   # memory: the count, not all
+    assert fading(ctx) == 1.0                               # tracks the drift
+    assert remembering(ctx) == 10.0                         # and is not just a slower version
 
     with pytest.raises(ValueError, match="forgetting"):
         ReferenceNull([1.0, 2.0], forgetting=0.0)

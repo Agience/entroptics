@@ -1,7 +1,8 @@
 """The floor's null is sized by the channels that exist.
 
-`noise_floor` is the edge of an N x F iid ensemble, so F decides where it sits.  A column of
-exact zeros carries no observation from that ensemble, and this module produces such columns
+The closed-form floor is the edge of an N x F iid ensemble, so F decides where it sits; the
+permutation floor draws on the live channels alone.  A column of exact zeros carries no
+observation from that ensemble, and this module produces such columns
 by two routes: `project` mean-imputes an all-missing screen cell to 0, and `normalize` returns a
 channel it could not scale as zeros.  `live_columns` excludes both from F.
 
@@ -9,7 +10,7 @@ The failure modes these tests watch for:
   - appending columns that carry no observation moves the floor and changes K_signal;
   - appending columns that carry a real observation does not (the control, without which the
     rule degenerates to "ignore whatever is inconvenient");
-  - and the floor and `mode_significance` disagree on F, breaking `K_signal == #(p < far)`.
+  - and the mp floor and `mode_significance` disagree on F, breaking `K_signal == #(p < far)`.
 """
 import numpy as np
 import pytest
@@ -43,13 +44,13 @@ def test_dead_columns_used_to_admit_noise_as_signal():
     """`noise_sigma2` divides median row energy by a denominator sized from `shape`.  Dead
     columns add no energy but do add width, so sizing that denominator by the raw array width, in place of `live_columns`, undercounts sigma^2, sinks the floor, and admits noise as
     signal."""
-    from entroptics.null_providers import apply_floor
+    from entroptics.null_providers import apply_floor, mp
     S = _rank2()
     padded = np.concatenate([S, np.zeros((S.shape[0], 600))], axis=1)
     sv = np.linalg.svd(padded, compute_uv=False)
 
     def k_at(F):
-        f = apply_floor(None, spectrum=None, data=padded, shape=(padded.shape[0], F),
+        f = apply_floor(mp, spectrum=None, data=padded, shape=(padded.shape[0], F),
                         far=0.05, kind="projection", seed=0)
         return int(np.count_nonzero(sv > f))
 
@@ -68,11 +69,15 @@ def test_real_columns_DO_move_the_floor():
 
 
 def test_the_floor_and_the_evidence_agree_on_the_width():
-    """`K_signal == #(p_k < far)` is an identity between the two reads, so they must size the
-    null the same way. Sizing only one of them by the live width would break it silently."""
+    """`K_signal == #(p_k < far)` is an identity between the mp floor and the Tracy-Widom evidence,
+    so they must size the null the same way. Sizing only one of them by the live width would
+    break it silently."""
+    from entroptics.null_providers import mp
     S = np.concatenate([_rank2(), np.zeros((90, 300))], axis=1)
     far = 0.05
-    assert _k(S, far) == int(np.count_nonzero(mode_significance(S).pvalue < far))
+    sv = np.linalg.svd(S, compute_uv=False)
+    k = int(np.count_nonzero(sv > noise_floor(S, far=far, null=mp)))
+    assert k == int(np.count_nonzero(mode_significance(S).pvalue < far))
 
 
 def test_a_fully_dead_screen_does_not_invent_a_width():

@@ -47,6 +47,8 @@ def _adjoint_lift(n_in: int, n_out: int, V: np.ndarray) -> np.ndarray:
     back to the data's grid.  ``R`` is built from the fold itself, a block of unit rows at a time,
     so memory stays bounded however wide the axis is."""
     from .projection import _fold_axis          # deferred import (projection imports this module's peers)
+    if n_out == n_in:                            # the fold is the identity (the ordered axis): R = I
+        return np.asarray(V, dtype=np.result_type(V, float))
     out = np.empty((n_in, V.shape[1]), dtype=np.result_type(V, float))
     step = max(1, (1 << 22) // max(n_in, 1))    # rows per block: about 4M cells of the unit block
     for i0 in range(0, n_in, step):

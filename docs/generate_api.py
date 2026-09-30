@@ -32,11 +32,12 @@ GROUPS = [
      "The aperture quantities: fill fractions, etendue, Strehl, the decay and its "
      "diffraction limit, coherence, coupling, concentration."),
     ("entroptics.projection", "The screen and its noise floor",
-     "Whiten, fold to the entropy-matched grid, and count what stands above the derived "
-     "Tracy-Widom floor."),
+     "Whiten, fold to the entropy-matched grid, and count what stands above the noise "
+     "floor: an exact permutation test by default."),
     ("entroptics.null_providers", "Null providers",
-     "The threshold a detection is taken against. The derived edge is the default; a caller "
-     "may supply their own."),
+     "The threshold a detection is taken against. The exact permutation test is the default "
+     "where the screen is held, the Tracy-Widom edge where only a covariance is; a caller may "
+     "supply their own."),
     ("entroptics.dynamics", "The streaming operator",
      "Online DMD / Koopman: per-mode decay rates from a fixed-size sufficient statistic, "
      "splice-exact across segments."),

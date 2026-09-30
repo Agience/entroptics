@@ -90,7 +90,8 @@ so the answer costs what the question costs.  At ``T=800, D=64``::
       .energy  .flow        included   how much, and how much per step
       .basis   .profile     included   which directions, and the amplitude on them
       .modes               ~3.6 ms     the constituent beams
-      .etendue .phi_T/F    ~70 ms      a T x T eigendecomposition, inherent to the read
+      .etendue .phi_T/F    ~70 ms      an eigendecomposition of the smaller Gram (min(T, F)
+                                       square), inherent to the read
 
 Reach for ``etendue`` when a crossing is in question, since that is what ``transfer`` settles
 by; a monitor that wants energy alone never pays for it.
@@ -759,7 +760,7 @@ class Screen:
                     energy=float(np.sum(np.asarray(_env.to_numpy(flow)))),
                     flow=flow, basis=V,
                     profile=np.asarray(_env.to_numpy(X @ Vx)),
-                    # the fills need a T x T eigendecomposition, so they resolve on access
+                    # the fills need an eigendecomposition, so they resolve on access
                     _fills=lambda: (self.aperture(lens).T.phi, self.aperture(lens).F.phi),
                     _modes=lambda: self._bundle(lens, X, V))
 
@@ -920,7 +921,8 @@ class Screen:
                 raise KeyError(f"lens {g!r} has nothing placed; call place({g!r}, surface) first")
         if int(self._placed[lens_a].shape[0]) != int(self._placed[lens_b].shape[0]):
             self._require_common_order("coupling()")
-        return coupling(self._placed[lens_a], self._placed[lens_b], far=self._far)
+        # read in balance, as every screen read is: each side at its own zero
+        return coupling(self.balanced(lens_a), self.balanced(lens_b), far=self._far)
 
     def couple(self, lens_a: str, lens_b: str) -> float:
         """The signed coupling strength between two sides: ``+`` attract, ``-`` detract,
@@ -1088,9 +1090,9 @@ class Screen:
         h_res = np.asarray(_env.to_numpy(g.entry(c * Xn))) - c * e1
         residuals.append((h_res - h_res.mean(axis=0, keepdims=True), hom))
         return Linearity(additivity=add, homogeneity=hom, modes=int(n_modes),
-                         linear=all(self._resolves_nothing(r, v) for r, v in residuals))
+                         linear=all(self._resolves_nothing(r, v, lens) for r, v in residuals))
 
-    def _resolves_nothing(self, residual, rel: float) -> bool:
+    def _resolves_nothing(self, residual, rel: float, lens: str) -> bool:
         """True where a residual carries no structure the instrument could see -- the same
         derived decision ``certify`` makes, so the two agree on what counts as absent.
 
@@ -1105,7 +1107,8 @@ class Screen:
             return True
         if int(r.shape[0]) < 3 or int(r.shape[1]) < 2:
             return True
-        return int(Projection(r, far=self._far, null=self._null, seed=self._seed).K_signal) == 0
+        # the lens's own null, as certify reads it, so the two decisions agree
+        return int(Projection(r, far=self._far, null=self._null_of(lens), seed=self._seed).K_signal) == 0
 
     # ── the conversion certificate ────────────────────────────────────────────
     def lossless(self, lens: str, surface) -> float:

@@ -40,6 +40,7 @@ the only thing that was ever evidence -- the correlations the shuffle destroyed.
 """
 from __future__ import annotations
 
+
 import numpy as np
 
 __all__ = [
@@ -71,6 +72,18 @@ def alphabet_size(seq) -> int:
     return int(np.unique(_as_symbols(seq)).size)
 
 
+def sampled_order(N: int, k: int) -> int:
+    """The longest block length a sequence of ``N`` symbols over ``k`` can sample: the largest ``n``
+    with ``k^n <= N`` -- beyond it there are more possible words than windows to see them in.
+    At least 1."""
+    if k < 2 or N < 2:
+        return 1
+    n = 1
+    while k ** (n + 1) <= N:          # integers: exact at every power
+        n += 1
+    return n
+
+
 def block_entropies(seq, n_max: int) -> list:
     """`[H_1, H_2, ..., H_n_max]` in bits -- the entropy of the n-word distribution for each order.
 
@@ -94,7 +107,7 @@ def block_entropies(seq, n_max: int) -> list:
     return out
 
 
-def entropy_rate(seq, n_max: int = 8) -> dict:
+def entropy_rate(seq, n_max: int | None = None) -> dict:
     """The entropy-rate ladder: `H_n`, `h_n = H_{n+1} - H_n`, `h_n_av = H_n / n`.
 
     No single `h` is returned, because collapsing the ladder to one number is unsafe on a finite
@@ -114,6 +127,8 @@ def entropy_rate(seq, n_max: int = 8) -> dict:
     the bias cancels; :func:`lempel_ziv_rate` is the single-sequence estimate of `h` itself."""
     x = _as_symbols(seq)
     N, k = int(x.size), int(np.unique(x).size)
+    if n_max is None:
+        n_max = sampled_order(int(x.size), int(np.unique(x).size))
     H = block_entropies(x, n_max + 1)
     h_n = [H[i + 1] - H[i] for i in range(len(H) - 1)]
     h_av = [H[i] / (i + 1) for i in range(len(H))]
@@ -125,7 +140,9 @@ def entropy_rate(seq, n_max: int = 8) -> dict:
 
 def lempel_ziv_rate(seq) -> float:
     """`L = N_w * log2(N) / N` -- the Lempel-Ziv estimate of the entropy rate (Lesne eq. 62), where
-    `N_w` is the number of words in the LZ-76 parsing.
+    `N_w` is the number of words in the LZ-76 parsing: each word is the shortest continuation that
+    does not occur starting at any earlier position (exhaustive history, overlaps allowed), counted
+    in O(N) with an online suffix automaton.
 
     Model-free, from ONE sequence, no fitting and no word-length choice. The Ziv-Lempel theorem
     (eq. 61) makes this asymptotically equal to both the algorithmic complexity rate and the Shannon
@@ -138,18 +155,74 @@ def lempel_ziv_rate(seq) -> float:
     N = int(x.size)
     if N < 2:
         return 0.0
-    seen, n_w, i = set(), 0, 0
+    return float(_lz76_words(x.tolist()) * np.log2(N) / N)
+
+
+def _lz76_words(x) -> int:
+    """Number of words in the LZ76 parsing of x (exhaustive history, overlaps allowed): each word is
+    the shortest prefix of the remainder that does not occur starting at an earlier position."""
+    x = list(x)
+    N = len(x)
+    if N == 0:
+        return 0
+    # suffix automaton over the processed prefix, extended one symbol at a time
+    nxt = [{}]
+    link = [-1]
+    length = [0]
+    last = 0
+
+    def extend(c):
+        nonlocal last
+        cur = len(nxt)
+        nxt.append({}); link.append(0); length.append(length[last] + 1)
+        p = last
+        while p != -1 and c not in nxt[p]:
+            nxt[p][c] = cur
+            p = link[p]
+        if p == -1:
+            link[cur] = 0
+        else:
+            q = nxt[p][c]
+            if length[p] + 1 == length[q]:
+                link[cur] = q
+            else:
+                clone = len(nxt)
+                nxt.append(dict(nxt[q])); link.append(link[q]); length.append(length[p] + 1)
+                while p != -1 and nxt[p].get(c) == q:
+                    nxt[p][c] = clone
+                    p = link[p]
+                link[q] = clone
+                link[cur] = clone
+        last = cur
+
+    words = 0
+    i = 0
+    built = 0              # length of the prefix the automaton holds
+    state, l = 0, 0        # the state of x[i:i+l] in the automaton
     while i < N:
-        j = i + 1
-        while j <= N and tuple(x[i:j]) in seen:
-            j += 1
-        seen.add(tuple(x[i:min(j, N)]))
-        n_w += 1
-        i = j if j <= N else N
-    return float(n_w * np.log2(N) / N)
+        # the automaton must hold exactly the prefix x[0:i+l]: an occurrence of x[i:i+l+1] inside
+        # it starts before i
+        while built < i + l:
+            extend(x[built])
+            built += 1
+            # a clone made by this extension takes the shorter strings of its original state
+            if l and link[state] != -1 and l <= length[link[state]]:
+                state = link[state]
+        if i + l < N and x[i + l] in nxt[state]:
+            state = nxt[state][x[i + l]]
+            l += 1
+            if i + l == N:          # the remainder is all history: the last word ends here
+                words += 1
+                break
+        else:
+            words += 1               # the word x[i:i+l+1] is new
+            i += l + 1
+            state, l = 0, 0
+    return words
 
 
-def surrogate_test(seq, *, draws: int = 200, n_max: int = 8, seed: int = 0) -> dict:
+def surrogate_test(seq, *, far: float = 0.05, draws: int | None = None, n_max: int | None = None,
+                   seed: int = 0) -> dict:
     """The read this module exists for: does this sequence carry ordered structure at all?
 
     A random shuffle can only increase block entropy -- `H_n(sigma.X) >= H_n(X)`, with equality iff
@@ -180,12 +253,29 @@ def surrogate_test(seq, *, draws: int = 200, n_max: int = 8, seed: int = 0) -> d
     `H_n = H_q + (n-q)h` for `n >= q`, so the order is where the ladder becomes linear in n. That is
     a further read on `entropy_rate`'s `h_n` and is not taken here.
 
-    Returns per-order `z` and one-sided empirical p-values (the fraction of shuffles at or below the
-    real value). No verdict: the reader supplies the false-alarm level, as everywhere else."""
+    Returns per-order `z` and one-sided exact Monte Carlo p-values (``(1 + #shuffles at or below
+    the real value) / (draws + 1)``); `onset` is the first order with ``p <= level``, the level being
+    the caller's `far` Bonferroni over the orders it looks at (n = 2 .. n_max), so the chance of an
+    onset on a structureless sequence is at most `far` for any number of draws.
+
+    Nothing here is chosen: `n_max` defaults to the longest block the sequence can sample
+    (:func:`sampled_order`), and `draws` to the fewest shuffles whose smallest attainable p-value,
+    `1 / (draws + 1)`, reaches the onset's level (:func:`null_providers.fewest_draws`)."""
+    far = float(far)
+    if not (0.0 < far < 1.0):
+        raise ValueError(f"far must be in (0, 1); got {far}")
     x = _as_symbols(seq)
+    if n_max is None:
+        n_max = sampled_order(int(x.size), int(np.unique(x).size))
+    level = far / max(int(n_max) - 1, 1)
+    if draws is None:
+        from .null_providers import fewest_draws
+        draws = fewest_draws(level)
     real = block_entropies(x, n_max)
     rng = np.random.default_rng(seed)
     null = np.array([block_entropies(rng.permutation(x), n_max) for _ in range(int(draws))])
+    # the round-off of an entropy summed over at most N words
+    roundoff = int(x.size) * float(np.finfo(float).eps)
     z, p = [], []
     for i in range(len(real)):
         col = null[:, i]
@@ -194,16 +284,17 @@ def surrogate_test(seq, *, draws: int = 200, n_max: int = 8, seed: int = 0) -> d
         # At n = 1 every shuffle gives the same H_1 by construction, so `sd` is not 0.0 but ~1e-16
         # of accumulated rounding. Dividing on `sd > 0` alone would divide a tiny numerator by a
         # tiny denominator and produce an arbitrary z for the one rung whose answer is known exactly.
-        floor = 1e-12 * max(1.0, abs(float(col.mean())))
+        floor = roundoff * max(1.0, abs(float(col.mean())))
         z.append(float((real[i] - col.mean()) / sd) if sd > floor else 0.0)
         p.append(float((col <= real[i]).sum() + 1) / float(col.size + 1))
-    onset = next((i + 1 for i, v in enumerate(z) if i >= 1 and v < 0 and p[i] < 0.05), None)
+    onset = next((i + 1 for i, v in enumerate(z) if i >= 1 and v < 0 and p[i] <= level), None)
     return {
         "H_n_real": real, "H_n_null_mean": [float(v) for v in null.mean(axis=0)],
         "z": z, "p_value": p,
-        "control_H1_exact": bool(abs(real[0] - float(null[:, 0].mean())) < 1e-12) if real else False,
+        "control_H1_exact": (bool(abs(real[0] - float(null[:, 0].mean()))
+                                  <= roundoff * max(1.0, abs(real[0]))) if real else False),
         "onset": onset,
-        "draws": int(draws), "n_max": int(n_max), "N": int(x.size),
+        "draws": int(draws), "n_max": int(n_max), "far": far, "level": level, "N": int(x.size),
         "alphabet": int(np.unique(x).size),
     }
 

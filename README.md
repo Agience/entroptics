@@ -34,9 +34,10 @@ figure dependencies.
 - **It finds the right count.** On planted components above the noise, it recovers the true number
   in all 36 cases tested, where Gavish–Donoho, AIC and MDL get 89–95% right
   ([validation](research/validation/RESULTS.md), experiment 17).
-- **Calibrated on noise.** On pure noise it reports a component at or below the rate you ask for:
-  Gaussian, Student-t, skewed and count noise, at equal or unequal channel levels
-  ([benchmarks](research/benchmarks/README.md)).
+- **Calibrated on noise, any noise.** On pure noise it reports a component at the rate you ask
+  for, whatever the noise's distribution: Gaussian, Student-t, skewed, count and very heavy-tailed
+  noise, at equal or unequal channel levels, with cells missing
+  ([benchmarks](research/benchmarks/README.md#4-pure-noise)).
 - **Lossless.** The signal it keeps plus the residual it returns is your input, to floating-point
   round-off.
 - **Frequency and decay together.** It reads how fast each component dies away as well as its
@@ -47,7 +48,7 @@ figure dependencies.
 - **Light and fast.** numpy only; torch (and a GPU) when you pass a tensor. Streams at O(F²) per
   frame, with state you can save, resume and splice. On multichannel records it is faster than the
   FFT at the same job: with 16 channels and 16384 samples or more, its count, frequencies and decay
-  rates take 1.6–2.6× less time than an FFT pipeline that computes them, and from 262144 samples
+  rates take 1.8–2.7× less time than an FFT pipeline that computes them, and from 262144 samples
   about what the bare FFT alone takes. On a single channel the FFT pipeline is faster
   ([cost](research/benchmarks/README.md#2-cost)).
 
@@ -154,8 +155,10 @@ decomposition as such, [PyDMD](https://github.com/PyDMD/PyDMD) and
 ## How it works
 
 Entroptics treats the array as a finite optical aperture. The signal's own entropy sets the
-resolution it is read at; the count of components is taken against the Tracy–Widom edge — the
-universal law for the largest eigenvalue of noise — at your false-alarm rate; and the dynamics are
+resolution it is read at; the count of components is taken against the record's own noise —
+each channel shuffled in time, the record read again, and the count held to the rate at which pure
+noise would reach it, at your false-alarm rate, with the Tracy–Widom edge as its closed form; and
+the dynamics are
 read as an operator whose modes carry each component's frequency, decay and power. Every read is a
 classical result (Wiener–Khinchin, Abbe/Rayleigh, Tracy–Widom, Koopman) specialised to finite data,
 and the governing lemmas are machine-checked in Lean 4.

@@ -15,9 +15,9 @@ def test_undersampled_truncation_far_is_caller_settable():
     rng = np.random.default_rng(0)
     U = rng.standard_normal((30, 3)); V, _ = np.linalg.qr(rng.standard_normal((60, 3)))
     W = U @ V.T + 0.3 * rng.standard_normal((30, 60))       # T=30 < F=60 (under-sampled)
-    n_lax = dynamics(W, far=0.5).rates().n_modes
+    n_lax = dynamics(W, far=0.9).rates().n_modes
     n_default = dynamics(W).rates().n_modes
-    n_strict = dynamics(W, far=1e-4).rates().n_modes
+    n_strict = dynamics(W, far=1e-8).rates().n_modes
     assert n_lax >= n_default >= n_strict                    # laxer far -> more modes kept
     assert n_lax > n_strict                                  # far actually moves the truncation
     assert dynamics(W, far=0.05).rates().n_modes == n_default
@@ -369,3 +369,22 @@ def test_block_ingest_drops_the_carried_inverse():
     assert d.Pinv is not None
     d.update_block(rng.standard_normal((20, F)))
     assert d.Pinv is None
+
+
+def test_the_gap_fill_is_its_own_fixed_point():
+    """The fill runs to the arithmetic's own resolution, with no iteration cap: one more re-reading
+    of the completed record moves no filled cell by more than that resolution.  (At 70% of cells
+    dropped the fill needs 145 steps; a 64-step cap returned a fill that was still moving.)"""
+    from entroptics.dynamics import _pinv_of
+    from entroptics.entropy import macheps
+    W0, _ = _planted_system()
+    W = W0.copy()
+    W[np.random.default_rng(0).random(W.shape) < 0.7] = np.nan
+    Z = carry_over_gaps(W)
+    miss = ~np.isfinite(W)
+    L, R = Z[:-1], Z[1:]
+    Am = (R.T @ L) @ _pinv_of(np, L.T @ L)
+    pred = np.zeros_like(Z)
+    pred[1:] = Z[:-1] @ Am.T
+    tol = np.max(np.abs(np.where(miss, 0.0, W))) * W.shape[0] * macheps(np, Z)
+    assert np.max(np.abs(np.where(miss, pred, Z) - Z)) <= tol

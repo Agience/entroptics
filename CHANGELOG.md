@@ -10,6 +10,249 @@ Released versions are archived on Zenodo under the concept DOI
 [10.5281/zenodo.21273400](https://doi.org/10.5281/zenodo.21273400), which resolves to the latest
 version.
 
+## [0.2.7] - 2026-09-30
+
+Every floor that holds its samples is now an exact test: the screen and correlation reads take a
+permutation floor whose level is `far` for any law of the noise, and the reference nulls take the
+exact rank over their realisations. The Tracy–Widom laws are computed rather than tabulated.
+`Basis.drift` compares a record with the source of its basis. `ResolvedScreen` reads its stream's
+window. A release baseline (sensitivity, accuracy, instructions and memory per read) and a gate
+that holds each release to it. Values move: every read at the default floor, and the counts on
+heavy-tailed noise, where the closed-form edge over-read.
+
+### Added
+- **A release baseline and its gate.**
+  - `research/benchmarks/baseline.py` measures sensitivity and accuracy, each with its own sampling
+    error: 457 metrics.
+    - Sensitivity: detection on a ladder of planted strengths relative to the noise edge, over
+      four signal shapes, four noise laws and three record shapes.
+    - Accuracy: exact-count accuracy, the false-alarm level as a bound, decay-rate and frequency
+      error against a known linear system, and the extract filter's error against a known burst.
+  - `research/benchmarks/cost.py` measures resources and throughput for eight reads: retired
+    instructions per read, counted by valgrind (reproducible to about 0.1%), and peak allocated
+    bytes.
+  - The committed `baseline_metrics.json` and `cost_metrics.json` are the reference. A release is
+    held to them by `entroptics.gate.compare` (command line: `research/benchmarks/gate.py`). A
+    candidate fails when any metric is worse than its baseline beyond the two measurements'
+    combined noise (z at `far / M`, so the family errs at most `far` of the time on an unchanged
+    library), or when a metric goes missing.
+- **`reference_null` and `ReferenceNull` are exact rank floors.** They were `mean + z(far) std` of
+  the reference's top values, a normal model of a right-skewed law, which claimed structure in 10%
+  of reference-like records at `far = 0.05` (8 × 8, 40 realisations). The floor is now the exact
+  rank over the realisations: 0.043 (`reference_null`) and 0.057 (`ReferenceNull`) averaged over
+  reference sets.
+  - `ReferenceNull` keeps its values rather than running moments. With `forgetting < 1` it holds
+    the `(1 + f) / (1 - f)` most recent, the effective count of the weights it stands for; with
+    `forgetting == 1` it holds every value pushed. With `n` realisations it claims nothing below
+  `far = 1/(n + 1)`. So `sweep(null="local")` needs at least `1/far - 1` quiet neighbours to
+  resolve a patch.
+
+### Changed
+- **`ResolvedScreen` reads its window, at the exact floor.** It kept a cumulative Gram of every row
+  appended and could only take the closed-form floor. It now keeps the rows of the window an
+  `Aperture` stream keeps -- at least `F + 1` rows, and more while a mode the stream's own
+  operator resolves is still coherent -- and reads them at the exact permutation floor, bit for
+  bit `resolved_batch(window, fold=False)`. A channel that never moved in the window leaves the
+  live width. `ResolvedScreen.window` returns the rows read. `state()` carries the window and
+  the operator. `ResolvedScreenBatch` keeps its batched cumulative Gram and the closed-form
+  floor, for thousands of screens at once.
+- **The screen's noise floor is an exact permutation test by default.** With no `null=`, the
+  projection floor behind `K_signal` (`Projection`, `Aperture.projection`, `probe_signal`, the
+  batched frame read and `resolved_batch`) is now the exact Monte Carlo test of independent
+  channels: each channel shuffled in time with its missing cells held, the fold decided again on
+  the shuffled record, and the top value scored as its own screen's standardized Tracy–Widom
+  deviate (a draw's screen need not have the observed width, and a singular value is comparable
+  only at one width; the level still comes from the ranks alone) and taken at the exact rank over
+  the fewest draws the level allows (19 at `far=0.05`). Its false-alarm rate is `far` for any law of the noise. The fold is
+  decided per draw because its continuity test reads how neighbouring channels move together,
+  which the shuffle destroys: a fold carried over from the observed record ran at 0.085 on
+  lognormal noise, given a fold.
+  - The closed-form Tracy–Widom edge (`null_providers.mp`) held its level only for light tails.
+    On 13 noise families × 6 shapes (`research/benchmarks/screen_null.py`, 200 records per cell),
+    the default pools to 0.050 false alarms, and `mp` to 0.025 with 0.36 on lognormal noise
+    (σ = 1.5) and 0.16 on Pareto noise.
+  - The default finds at least as much as `mp` on every planted signal: a narrowband line
+    12–35% against 3–15%, a narrow burst 95–97% against 90–94%.
+  - A draw re-reads only what the shuffle moves: the fold's concentration verdict is the
+    observed record's, and only its continuity test runs per draw, and only when the record is
+    concentrated. Channels are shuffled channel-major, and the top value comes from the smaller
+    Gram. At `far=0.05` a default read costs about 3–9× an `mp` read. The draw count grows as
+    `1/far`, so `far=0.01` costs about five times that.
+  - `Projection` decides its fold at the read's own `far`, as `resolved_batch` and the paper's
+    Definition 2.2 do; it took the fold gate at 0.05 whatever `far` was.
+  - The correlation reads (`spectral_optics`, `spectral_batch`, `Aperture.spectral`) take the same
+    exact default on their centred samples, gaps held. On lognormal noise (σ = 1.5, 256 × 16) the
+    correlation floor's false alarms go from 0.147 to 0.057. Their contrast, attenuation and
+    resolved power move with the lower floor; no count in the goldens moved.
+  - Pass `null=null_providers.mp` for the previous floor. Where only a covariance is held
+    (`SpectralAccumulator`, the Dynamics truncation) the default stays `mp`: a covariance carries
+    no samples to shuffle. `null_providers.default_provider(kind, data)` states the rule.
+  - `Projection.significance` reports the evidence of the floor in force. Under any exact
+    permutation floor (the default, `permutation()`, or either through a mapping or `by_kind`)
+    this is the exact Monte Carlo p-value from the floor's own draws, and
+    `K_signal == #(pvalue <= far)`. `mode_significance` remains the closed-form Tracy–Widom
+    evidence, with `mp`'s count `#(pvalue < far)`.
+  - `permutation()` and `floor_from_null_sampler()` take `draws=None` by default, meaning
+    `null_providers.fewest_draws(far)`; they took 200.
+  - The committed goldens, the validation results, the calibration table, the FRB tables, the
+    benchmark page and its figures, and the FRB and JOSS companions are regenerated. The benchmark
+    page's noise table pools each noise law over its record shapes, since the worst of six shapes
+    of an exact test sits above its level by chance. The paper's §8 states the exact floor, with the edge as its closed form, and
+    every number in §12 is re-read (`research/validation/check_paper.py`: all 780 trace to an
+    artifact).
+
+### Removed
+- **`aperture.MIN_WINDOW`** (a fixed 128). A batch `Aperture(W)` never windows: every record is
+  read whole, so a guard that compared a plane's height against it can go. A stream's minimum
+  window is read off its width, `F + 1`, and `Aperture.window` returns it.
+
+### Fixed
+- **`Basis.drift` asks whether a record is the source's process.** It read the residual off the
+  span against independent channels. A process with more correlated modes than the basis resolves
+  leaves a correlated bulk in every record's residual, so independent records of one process read
+  drift in 70% of cases (93% on 0.2.6), and a planted extra mode was found less often as it
+  strengthened. The basis now keeps its source record (`Basis.source`). Drift carries the source's
+  rows into the same complement coordinates and takes the exact rank over reads of random subsets
+  of the pooled rows: 5% false alarms on the same process, and an extra mode found in 3%, 97%, 100%
+  of records at strengths 1, 2, 4. A caller's `null` still replaces the floor.
+- **`reference_null` takes signal-free planes, read at each screen's own width.** A reference of
+  top values was pinned to one folded width, and a screen's fold is decided on its own record, so a
+  plane of the reference's shape that folded narrower was refused (the U(1) Coulomb-phase 8 × 8
+  planes fold to 8 × 5). Given planes, the provider reads each at the width of the screen it
+  thresholds, once per width, and `shape` is the planes' shape, which the caller controls. The
+  `Aperture(reference=...)` path passes its realisations as planes. It had scored the raw records,
+  not their screens, which are in different units.
+- **A statistic the shuffle keeps is never evidence.** An observed value and a surrogate draw
+  that differ only in round-off (one live channel, whose norm a time shuffle keeps exactly) were
+  compared bit for bit, so round-off alone resolved a mode in a fraction of records. Every draw
+  and the observed read now carry the round-off bound of their Gram eigenvalue,
+  `(m + p) eps ||X||_F^2` in the data's own arithmetic (float32 rounds 5e8 times coarser), and a
+  tie is a tie: a single surviving channel resolves nothing.
+- **A masked record's null is drawn with its mask held.** Shuffling a finished screen scatters
+  the zeros that stand in for missing cells, so a record with missing runs read structure in up
+  to 80.5% of noise records (`research/benchmarks/screen_null.py`, masked rows). The draw now shuffles each channel's measured values among its own
+  measured cells, pooled over 72 masked cells at 0.0436.
+- **A fold cell's correlated channels are within the null's reach.** A shuffle of the finished
+  screen keeps the energy a fold cell gathers from channels that move together. Four aligned
+  channels of 200, folded five to a cell, read below that floor. The null is drawn on the
+  channels before the fold.
+- **`sequence.surrogate_test`'s onset is an exact Monte Carlo test.** Its default draw count is
+  `fewest_draws(level)` and the onset fires at `p <= level`. With a fixed 40 draws, the smallest
+  attainable p-value exceeded the Bonferroni level, so no onset could fire.
+- **The Tracy–Widom laws are computed, not approximated.** The edge quantile and every per-mode
+  p-value now come from the laws themselves, in `entroptics.tracy_widom`:
+  - TW1 and TW2 are the Fredholm determinants det(I − B) and det(I − B²) of the Hankel operator
+    B(x, y) = Ai(x + y + s);
+  - the Airy function is built from its differential equation;
+  - accuracy is about 1e-13, relative in the upper tail.
+  The TW1 quantile table and the Chiani Gamma approximation (about 7e-3 CDF error) are removed.
+  - The table's 0.025 entry was 1.3675; the TW1 97.5% quantile is 1.4538. Every read at
+    `far=0.025` used the wrong edge.
+  - At the default `far=0.05` the edge quantile moves from 0.9793 to 0.97931605. Floors, and the
+    contrast and attenuation read against them, move by about 6e-7 relative. No count changes in
+    the suite.
+  - `K_signal == #(p_k < far)` now holds at every level, since the floor and the p-values share one
+    law.
+- **Complex data is scored against the complex law everywhere.** `mode_significance`,
+  `Dynamics.significance`, `Dynamics.resolved`, the DMD truncation, the streaming and batched
+  resolved screens (`resolved_batch`), `SpectralAccumulator` and proximity's `bulk_edge` scored a
+  complex stream against the real law (TW1 and the real centring). A covariance-only floor now carries the data's ensemble (`FloorContext.complex_`,
+  `apply_floor(..., complex_=)`).
+- **The incomplete gamma behind the screen's balance test** sums to round-off with `math.lgamma`,
+  in place of chosen tolerances and iteration caps.
+- **The normal quantile and digamma / trigamma are evaluated to float precision.**
+  - The normal quantile (behind `reference_null`, the sweep, the coupling and carriage cut-offs,
+    and the basis) is Newton's method on the log-survival, from a start the tail bound places
+    right of the root. It replaces Acklam's fitted rational (1.2e-9 error).
+  - Digamma and trigamma (behind the fold's Dirichlet null) recur to where their asymptotic series
+    reaches round-off, then sum it with exact Bernoulli numbers. They were a five-term series
+    (8.8e-12 and 1.9e-10 error).
+- **The block gap fill runs to its fixed point.** `carry_over_gaps` iterated at most 64 times,
+  and at heavy dropout returned a fill that was still moving (70% of cells dropped needs 145
+  steps). It now runs until a step moves no cell by more than the arithmetic's own resolution. The
+  `iters` keyword is removed. It costs 5–22 ms on a 2000 × 12 record with 5–50% of cells dropped,
+  and nothing when no cell is missing.
+- **No read depends on the absolute size of the data.** Absolute floors and tolerances are now
+  relative to the data (its largest value times eps) or to the arithmetic's own round-off:
+  - the streaming feature correlation (`Dynamics` resolved count, significance, `phi_F`);
+  - `top_spectrum_value`, the statistic behind a reference null;
+  - the operator's numerical rank (the Higham `F eps`, from `1e-10`);
+  - the log guards (the float format's smallest normal, from `1e-300`).
+  A record scaled by 1e-20 used to read a different streaming count.
+- **A constant reference gives its value as the floor**: `reference_null` and `ReferenceNull` no
+  longer add `1e-30` to the scale.
+- **`far` is honoured, not clipped.** `fold_band` and the Cantelli multiplier clipped `far` to
+  [1e-9, 0.5], so `far = 0.9` was read as 0.5. Any `far` in (0, 1) is now used as given, and one
+  outside it is refused.
+- **A stream's minimum window is read off its width: `F + 1` frames**, the fewest whose centred
+  frame carries every feature direction. It was a fixed 128 (`aperture.MIN_WINDOW`, now removed).
+  An explicit `window=` still wins.
+- **The coherence horizon no longer swallows errors.** An `except Exception` returned the minimum
+  window on any failure. An aperture with no data yet is now checked explicitly, and any other
+  error surfaces.
+- **The streaming frame window's persistence test** is the operator's own (`forgetting()["forgets"]`,
+  at its round-off), in place of a fixed `1 - 1e-9`.
+- **`optics()` and `Aperture.optics()` share one diffraction-limit test** (`duality_of`); the free
+  function used `|1/phi - 1| < 1e-9`.
+- **The streaming operator's null is sized by the pairs its covariance sums**, not by frames. The
+  affected reads are `resolved`, the DMD truncation, `floor_contrast` and `significance`. An
+  ensemble of short independent runs (`adjacent=False`) has far fewer pairs than frames: on pure
+  noise, 60 runs of 3 frames each reported structure in 26.5% of records at `far = 0.05`.
+- **The rank-capped eigensolve's constants are derived.**
+  - The sketch is as wide as the exact rank bound.
+  - It is taken while its leading flop count beats the full eigensolve's (k < F/3).
+  - Exactness is certified to the F eps round-off of the trace, not 1e-10.
+- **`Screen.coupling` reads each side where it balances**, like every other screen read. It read
+  the raw placed frames, so a side with a declared `zero` was coupled on structure its own zero
+  removes.
+- **`Screen.linear` scores a side with that side's own null**, as `certify` does. It used the
+  screen's null, so the two disagreed on what counts as absent.
+- **`lempel_ziv_rate` counts the LZ-76 parsing it documents.** It counted an LZ-78 parsing (a
+  dictionary of earlier phrases), in quadratic time. The Lempel–Ziv 1976 example now parses into 6
+  words, not 7. The count is O(N), by an online suffix automaton.
+- **`surrogate_test`'s onset holds the caller's level.**
+  - It took `p < 0.05` at each order in turn, so a structureless sequence reported an onset in
+    12.5% of records.
+  - It now takes `far` (new keyword), Bonferroni over the orders tested.
+  - `n_max` defaults to the longest block the sequence can sample (`sampled_order`, new). `draws`
+    defaults to the fewest shuffles that can resolve the level.
+  - `entropy_rate`'s `n_max` defaults the same way.
+  - The two `1e-12` tolerances are the entropy sum's round-off.
+- **`Dynamics.merge` with an empty side keeps the caller's `far` and `null`.** It rebuilt the result
+  at the default operating point.
+- **`concentration_band` holds at its level for every shape.** It multiplied `sqrt(N/T) + N/T`
+  by a chosen constant (`c_conc=2.0`) and did not cover when N ≪ T: at T = 4096, N = 4 a whitened
+  Gaussian record left the band 22% of the time. The band is now the Gaussian theorem's own,
+  `||C|| (2 delta + delta^2)` with `delta = sqrt(N/T) + sqrt(2 ln(2/far) / T)` (Davidson–Szarek), at
+  level `far`. `c_conc` is removed; pass `far=` (default 0.05) to set the level.
+- **`ResolvedScreen` and `ResolvedScreenBatch` read at every read.** They refreshed their basis
+  every `refresh_every=32` appends and read a stale basis in between, so a mode arriving in fewer
+  rows than that stayed invisible to `K_signal` and `energy` (12 burst rows after a read: 0 modes
+  where the batch read finds 1). An append now marks the read stale, and the next read refreshes
+  it. `refresh_every` is removed: a refresh runs as often as the caller reads.
+- **The sampled floor is an exact Monte Carlo test.** `floor_from_null_sampler` (and
+  `permutation()`) took an interpolated `1 - far` quantile of its draws, which sits below the rank
+  an exact test needs, so the observed record exceeded it more often than `far`. The floor is now
+  the `n + 1 - floor(far (n + 1))`-th smallest of the `n` draws: the false-alarm rate is at most
+  `far` for any `n`, whenever the record is exchangeable with its surrogates. Below `1/far - 1`
+  draws the floor is infinite (no draw count that small can claim anything at `far`).
+- `tensor_embed`'s error states the bound it enforces (`d <= T-1`). Stale docstrings are corrected:
+  - the axis fills use the smaller Gram, not a T x T eigendecomposition;
+  - proximity refers to the screen's mean / RMS whitening;
+  - `weighted_effective` no longer cites a removed function.
+
+### Performance
+- **`decay` holds O(T F) memory, not O(T^2).** It formed the full T x T ordered Gram plus a T x T
+  lag-index array (4.6 GB at T = 16384). On numpy it now takes each channel's lag sums by direct
+  correlation: 10x faster at T = 4096. The torch path keeps the Gram on its device. The periodic
+  read folds the same sums, A(tau) + A(T - tau), and stays exactly symmetric.
+- **`coherence` takes its moments on the cheaper side.** The z-score's moments are sums over the
+  N x N row Gram, and each has an exact form on the feature side (O(N F^4), no N x N array). The
+  read takes whichever costs less, so the value is the same either way. A 100 000-row screen no
+  longer needs an 80 GB Gram: 266 ms at N = 65536.
+- `extract`'s adjoint lift returns the profiles directly when the fold is the identity, in place
+  of multiplying identity blocks (O(T^2 K)).
+
 ## [0.2.6] - 2026-09-29
 
 The reference null's shape guard, the pencil's kept order, and the benchmark page with figures.
@@ -425,6 +668,8 @@ surface is unchanged from 0.2.2.
 - An empty spectrum reads NaN instead of `1/n`.
 - A zero-length axis raises `ValueError` instead of an internal error.
 
+[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.7...HEAD
+[0.2.7]: https://github.com/Agience/entroptics/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Agience/entroptics/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Agience/entroptics/compare/v0.2.3...v0.2.5
 [0.2.3]: https://github.com/Agience/entroptics/compare/v0.2.2...v0.2.3

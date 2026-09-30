@@ -57,8 +57,11 @@ def test_resolved_count_soundness_under_perturbation(seed):
 # ── SpectralAccumulator: pooling the feature correlation ──────────────────────
 
 def test_accumulator_matches_spectral_optics_single_plane():
+    # the accumulator holds a covariance only, so its floor is the closed form; the single-plane
+    # read agrees with it under the same floor
+    from entroptics.null_providers import mp
     X = build_W(7)
-    sg = spectral_optics(X)
+    sg = spectral_optics(X, null=mp)
     acc = SpectralAccumulator(X.shape[1])
     acc.add(X)
     sga = acc.spectral()
@@ -132,3 +135,31 @@ def test_attenuation_interval_encloses_point_on_pooled():
     ci = attenuation_interval(None, band=band, sg=sg)
     assert ci.attenuation_lo <= sg.attenuation <= ci.attenuation_hi
     assert ci.band == pytest.approx(band)
+
+
+@pytest.mark.parametrize("T,N,cx", [(4096, 4, False), (256, 32, False), (32, 128, False), (256, 32, True)])
+def test_concentration_band_covers_at_its_level(T, N, cx):
+    """The band is a guarantee at ``far`` for every shape, real or complex: a whitened Gaussian
+    record's covariance leaves it at most a ``far`` fraction of the time.  A chosen constant in
+    front of ``sqrt(N/T) + N/T`` under-covers when ``N << T``, where the fluctuation of order
+    ``1/sqrt(T)`` dominates the ``sqrt(N/T)`` term."""
+    far = 0.05
+    band = concentration_band(T, N, far=far)
+    rng = np.random.default_rng(T + N + cx)
+    miss = 0
+    n = 200
+    for _ in range(n):
+        Z = rng.standard_normal((T, N))
+        if cx:
+            Z = (Z + 1j * rng.standard_normal((T, N))) / np.sqrt(2.0)
+        e = np.linalg.eigvalsh(Z.conj().T @ Z / T)
+        miss += max(abs(e[-1] - 1.0), abs(e[0] - 1.0)) > band
+    assert miss / n <= far
+
+
+def test_concentration_band_scales_with_the_norm_and_level():
+    b = concentration_band(256, 32, far=0.05)
+    assert concentration_band(256, 32, spec_norm=3.0, far=0.05) == pytest.approx(3.0 * b)
+    assert concentration_band(256, 32, far=0.01) > b                # a stricter level widens it
+    with pytest.raises(ValueError):
+        concentration_band(256, 32, far=1.0)

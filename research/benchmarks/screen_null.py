@@ -3,14 +3,19 @@
     python screen_null.py                   # the library on sys.path
     python screen_null.py <path to a src/>  # a specific copy, e.g. v0.2.3's
 
-  null     the share of noise-only records in which the default read claims a mode (K_signal > 0),
-           at far = 0.05, for noise families x shapes: Gaussian at equal and unequal channel levels,
+  null     the share of noise-only records in which the read claims a mode (K_signal > 0), at
+           far = 0.05, under the default floor (the exact permutation test) and under the
+           closed-form Tracy-Widom edge (``mp``) on the same screen, for noise families x shapes: Gaussian at equal and unequal channel levels,
            heavy-tailed, skewed, and counts, real and complex, narrow, wide and F >> T;
+  masked   the null share with cells missing -- scattered, in a run within each channel, or a
+           block of rows on half the channels, at 10% and 40% -- under the default floor, whose
+           draws hold each channel's missing cells in place, and under a shuffle of the finished
+           screen, which scatters the zeros that stand in for them;
   detect   the share of records in which a planted signal is found (K_signal > 0), and the share in
            which its rank is counted exactly (K_signal equal to the planted rank): a persistent mode
            across all channels, a narrow broadband burst, a narrowband line, three planted modes
            near the edge, and two strong modes, each over Gaussian noise at equal and at unequal
-           channel levels.
+           channel levels -- under both floors.
 
 Seeded and single-threaded.  The first line stamps the SHA-256 of the library source that ran
 (LF-normalised, so a clean checkout reproduces it).  Every line is one JSON record.
@@ -33,13 +38,31 @@ import numpy as np  # noqa: E402
 
 import entroptics as E  # noqa: E402
 from entroptics.projection import Projection  # noqa: E402
+from entroptics.null_providers import mp, floor_from_null_sampler, shuffle_in_time  # noqa: E402
 
 N_NULL = 200
 N_DET = 100
 
 
+ROWS = []
+
+
 def emit(**kw):
+    ROWS.append(kw)
     print(json.dumps(kw), flush=True)
+
+
+def summary():
+    """The pooled figures the paper quotes, emitted rather than recomputed by hand."""
+    def pooled(rows, key):
+        return round(float(np.mean([r[key] for r in rows])), 4)
+    nul = [r for r in ROWS if "null" in r]
+    msk = [r for r in ROWS if "masked" in r]
+    emit(summary="null", cells=len(nul), pooled_default=pooled(nul, "false_alarm_rate"),
+         pooled_mp=pooled(nul, "false_alarm_rate_mp"))
+    emit(summary="masked", cells=len(msk), pooled_default=pooled(msk, "false_alarm_rate"),
+         max_default=max(r["false_alarm_rate"] for r in msk),
+         max_screen_shuffle=max(r["false_alarm_rate_screen_shuffle"] for r in msk))
 
 
 def stamp():
@@ -76,9 +99,58 @@ SHAPES = ((256, 8), (256, 32), (1024, 64), (64, 128), (32, 512), (20, 1000))
 def null():
     for name, make in NOISE.items():
         for T, F in SHAPES:
-            k = [Projection(make(np.random.default_rng(1000 * T + F + i), T, F)).K_signal > 0
+            p = [Projection(make(np.random.default_rng(1000 * T + F + i), T, F), seed=i)
                  for i in range(N_NULL)]
-            emit(null=name, T=T, F=F, records=N_NULL, false_alarm_rate=float(np.mean(k)))
+            k = [q.K_signal > 0 for q in p]
+            k_mp = [q.refloor(mp).K_signal > 0 for q in p]
+            emit(null=name, T=T, F=F, records=N_NULL, false_alarm_rate=float(np.mean(k)),
+                 false_alarm_rate_mp=float(np.mean(k_mp)))
+
+
+def _scattered(r, T, F, frac):
+    return r.random((T, F)) < frac
+
+
+def _runs(r, T, F, frac):
+    m = np.zeros((T, F), bool)
+    L = int(frac * T)
+    for f in range(F):
+        a = int(r.integers(0, T - L + 1))
+        m[a:a + L, f] = True
+    return m
+
+
+def _block(r, T, F, frac):
+    m = np.zeros((T, F), bool)
+    L = int(frac * T)
+    a = int(r.integers(0, T - L + 1))
+    m[a:a + L, : F // 2] = True
+    return m
+
+
+MASKS = {"scattered": _scattered, "runs": _runs, "block": _block}
+MASKED_NOISE = ("gaussian", "gaussian, levels e^-2..e^2", "lognormal (sigma 1.5)", "poisson (1)")
+# the finished screen shuffled as it stands: a surrogate that is not ``shuffle_in_time`` itself, so
+# the read's own draw of its record is not taken
+SCREEN_SHUFFLE = floor_from_null_sampler(lambda X, r: shuffle_in_time(X, r))
+
+
+def masked():
+    for name in MASKED_NOISE:
+        make = NOISE[name]
+        for mname, mk in MASKS.items():
+            for frac in (0.1, 0.4):
+                for T, F in ((256, 32), (1024, 64), (64, 128)):
+                    k, k_scr = [], []
+                    for i in range(N_NULL):
+                        r = np.random.default_rng(1000 * T + F + i)
+                        W, M = make(r, T, F), mk(r, T, F, frac)
+                        p = Projection(W, mask=M, seed=i)
+                        k.append(p.K_signal > 0)
+                        k_scr.append(p.refloor(SCREEN_SHUFFLE).K_signal > 0)
+                    emit(masked=name, mask=mname, missing=frac, T=T, F=F, records=N_NULL,
+                         false_alarm_rate=float(np.mean(k)),
+                         false_alarm_rate_screen_shuffle=float(np.mean(k_scr)))
 
 
 def planted(kind, r, T, F, lv):
@@ -111,14 +183,19 @@ def detect():
         for T, F in ((256, 32), (1024, 64), (32, 512)):
             for spread in (0.0, 1.0):
                 lv = levels(F, spread)
-                K = [Projection(planted(kind, np.random.default_rng(7 * T + F + i), T, F, lv)).K_signal
+                p = [Projection(planted(kind, np.random.default_rng(7 * T + F + i), T, F, lv), seed=i)
                      for i in range(N_DET)]
+                K = np.array([q.K_signal for q in p])
+                K_mp = np.array([q.refloor(mp).K_signal for q in p])
                 emit(detect=kind, T=T, F=F, levels=f"e^-{spread:g}..e^{spread:g}", records=N_DET,
-                     found_rate=float(np.mean(np.array(K) > 0)),
-                     exact_rate=float(np.mean(np.array(K) == RANK[kind])), mean_K=float(np.mean(K)))
+                     found_rate=float(np.mean(K > 0)), exact_rate=float(np.mean(K == RANK[kind])),
+                     mean_K=float(np.mean(K)), found_rate_mp=float(np.mean(K_mp > 0)),
+                     exact_rate_mp=float(np.mean(K_mp == RANK[kind])), mean_K_mp=float(np.mean(K_mp)))
 
 
 if __name__ == "__main__":
     stamp()
     null()
+    masked()
     detect()
+    summary()

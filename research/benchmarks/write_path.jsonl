@@ -1,21 +1,21 @@
-{"file": "/home/builder/entroptics-work/rel/src/entroptics/__init__.py", "source_sha256": "fb714bb838adba12e9c942f3e6d0cbbdbed7f12312dbc256fbd1011965be22a0"}
-{"drift": "rate at which drift reads structure (K > 0), far = 0.05", "records": 80, "same_unequal": 0.0, "same_equal": 0.025, "own": 0.0, "extra_mode": 1.0, "local_transient": 0.9375, "noise_basis": 0.0, "complex_same": 0.0}
+{"file": "/home/builder/entroptics-work/bench/src/entroptics/__init__.py", "source_sha256": "73e3c12c5cb5a2e9e0f8f996a7ae3cee3c2d05de44331baff6f4aa8eedeb9936"}
+{"drift": "rate at which drift reads structure (K > 0), far = 0.05", "records": 80, "same_unequal": 0.025, "same_equal": 0.05, "own": 0.0, "extra_mode": 1.0, "local_transient": 0.8375, "noise_basis": 0.075, "complex_same": 0.0125}
 {"round_trip": "largest certificate figure over the records", "records": 80, "max": 1.4843648728877011e-15}
 {"verdict": "exact moments", "span": "real span", "records": 1000, "identified": 571, "identified_but_off_by_more_than_0p1pct": 0}
 {"verdict": "exact moments", "span": "complex span", "records": 1000, "identified": 675, "identified_but_off_by_more_than_0p1pct": 0}
 {"verdict": "exact moments", "span": "phase-rotated real span", "records": 1000, "identified": 661, "identified_but_off_by_more_than_0p1pct": 0}
 {"verdict": "exact moments", "span": "a channel nearly inside", "records": 1000, "identified": 0, "identified_but_off_by_more_than_0p1pct": 0}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 300, "F": 6, "K": 2, "complex": false, "identified": [0, 38], "not_identified": [0, 82]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 300, "F": 6, "K": 2, "complex": true, "identified": [0, 128], "not_identified": [0, 22]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 500, "F": 12, "K": 2, "complex": false, "identified": [0, 95], "not_identified": [0, 55]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 500, "F": 12, "K": 2, "complex": true, "identified": [1, 120], "not_identified": [1, 30]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 600, "F": 40, "K": 3, "complex": false, "identified": [0, 120], "not_identified": [1, 30]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 600, "F": 40, "K": 3, "complex": true, "identified": [8, 135], "not_identified": [0, 15]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 200, "F": 4, "K": 1, "complex": false, "identified": [0, 31], "not_identified": [2, 119]}
-{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 200, "F": 4, "K": 1, "complex": true, "identified": [0, 115], "not_identified": [0, 35]}
-{"extract": "rank-1, no noise", "time_width": 0.5, "contrast": 5.268592811800673, "error": 2.1475549172500363e-16, "warnings": []}
-{"extract": "rank-1, no noise", "time_width": 2.0, "contrast": 5.268592811800673, "error": 1.0702571971269763e-15, "warnings": []}
-{"extract": "rank-1, no noise", "time_width": 8.0, "contrast": 5.268592811800673, "error": 9.328251010857088e-16, "warnings": []}
-{"extract": "rank-1, no noise", "time_width": 32.0, "contrast": 5.268592811800673, "error": 3.2961660429728013e-16, "warnings": []}
-{"extract": "rank-1, no noise", "time_width": 128.0, "contrast": 5.268592811800673, "error": 1.7556438675979762e-16, "warnings": []}
-{"extract": "rank-1, no noise", "sine_filling_the_record": true, "contrast": 5.268592811800672, "error": 6.889722523206235e-16}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 300, "F": 6, "K": 2, "complex": false, "identified": [0, 38], "not_identified": [1, 82]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 300, "F": 6, "K": 2, "complex": true, "identified": [1, 128], "not_identified": [0, 22]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 500, "F": 12, "K": 2, "complex": false, "identified": [3, 95], "not_identified": [3, 55]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 500, "F": 12, "K": 2, "complex": true, "identified": [3, 120], "not_identified": [1, 30]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 600, "F": 40, "K": 3, "complex": false, "identified": [2, 120], "not_identified": [1, 30]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 600, "F": 40, "K": 3, "complex": true, "identified": [6, 135], "not_identified": [0, 15]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 200, "F": 4, "K": 1, "complex": false, "identified": [1, 31], "not_identified": [4, 119]}
+{"drift_by_verdict": "false alarms on later records of the same process, far = 0.05", "T": 200, "F": 4, "K": 1, "complex": true, "identified": [2, 115], "not_identified": [0, 35]}
+{"extract": "rank-1, no noise", "time_width": 0.5, "contrast": 4.640056130939048, "error": 2.1475549172500363e-16, "warnings": []}
+{"extract": "rank-1, no noise", "time_width": 2.0, "contrast": 5.219987288011883, "error": 1.0702571971269763e-15, "warnings": []}
+{"extract": "rank-1, no noise", "time_width": 8.0, "contrast": 5.324201801354183, "error": 9.328251010857088e-16, "warnings": []}
+{"extract": "rank-1, no noise", "time_width": 32.0, "contrast": 5.314466163001586, "error": 3.2961660429728013e-16, "warnings": []}
+{"extract": "rank-1, no noise", "time_width": 128.0, "contrast": 5.238484385387156, "error": 1.7556438675979762e-16, "warnings": []}
+{"extract": "rank-1, no noise", "sine_filling_the_record": true, "contrast": 5.238194162821273, "error": 6.889722523206235e-16}

@@ -25,16 +25,20 @@ coordinates). It answers three questions that recur across signal-processing pip
 resolution should this record be represented, how many of its degrees of freedom are signal
 rather than noise, and what does the signal look like once the noise is removed.
 
-The library selects a rank against a derived Tracy–Widom noise floor [@tracy1996; @johnstone2001],
-reconstructs the field on the surviving modes with Gavish–Donoho shrinkage [@gavish2017], reads
+The library selects a rank against an exact permutation noise floor — each channel shuffled in
+time and the record read again, the floor taken at the exact Monte Carlo rank [@dwass1957; @hope1968],
+so its false-alarm level holds for any law of the noise — with the finite-size Tracy–Widom edge
+[@tracy1996; @johnstone2001] as its closed form where only a covariance is held; reconstructs the
+field as the orthogonal projection onto the surviving modes; reads
 per-mode decay rates from a streaming dynamic mode decomposition operator [@tu2014], and supplies
 closed-form permutation nulls for two association statistics. It is deterministic, has a single
 backend-agnostic code path that runs on `numpy` arrays or `torch` tensors without change, and
 handles missing data as absent rather than as zero.
 
 Its distinguishing property is that **no constant in it is fitted to data or calibrated to a
-substrate**. Every fixed number is a derived mathematical quantity — a $\chi^2$ median, an
-influence-function variance, a universal Tracy–Widom quantile — or a criterion stated in the
+substrate**. Every fixed number is a derived mathematical quantity — an exact Monte Carlo rank, a
+$\chi^2$ median, an influence-function variance, a universal Tracy–Widom quantile — or a criterion
+stated in the
 documentation. What a user supplies is an operating point: a false-alarm level $\alpha$, and the
 null it is taken against.
 
@@ -79,7 +83,7 @@ distinct from, the RV coefficient [@robert1976] and linear CKA [@kornblith2019],
 rotation-invariant and therefore non-negative.
 
 The library ships a validation suite of 19 seeded experiments that plant a known ground truth and
-check the corresponding read recovers it, a test suite of 675 tests pinning the identities and
+check the corresponding read recovers it, a test suite of 1026 tests pinning the identities and
 numpy/torch parity, and a Lean 4 / Mathlib development machine-checking the governing lemmas. An
 application to public CHIME/FRB Catalog 1 data is reported separately [@frb2026], and the full
 construction, with the provenance of every constant, is given in an accompanying preprint

@@ -85,9 +85,9 @@ import numpy as np
 
 from . import environment as _env
 from .environment import ns as _ns
-from .entropy import geometry, shannon_bits as _shannon, live_view, normalize, macheps
+from .entropy import geometry, shannon_bits as _shannon, live_view, live_view_and_gaps, normalize, macheps
 from .projection import Projection, ProjectionRead, read
-from .null_providers import apply_floor as _apply_floor, _norm_isf
+from .null_providers import apply_floor as _apply_floor, _norm_isf, _held_shuffle
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -488,7 +488,8 @@ class SpectralOptics:
 
 
 def _spectral_from_cov(xp, Cov, T: int, N: int, *, null=None, far: float = 0.05,
-                       data=None, seed: int = 0, kind: str = "spectral") -> SpectralOptics:
+                       data=None, seed: int = 0, kind: str = "spectral",
+                       resample=None) -> SpectralOptics:
     """Assemble ``SpectralOptics`` from an (N, N) column-covariance ``Cov`` accumulated over
     ``T`` samples (rows) of ``N`` variables (columns).  Shared by ``spectral_optics`` (one
     screen, one covariance) and ``SpectralAccumulator`` (a covariance pooled over intact
@@ -523,7 +524,8 @@ def _spectral_from_cov(xp, Cov, T: int, N: int, *, null=None, far: float = 0.05,
     # eigenvalue's TW fluctuation from over-firing in the wide N > T regime).  A caller may
     # pass any provider (see null_providers); a resampling one uses ``data``.
     edge = _apply_floor(null, spectrum=ev, data=data, shape=(T, N),
-                        far=far, kind=kind, seed=seed)
+                        far=far, kind=kind, seed=seed, complex_=_env.is_complex_obj(Cov),
+                        resample=resample)
     lam1 = float(ev[0]) if int(ev.shape[0]) else 0.0
     lam2 = float(ev[1]) if int(ev.shape[0]) > 1 else 0.0
     ref = max(lam2, edge)
@@ -602,7 +604,7 @@ def spectral_optics(data: np.ndarray, mask: np.ndarray | None = None,
             f"spectral_optics expects a 2-D array (T, N); got {nd}-D. Reduce a "
             f"higher-D field with entroptics.fields.slabs / over_planes (keep the "
             f"plane intact) or fields.pool (flatten sites as samples) first.")
-    data = live_view(data, mask)             # ignore fully-dead rows/cols; clean scattered gaps
+    data, gaps = live_view_and_gaps(data, mask)   # ignore fully-dead rows/cols; clean scattered gaps
     mask = None
     xp = _ns(data)
     empty = SpectralOptics(contrast=0.0, top_share=0.0, resolved_modes=0,
@@ -614,7 +616,11 @@ def spectral_optics(data: np.ndarray, mask: np.ndarray | None = None,
     T, N = int(data.shape[0]), int(data.shape[1])
     Xc = _centred(xp, data)                  # de-mean; invalid -> 0 (the one centring)
     Cov = Xc.conj().T @ Xc
-    return _spectral_from_cov(xp, Cov, T, N, null=null, far=far, data=Xc, seed=seed)
+    # a gap is filled to its column's centre and is fixed structure, not part of the null: the exact
+    # floor's draws hold each channel's gaps where they are (without gaps a time shuffle is that draw)
+    resample = _held_shuffle(Xc, gaps) if gaps is not None else None
+    return _spectral_from_cov(xp, Cov, T, N, null=null, far=far, data=Xc, seed=seed,
+                              resample=resample)
 
 
 def principal_directions(data: np.ndarray, mask: np.ndarray | None = None,
@@ -752,7 +758,7 @@ def attenuation_interval(data: np.ndarray, mask: np.ndarray | None = None,
     if ev.size < 2 or not math.isfinite(edge) or edge <= 0.0:
         return CertifiedInterval(sg.attenuation, 0.0, 0.0, d, False)
     lam1 = float(ev[0]); lam2 = float(ev[1])
-    lo1 = max(lam1 - d, 1e-300)                     # smallest plausible top eigenvalue
+    lo1 = max(lam1 - d, float(np.finfo(float).tiny))   # smallest plausible top eigenvalue
     ref_hi = max(lam2 + d, edge)                    # largest plausible reference  -> smallest alpha
     ref_lo = max(lam2 - d, edge)                    # smallest plausible reference -> largest alpha
     alpha_lo = math.log(lo1 / ref_hi)
@@ -797,18 +803,26 @@ def resolved_dimension_interval(data: np.ndarray, mask: np.ndarray | None = None
 
 
 def concentration_band(n_rows: int, n_cols: int, *, spec_norm: float = 1.0,
-                       c_conc: float = 2.0) -> float:
-    """A-priori spectral-norm band for the EMPIRICAL correlation matrix from
-    ``n_rows`` iid samples of an ``n_cols``-dim vector.  Matrix concentration
-    gives ||C_hat - C||_2 <= c_conc * ||C|| * (sqrt(N/T) + N/T) for T >= N
-    (Vershynin, high probability).  Feed the result to
-    ``attenuation_interval(..., band=...)`` to certify how many samples make the
-    read tight."""
+                       far: float = 0.05) -> float:
+    """A-priori spectral-norm band for the EMPIRICAL covariance ``C_hat`` of ``n_rows`` Gaussian
+    samples of an ``n_cols``-dim vector with covariance ``C`` (``spec_norm = ||C||_2``; ``1`` for
+    whitened rows).  The Gaussian extreme singular values sit within ``sqrt(T) +- sqrt(N)`` in
+    expectation (Gordon) and concentrate as a 1-Lipschitz function of the entries, so
+    ``P(s_max(Z) > sqrt(T) + sqrt(N) + t) <= exp(-t^2 / 2)`` and likewise below for ``s_min``
+    (Davidson-Szarek).  Both sides at ``t = sqrt(2 ln(2 / far))`` give, with probability at
+    least ``1 - far`` and for every shape,
+
+        ||C_hat - C||_2 <= ||C||_2 (2 delta + delta^2),   delta = sqrt(N/T) + t / sqrt(T).
+
+    No constant is chosen: the level is ``far``, the rest is the theorem's.  Feed the result to
+    ``attenuation_interval(..., band=...)`` to certify how many samples make the read tight."""
     T, N = int(n_rows), int(n_cols)
     if T <= 0 or N <= 0:
         return float("inf")
-    r = math.sqrt(N / T) + (N / T)
-    return c_conc * float(spec_norm) * r
+    if not 0.0 < far < 1.0:
+        raise ValueError(f"far must be in (0, 1), got {far}")
+    delta = math.sqrt(N / T) + math.sqrt(2.0 * math.log(2.0 / far) / T)
+    return float(spec_norm) * delta * (2.0 + delta)
 
 
 @dataclass
@@ -922,7 +936,7 @@ class SpectralAccumulator:
         return _spectral_from_cov(np, cov, self.T, self.F, null=null, kind="bulk")
 
     def band(self, **kw) -> float:
-        """The Vershynin certified band for the pooled spectrum (``concentration_band``)."""
+        """The certified band for the pooled spectrum (``concentration_band``)."""
         return concentration_band(self.T, self.F, **kw)
 
 
@@ -1353,7 +1367,8 @@ def decay(W, mask=None, *, periodic: bool = False,
     pass the intensity -- ``decay(W ** 2)`` -- which states the modelling step where the caller
     can see it.
     Returns C(tau), tau = 0..T-1: C(0) is the zero-lag power (the peak, = variance)
-    and C decays as the ordered axis decorrelates.  Real- and complex-safe.  O(T^2 F).
+    and C decays as the ordered axis decorrelates.  Real- and complex-safe.  O(T^2 F) time, O(T F)
+    memory (numpy: direct per-channel lag sums; torch: the ordered Gram on the device).
 
     ``periodic`` -- the ordered axis CLOSES.
         The default read treats the record as a finite window cut out of a longer axis: lag tau
@@ -1462,7 +1477,22 @@ def decay(W, mask=None, *, periodic: bool = False,
     span = float(_env.to_numpy(xp.max(xp.abs(X))))
     if float(_env.to_numpy(xp.max(xp.abs(Xc)))) <= span * T * macheps(xp, Xc):
         return _env.zeros(xp, T, ref=(X if _env.is_torch(xp) else None))
-    # C(tau) = (1/T) sum_i G[i, i+tau], G = Xc conj(Xc)^T -- the biased autocovariance.
+    # C(tau) = (1/T) Re sum_i <x_i, x_{i+tau}> -- the biased autocovariance, a direct lag sum.
+    if not _env.is_torch(xp):
+        # numpy: each channel's lag sums by the direct (not transform) correlation, O(T F) memory;
+        # the periodic ring folds the same linear sums, A(tau) + A(T - tau), which is exactly
+        # symmetric because the two addends are the same two numbers either way round.
+        A = np.zeros(T)
+        for f in range(int(Xc.shape[1])):
+            A += np.real(np.correlate(Xc[:, f], Xc[:, f], "full")[T - 1:])
+        A /= T
+        if not periodic:
+            return A
+        h = T // 2
+        half = A[:h + 1].copy()
+        half[1:] = A[1:h + 1] + A[T - np.arange(1, h + 1)]
+        return np.concatenate([half, half[1:T - h][::-1]])
+    # torch: the ordered Gram on the device (one matmul + one bincount)
     G = xp.real(Xc.conj() @ Xc.T)                          # (T, T) real ordered Gram
     off = _env.arange_int(xp, T, ref=G)
     offset = off[None, :] - off[:, None]                   # (T, T): j - i (each entry's lag)
@@ -1922,7 +1952,7 @@ def optics(W, mask=None) -> dict:
     return assemble_optics(
         aT, aF, sp, dl, phi_val=p, strehl_val=strehl(W, mask, evals=ev0),
         focus=cn.focus, intensity=cn.intensity,
-        at_diffraction_limit=bool(abs(mag - 1.0) < 1e-9))
+        at_diffraction_limit=duality_of(p)["at_diffraction_limit"])
 
 
 # ══════════════════════════════════════════════════════════════════════════════

@@ -81,20 +81,12 @@ def _to_np(x):
     return None if x is None else _env.to_numpy(x)
 
 
-#: The minimum window, in frames, when the caller states none.
-#:
-#: A resource envelope, not a threshold in a measurement: how much history the aperture retains
-#: once the signal has stopped being coherent. The same category as a null's draw count -- it buys
-#: memory and latency and decides nothing about what a number means -- so it is a legitimate caller
-#: input, named here, so it is reached by name.
-#:
-#: The frame carries no row count to read it off. ``axis_spectrum(W, 0)`` takes the T rows as
-#: variables and the F columns as samples, so its rank is ``min(T, F) - 1`` and saturates at
-#: ``F - 1`` once ``T >= F``; past that, extra rows add no rank and only grow the denominator of
-#: ``phi_T = 2^H / T``. On white noise at F = 16, rows 17 / 32 / 64 / 128 / 256 all resolve exactly
-#: 15 modes while phi_T falls 0.61 / 0.38 / 0.22 / 0.11 / 0.06 -- the read never switches from ill
-#: posed to well posed, so the choice is the caller's.
-MIN_WINDOW = 128
+#: A stream keeps at least ``F + 1`` frames: the fewest whose centred frame can carry every one of
+#: its ``F`` feature directions (a frame's rank is ``min(T - 1, F)``, and it saturates at ``F`` once
+#: ``T - 1 >= F``).  Fewer rows leave directions the frame reads cannot see; more add no rank.  So the
+#: minimum is read off the record's own width, not chosen, and it bounds memory on a stream that has
+#: no end.  An explicit ``window=`` states the caller's own.
+_WINDOW_FROM_WIDTH = object()
 
 #: `window` was not given, so the constructor decides it from what it was handed.  Distinct
 #: from an explicit ``window=None``, which is a caller saying "no windowing" outright.
@@ -116,8 +108,8 @@ class Aperture:
 
     ``window`` follows what the aperture is handed.  ``Aperture(W)`` is given a finite record and
     reads all of it (``window=None``).  ``Aperture()`` + :meth:`update` has frames still arriving,
-    so it keeps the coherent window and at least :data:`MIN_WINDOW` frames, which is what bounds
-    memory on an unbounded stream.  Pass ``window=`` to state your own either way.
+    so it keeps the coherent window and at least ``F + 1`` frames -- the fewest that carry every
+    feature direction -- which is what bounds memory on an unbounded stream.  Pass ``window=`` to state your own either way.
 
     NOTE when a window IS set (a stream, or an explicit ``window=``): ``phi_T`` and the
     other frame-level reads are taken over the coherent window, whose length is a per-signal
@@ -146,8 +138,10 @@ class Aperture:
         # A finite record is read whole; a stream is bounded.  One rule, applied to what the
         # caller actually handed over: `Aperture(W)` was given the record and reads all of it,
         # while `Aperture()` + `update(frame)` has frames still arriving and keeps the coherent
-        # window (>= MIN_WINDOW) so memory stays bounded.  An explicit `window=` wins either way.
-        self.window = (None if W is not None else MIN_WINDOW) if window is _WINDOW_UNSET else window
+        # window (at least F + 1 frames, the record's own width) so memory stays bounded.  An
+        # explicit `window=` wins either way.
+        self._window = ((None if W is not None else _WINDOW_FROM_WIDTH) if window is _WINDOW_UNSET
+                        else window)
         self.far = float(far)       # the reader's false-alarm level for EVERY read on this
 
         self.forgetting = float(forgetting)
@@ -158,7 +152,7 @@ class Aperture:
         self._seed = int(seed)      # a stateful provider's update(frame) runs in the stream.
         # Floor resolution (per cut point): explicit ``null`` > ``reference_null`` from
         # ``reference`` (the calibrated null the library PREFERS when a signal-free reference
-        # is available) > the derived ``mp`` default.  ``null`` may also be a by_kind(...) /
+        # is available) > the library default (``null_providers.default_provider``).  ``null`` may also be a by_kind(...) /
         # {kind: provider} mapping to route the screen and spectral floors apart.
         self._buf: deque = deque()   # streaming frame buffer -- ADAPTIVELY trimmed (below)
         self._dyn: Dynamics | None = None         # streaming dynamical operator (persists)
@@ -225,11 +219,18 @@ class Aperture:
         self._mask = m
         self._cache.clear()                 # the reads all pair W with the mask -- they are stale
 
+    @property
+    def window(self) -> int | None:
+        """The minimum window in frames (``None``: no windowing).  A stream's default is ``F + 1``,
+        known once the first frame has fixed ``F``."""
+        if self._window is _WINDOW_FROM_WIDTH:
+            return None if self._nfeat is None else int(self._nfeat) + 1
+        return self._window
+
     def _min_window(self) -> int | None:
         """The minimum window in frames, or ``None`` for no windowing at all.
 
-        One accessor so the three call sites cannot drift, and so the resource envelope
-        (:data:`MIN_WINDOW`) is reached by name."""
+        One accessor so the three call sites cannot drift."""
         return None if self.window is None else int(self.window)
 
     def _coherence_horizon(self) -> int:
@@ -253,18 +254,19 @@ class Aperture:
         the ``except``.  Keeping the whole stream would be the other reading of "no measured reason
         to forget", but the window exists to bound memory, and an unbounded buffer on an unreadable
         floor trades a guarantee the caller relies on for a number nobody measured."""
-        try:
-            core = self._core()
-            if core.resolved() < 1:
-                return 0                                   # no active signal -> minimum window
-            m = float(core.forgetting()["margin"])
-            eps = core.floor_contrast()
-            eps = (1.0 / eps) if (eps is not None and math.isfinite(eps) and eps > 1.0) else None
-        except Exception:
-            return 0            # coherence undetermined (e.g. missing/degenerate data) -> minimum
+        if self._dyn is None and self._batch is None and self._nfeat is None:
+            return 0                                       # no data yet -> minimum window
+        core = self._core()
+        if core.resolved() < 1:
+            return 0                                       # no active signal -> minimum window
+        fg = core.forgetting()
+        m = float(fg["margin"])
+        persistent = not fg["forgets"]                     # the operator's own test, at its round-off
+        eps = core.floor_contrast()
+        eps = (1.0 / eps) if (eps is not None and math.isfinite(eps) and eps > 1.0) else None
         if not math.isfinite(m) or m <= 0.0:
             return 0
-        if m >= 1.0 - 1e-9:
+        if persistent:
             return 1 << 60          # persistent active mode -> keep all.  This margin bounds the
                                     # frame WINDOW (a locality/resource bound, PAPER §11.1) and
                                     # enters no read, unlike the operator's own `forgets`, which is
@@ -656,7 +658,7 @@ class Aperture:
         dynamical operators (the concatenated-stream operator) and concatenates the
         optics windows.  Works for BATCH or STREAMING sources (each contributes its
         window's rows).  ``adjacent``: ``other`` immediately follows ``self``."""
-        out = Aperture(window=self.window, forgetting=self.forgetting, rank=self.rank)
+        out = Aperture(window=self._window, forgetting=self.forgetting, rank=self.rank)
         out._dyn = self._core().merge(other._core(), adjacent=adjacent)
         out._nfeat = out._dyn.F
         for f in self._frames() + other._frames():
@@ -677,23 +679,24 @@ class Aperture:
     def _effective_null(self, kind: str):
         """The floor provider the aperture uses for a cut point: an explicit ``null`` wins;
         else ``reference_null`` calibrated on the ``reference`` (the PREFERRED calibrated null
-        when a signal-free reference is available); else ``None`` (the derived ``mp`` default,
-        which is optimal for an i.i.d. bulk, where a reference adds nothing)."""
+        when a signal-free reference is available); else ``None``, the library default: the
+        exact permutation test at the projection, the closed-form edge at the correlation cut
+        points (``null_providers.default_provider``)."""
         if self._null is not None:
             return self._null
         if self._reference is None:
-            return None                                        # -> derived mp default
+            return None                                        # -> the library default
         key = f"refnull_{kind}"
         if key not in self._cache:
-            vals = [top_spectrum_value(np.asarray(_to_np(r)), kind) for r in self._reference]
-            self._cache[key] = reference_null(vals)
+            # the realisations themselves: each is read at the width of the screen it thresholds
+            self._cache[key] = reference_null([np.asarray(_to_np(r)) for r in self._reference])
         return self._cache[key]
 
     def projection(self, *, far: float | None = None, null=None, seed: int | None = None) -> Projection:
         """The companion :class:`projection.Projection` for the current window -- the PROJECTION.
         The ``K_signal`` noise floor comes from the null PROVIDER: ``null`` overrides, else
         the aperture's ``reference_null`` (if a signal-free ``reference`` was given -- the
-        preferred calibrated null), else the derived ``mp`` default (see
+        preferred calibrated null), else the exact permutation test (see
         :func:`projection.noise_floor` / :mod:`null_providers`).  The provider is evaluated on
         THIS window's screen (LOCAL).  Deterministic per ``seed`` for a resampling provider."""
         far = self.far if far is None else float(far)
@@ -842,13 +845,9 @@ class Aperture:
 
     def significance(self) -> ModeSignificance:
 
-        """Per-mode evidence against the noise null (see :class:`projection.ModeSignificance`):
-
-        the standardized Tracy-Widom deviate and tail probability of every singular value.
-
-        ``K_signal == #(pvalue < far)`` -- the read reports the evidence, the false-alarm
-
-        level is the reader's."""
+        """Per-mode evidence against the noise floor this read uses (see
+        :attr:`projection.Projection.significance`): the standardized Tracy-Widom deviate and a
+        p-value for every singular value, with ``K_signal == #(pvalue <= far)``."""
 
         return self._c("significance", lambda: self.projection().significance)
 

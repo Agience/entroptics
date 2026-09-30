@@ -24,7 +24,7 @@ import numpy as np
 
 from .projection import Projection
 from .entropy import shannon_bits, MAD_SCALE
-from .null_providers import reference_null, _norm_isf
+from .null_providers import reference_null, _norm_isf, mp
 
 
 def _on_pulse_threshold(prof: np.ndarray, far: float) -> float:
@@ -106,7 +106,7 @@ def sweep(W: np.ndarray, mask: np.ndarray | None = None, *, patch: int = 1024, s
     Remark 5.4).  Pass a float to state your own z.
 
     Null policy -- ``null`` chooses how each coherent patch's floor is calibrated:
-      * a provider (callable / dict) or ``None`` -> global: that provider (or the ``mp`` default)
+      * a provider (callable / dict) or ``None`` -> global: that provider (or the library default)
         thresholds every patch.  The regime for homogeneous noise -- a globally-injected level or a
         pinned caller reference (the sensitive, single-global-null case).
     A band is located and read off its projection, so ``span``, ``coherence``, ``contrast``, ``K``,
@@ -151,7 +151,9 @@ def sweep(W: np.ndarray, mask: np.ndarray | None = None, *, patch: int = 1024, s
             sub = np.where(msk, np.nan, sub)
         if sub.size == 0 or not np.isfinite(sub).any():
             continue                                      # nothing was observed in this patch
-        sc = Projection(sub, far=far)                             # cheap thin read: coherence + top SV
+        # cheap thin read: coherence + top SV.  Its floor is the closed form, which costs nothing;
+        # a patch the gate keeps is re-floored below at the floor it is read against
+        sc = Projection(sub, far=far, null=mp)
         scan.append({"f0": f0, "f1": f1, "sub": sub, "coh": float(sc.coherence),
                      "top": float(sc.sigma_top), "sc": sc})
     bands = []
@@ -168,9 +170,9 @@ def sweep(W: np.ndarray, mask: np.ndarray | None = None, *, patch: int = 1024, s
             # identical `svdvals` once per coherent patch. Measured 2026-08-27, 64 patches at
             # patch=256: 80 projections for 64 patches, SVD 66% of the run. `refloor` is an
             # identity, held by `tests/test_projection_refloor.py`.
-            sc = p["sc"].refloor(prov) if prov is not None else p["sc"]
-        else:                                                 # global caller-set provider (None -> mp)
-            sc = p["sc"].refloor(null) if null is not None else p["sc"]
+            sc = p["sc"].refloor(prov)                        # None: the library default
+        else:                                                 # global caller-set provider (None: default)
+            sc = p["sc"].refloor(null)
         # WHERE a band is, and what it resolves, is read off the projection and needs no brightness
         # -- those reads are the same on a field as on an intensity.  The three that DO need one
         # (`peak`, `width`, `tau_decay`) come from a per-sample profile, and a complex record does

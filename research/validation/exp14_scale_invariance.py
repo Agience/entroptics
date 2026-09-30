@@ -119,8 +119,9 @@ def run() -> dict:
         "Nothing in the read path tests a quantity that carries units against a fixed number. "
         "Whether a channel has any scale to whiten by is decided by exact equality -- every "
         "measured value the same -- which carries no units at all, and a channel with no spread "
-        "is given no scale rather than a manufactured one. The floor is the null's, fixed by the "
-        "screen's shape, so quantization cannot move it.")
+        "is given no scale rather than a manufactured one. The floor is drawn from shuffles of "
+        "the record's own values, so quantization moves it only as far as it moves them: "
+        f"{100 * (max(max(ratios), 1 / min(ratios)) - 1):.1f}% at most here, with the count held.")
 
     return dict(
         title="14. A read is a property of the signal, not of the units it was recorded in",

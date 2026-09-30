@@ -5,6 +5,12 @@ import pytest
 from entroptics import Aperture, Basis, Drift, RoundTrip
 
 
+def _level_bound(n, far=0.05):
+    """The most false alarms in ``n`` records a floor at level ``far`` allows, three binomial
+    standard errors above it: the default floor is exact, so it sits AT its level, not under."""
+    return far + 3.0 * (far * (1.0 - far) / n) ** 0.5
+
+
 def _process(seed, F=40, K=3, hetero=True):
     rng = np.random.default_rng(seed)
     Bt = np.linalg.qr(rng.standard_normal((F, K)))[0].T
@@ -81,12 +87,14 @@ def test_a_noiseless_channel_is_its_centre():
 
 
 def test_drift_reads_nothing_on_the_same_process_and_finds_new_structure():
-    """Both directions: a later record from the same process gives K == 0 (heteroscedastic
-    channel noise included), and the same record with one planted extra mode gives K >= 1."""
+    """Both directions: later records from the same process read structure at most at the floor's
+    level (heteroscedastic channel noise included), and the same record with one planted extra
+    mode gives K >= 1."""
     rng, rec, nz = _process(6)
     b = Aperture(rec()).basis()
-    same = b.drift(rec())
-    assert isinstance(same, Drift) and same.K == 0
+    same = [b.drift(rec(), seed=i) for i in range(100)]
+    assert all(isinstance(d, Drift) for d in same)
+    assert np.mean([d.K > 0 for d in same]) <= _level_bound(len(same))
     u = np.linalg.qr(rng.standard_normal((40, 1)))[0][:, 0]
     assert b.drift(rec() + np.outer(rng.standard_normal(600) * 1.5, u)).K >= 1
     W3 = rec()
@@ -187,7 +195,7 @@ def test_drift_holds_its_level_when_the_span_weighs_on_few_channels():
     def rec():
         return (rng.standard_normal((500, 2)) * [5, 3]) @ Br + rng.standard_normal((500, 12))
     b = Aperture(rec()).basis()
-    assert [b.drift(rec()).K for _ in range(6)] == [0] * 6
+    assert np.mean([b.drift(rec(), seed=i).K > 0 for i in range(100)]) <= _level_bound(100)
 
 
 def test_noise_scale_is_the_exact_moment_solution():
@@ -365,3 +373,26 @@ def test_a_channel_nearly_inside_a_rank_one_span_is_not_called_identified():
     s, identified = _noise_scale(np.random.default_rng(1).standard_normal((300, 5)),
                                  np.eye(5)[:1], np.ones(5))
     assert s[0] == 1.0 and not identified
+
+
+def test_drift_holds_its_level_on_a_correlated_process_its_basis_resolves_in_part():
+    """A process with more correlated modes than its basis resolves leaves a correlated bulk in
+    every record's residual, the source's included.  Drift compares the record with the source, so
+    independent records of that one process read structure at most at the level, and a planted
+    extra mode is found with power that rises with its strength."""
+    rng = np.random.default_rng(0)
+    F, T = 48, 96
+    Q = np.linalg.qr(rng.standard_normal((F, F)))[0]
+    sv = 2.0 * 0.85 ** np.arange(42)
+
+    def rec(r, extra=0.0):
+        x = (r.standard_normal((T, 42)) * sv) @ Q[:, :42].T + r.standard_normal((T, F))
+        return x + extra * np.outer(r.standard_normal(T), Q[:, 45]) if extra else x
+
+    b = Aperture(rec(np.random.default_rng(1))).basis()
+    assert b.K < 42                                            # the basis resolves only part of it
+    same = [b.drift(rec(np.random.default_rng(100 + i)), seed=i).K > 0 for i in range(60)]
+    assert np.mean(same) <= _level_bound(60)
+    power = [np.mean([b.drift(rec(np.random.default_rng(300 + i), a), seed=i).K > 0
+                      for i in range(20)]) for a in (1.0, 2.0, 4.0)]
+    assert power[0] <= power[1] <= power[2] and power[2] >= 0.9

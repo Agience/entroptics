@@ -98,6 +98,8 @@ class Basis:
     scale:  np.ndarray    # (F,)  per-channel noise scale (1 on a channel never measured)
     power:  np.ndarray    # (K,)  whitened variance of the source record along each row
     far:    float = 0.05  # the false-alarm level of the read the basis came from
+    source: np.ndarray | None = None   # (T, F) the record the basis was read from, in W's units:
+                                       # what ``drift`` compares a new record against
 
     @property
     def K(self) -> int:
@@ -166,6 +168,7 @@ class Basis:
         given; a repeat is dropped, so the rows stay orthonormal)."""
         i = _mode_indices(modes, self.K)
         return Basis(B=self.B[i], centre=self.centre, scale=self.scale, power=self.power[i],
+                     source=self.source,
                      far=self.far)
 
     def certify(self, W, mask=None) -> RoundTrip:
@@ -209,7 +212,20 @@ class Basis:
         noise is identified channel by channel.  When the channels outnumber what the residual can
         tell apart, the metric is partly the basis's, the floor's level is not held, and
         ``Drift.identified`` is False.  A channel neither record measured, or with no noise, is left
-        out; a row with a gap is masked."""
+        out; a row with a gap is masked.
+
+        The floor answers the question drift asks -- is this record the same process as the one
+        the basis was read from? -- by comparing the two, not by testing the residual against
+        independent channels: a process whose modes the basis did not all resolve leaves a
+        correlated bulk in every record's residual, the source's included, and an independent-
+        channel floor reads that bulk as drift in every record (70% of same-process records, on a
+        42-mode process read at F/T = 0.5).  The source's rows are carried into the same complement
+        coordinates, pooled with the record's, and the floor is the exact rank over reads of random
+        subsets of the pool the record's size: under the null that both records are one process
+        of exchangeable rows the record is one such subset, so its level is ``far`` whatever the
+        process's correlation.  A caller's ``null`` replaces that floor, and a basis without its
+        source record takes the independent-channel floor.  Rows with a gap are left out of the
+        comparison."""
         from .projection import Projection
         far = self.far if far is None else float(far)
         Wf = self._frame(W, mask)
@@ -230,28 +246,65 @@ class Basis:
             _, sv, Vh = np.linalg.svd(Bs / s_new[None, :], full_matrices=False)
             r = _rank(sv, Bs.shape)
             Ba = Vh[:r]                                       # the span, orthonormal in this metric
-        Rt = (Xa - (Xa @ Ba.conj().T) @ Ba).T if r else Xa.T.copy()
-        Rt = Rt.astype(np.result_type(Rt, Ba), copy=True)
+        h = tau = None
         if r:
             # R Ba^H = 0 row-wise, i.e. each residual row, as a column, is orthogonal to the
             # columns of Ba^T: those are the span to factor out (Ba^H would be its conjugate)
             h, tau = np.linalg.qr(Ba.T, mode="raw")           # Q = H_1 ... H_r, reflectors in h
+
+        def complement(Y):
+            """Rows ``Y`` (in this metric) off the span, in the complement's coordinates."""
+            Rt = (Y - (Y @ Ba.conj().T) @ Ba).T if r else Y.T.copy()
+            Rt = Rt.astype(np.result_type(Rt, Ba), copy=True)
             for i in range(r):
                 v = np.zeros(Fo, dtype=h.dtype)
                 v[i] = 1.0
                 v[i + 1:] = h[i, i + 1:]
                 Rt -= np.conj(tau[i]) * np.outer(v, v.conj() @ Rt)      # apply H_i^H
-        R = Rt[r:].T                                          # the complement's coordinates
+            return Rt[r:].T
+
+        R = complement(Xa)                                    # the complement's coordinates
         if R.shape[1] == 0:                                   # the span fills every channel left:
             return Drift(K=0, contrast=0.0, share=0.0, projection=None,   # nothing outside to read
                          identified=identified)
         m = np.repeat(gap[:, None], R.shape[1], axis=1) if gap.any() else None
+        if null is None and self.source is not None:
+            # the source's rows, measured in full, carried into the same coordinates
+            Sw = self._frame(self.source)
+            Ds = Sw[:, on] - self.centre[None, on]
+            Ds = Ds[np.isfinite(Ds).all(axis=1)][:, live] / s_new[None, :]
+            if Ds.shape[0]:
+                null = _two_sample_floor(R[full], complement(Ds), far, seed)
+                R, m = R[full], None
         sc = Projection(R, mask=m, far=far, null=null, seed=seed)
         tot = float(np.sum(np.abs(Xa[full]) ** 2))
         share = float(np.sum(np.abs(R[full]) ** 2)) / tot if tot > 0 else 0.0
         contrast = float(sc.sigma_top / sc.noise_floor) if sc.noise_floor > 0 else 0.0
         return Drift(K=int(sc.K_signal), contrast=contrast, share=share, projection=sc,
                      identified=identified)
+
+
+def _two_sample_floor(R_new: np.ndarray, R_src: np.ndarray, far: float, seed: int):
+    """A floor provider for the screen of ``R_new``: the exact rank over the same read of random
+    subsets, of ``R_new``'s size, of the pooled rows of both records -- each subset read as a
+    :class:`projection.Projection` (whitened, its fold decided on it) and scored as its screen's
+    standardized deviate, as the exact permutation floor scores its draws."""
+    from .projection import Projection
+    from .null_providers import (fewest_draws, _exact_rank_score, _scored, _observed_floor, mp)
+    pool = np.vstack([R_new, R_src])
+    n = int(R_new.shape[0])
+
+    def provider(ctx):
+        rng = np.random.default_rng(seed)
+        draws = fewest_draws(ctx.far)
+
+        def draw():
+            sub = pool[rng.permutation(pool.shape[0])[:n]]
+            return _scored(np.asarray(_env.to_numpy(Projection(sub, null=mp).screen)), "projection")
+        score = _exact_rank_score(draw, draws, ctx.far)
+        return _observed_floor(score, np.asarray(_env.to_numpy(ctx.data)), "projection")
+    provider.__name__ = "two_sample_null"
+    return provider
 
 
 def noise_scale(D: np.ndarray, Bs: np.ndarray, s0: np.ndarray, far: float = 0.05) -> np.ndarray:
@@ -425,4 +478,5 @@ def basis_of(sc, modes=None) -> Basis:
     from .extract import _flat_centres
     for f, c in _flat_centres(sc, W).items():    # no noise scale: not coded, decodes to its centre
         centre_f[f], scale_f[f] = c, 0.0
-    return Basis(B=B, centre=centre_f, scale=scale_f, power=pw, far=float(sc._far))
+    return Basis(B=B, centre=centre_f, scale=scale_f, power=pw, far=float(sc._far),
+                 source=np.array(_env.to_numpy(sc.W)))

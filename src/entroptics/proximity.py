@@ -84,8 +84,8 @@ centring/scaling, not a second copy of it.
 ## Read on the centred frame, not a normalised one
 
 Per-vector or per-channel normalisation destroys exactly the magnitude this module is built to
-keep -- see `aperture.py` / `null_providers.py`'s own robust-scale (MAD) whitening, which this
-module deliberately does not apply. Centring is kept, because it is not a normalisation and not
+keep -- see the screen's own mean / RMS whitening (`entropy.whiten_stats`), which this module
+deliberately does not apply. Centring is kept, because it is not a normalisation and not
 optional: Marchenko-Pastur is the law of a *zero-mean* i.i.d. bulk, and an uncentred frame
 carries a rank-1 mean direction that is not noise and that inflates both the spectrum and the
 variance estimate. Subtracting the per-channel median is scale-covariant (`med(c*A) = c*med(A)`),
@@ -181,7 +181,7 @@ def _noise_sigma2_at(A: np.ndarray, N: int, F: float) -> float:
     prediction above themselves.  (The screen's floor does not use this: its frame is whitened, so
     its null variance is exact -- :func:`null_providers.noise_sigma2_from_spectrum`.)"""
     row_energy = np.sum(np.abs(A) ** 2, axis=1)
-    return float(np.median(row_energy)) / debias_denominator(N, F) + 1e-30
+    return float(np.median(row_energy)) / debias_denominator(N, F, complex_=bool(np.iscomplexobj(A)))
 
 
 def bulk_edge(M) -> float:
@@ -204,7 +204,7 @@ def bulk_edge(M) -> float:
     A = centre(M)
     N = int(A.shape[0])
     F_eff = effective_width(A)
-    mu, _sigma_J = johnstone(N, F_eff)      # width-agnostic; no int() in it
+    mu, _sigma_J = johnstone(N, F_eff, complex_=bool(np.iscomplexobj(A)))   # width-agnostic
     return math.sqrt(_noise_sigma2_at(A, N, F_eff) * mu)
 
 

@@ -263,6 +263,10 @@ def main():
                         f"{np.mean([c[0] for c in corrs]):.3f}",
                         f"{np.mean([c[1] for c in corrs]):.3f}",
                         f"{np.mean([c[2] for c in corrs]):.3f}"])
+            # and the share of the read's gain over the raw that smoothing alone accounts for
+            m_raw, m_reb, m_read = (float(np.mean([c[i] for c in corrs])) for i in range(3))
+            w.writerow([f"# smoothing accounts for {100 * (m_reb - m_raw) / (m_read - m_raw):.1f}% "
+                        f"of the gain of the read over the raw"])
     print(f"wrote {dat}")
 
     # the display diagnostics behind the paper's account of the saturating-channel artifact

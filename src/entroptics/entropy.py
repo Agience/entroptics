@@ -20,6 +20,8 @@ from __future__ import annotations
 
 import math as _math
 
+from functools import lru_cache
+
 import numpy as np
 
 from . import environment as _env
@@ -420,26 +422,65 @@ def feature_axis_is_continuous(W, mask=None, *, far: float = 0.05) -> bool:
     return bool(feature_adjacency(W, mask) > _norm_isf(float(far)))
 
 
+@lru_cache(maxsize=None)
+def _bernoulli_even() -> tuple:
+    """The even Bernoulli numbers B_2, B_4, ... as exact rationals (Akiyama-Tanigawa), as far as
+    the digamma series ever needs them: its terms fall until k ~ pi x, so up to where B_2k / 2k
+    first exceeds the reciprocal of eps at the recurrence's end."""
+    from fractions import Fraction
+    out, a = [], []
+    n = 0
+    while True:
+        a.append(Fraction(1, n + 1))
+        for j in range(n, 0, -1):
+            a[j - 1] = j * (a[j - 1] - a[j])
+        if n >= 2 and n % 2 == 0:
+            out.append(a[0])
+            if abs(float(a[0])) / n > 1.0 / float(np.finfo(float).eps):
+                return tuple(out)
+        n += 1
+
+
+# The digamma asymptotic series' smallest term is ~ exp(-2 pi x): from here up it is below round-off.
+_PSI_X = -_math.log(float(np.finfo(float).eps)) / (2.0 * _math.pi)
+
+
 def _digamma(x: float) -> float:
-    """psi(x), x > 0, numpy-only: recurrence to 6 then the standard asymptotic series."""
+    """psi(x), x > 0, to float precision: the recurrence psi(x) = psi(x + 1) - 1/x up to where the
+    asymptotic series reaches round-off, then that series summed until its terms do."""
     r = 0.0
-    while x < 6.0:
+    while x < _PSI_X:
         r -= 1.0 / x
         x += 1.0
-    f = 1.0 / (x * x)
-    return r + float(np.log(x)) - 0.5 / x + f * (
-        -1.0 / 12.0 + f * (1.0 / 120.0 + f * (-1.0 / 252.0 + f * (1.0 / 240.0 + f * (-1.0 / 132.0)))))
+    s = _math.log(x) - 0.5 / x
+    x2 = x * x
+    xp = x2
+    for k, B in enumerate(_bernoulli_even(), start=1):
+        t = float(B) / (2 * k * xp)
+        s -= t
+        if abs(t) <= float(np.finfo(float).eps) * abs(s):
+            break
+        xp *= x2
+    return r + s
 
 
 def _trigamma(x: float) -> float:
-    """psi'(x), x > 0, numpy-only."""
+    """psi'(x), x > 0, to float precision: psi'(x) = psi'(x + 1) + 1/x^2, then the asymptotic
+    series 1/x + 1/(2x^2) + sum B_2k / x^(2k+1), summed until its terms reach round-off."""
     r = 0.0
-    while x < 6.0:
+    while x < _PSI_X:
         r += 1.0 / (x * x)
         x += 1.0
-    f = 1.0 / (x * x)
-    return r + (1.0 / x) * (1.0 + 0.5 / x + f * (
-        1.0 / 6.0 - f * (1.0 / 30.0 - f * (1.0 / 42.0 - f / 30.0))))
+    s = 1.0 / x + 0.5 / (x * x)
+    x2 = x * x
+    xp = x2 * x
+    for B in _bernoulli_even():
+        t = float(B) / xp
+        s += t
+        if abs(t) <= float(np.finfo(float).eps) * abs(s):
+            break
+        xp *= x2
+    return r + s
 
 
 def _tail_multiplier(far: float) -> float:
@@ -454,7 +495,10 @@ def _tail_multiplier(far: float) -> float:
     conservative is the right trade for a guard: the cost of being too wide is a fold not taken,
     and the cost of being too narrow is a fold that should not have been.
     """
-    return float(np.sqrt(1.0 / float(np.clip(far, 1e-9, 0.5)) - 1.0))
+    far = float(far)
+    if not (0.0 < far < 1.0):
+        raise ValueError(f"far must be in (0, 1); got {far}")
+    return float(np.sqrt(1.0 / far - 1.0))
 
 
 def dirichlet_entropy_moments(K: int, a: float) -> tuple[float, float]:
@@ -515,7 +559,9 @@ def fold_band(T: int, F: int, *, far: float = 0.05) -> float:
     Fi = max(2, int(F))
     Ti = max(1, int(T))
     lgF = float(np.log2(Fi))
-    far = float(np.clip(far, 1e-9, 0.5))
+    far = float(far)
+    if not (0.0 < far < 1.0):
+        raise ValueError(f"far must be in (0, 1); got {far}")
 
     mean_H, sd_H = dirichlet_entropy_moments(Fi, Ti / 2.0)
     significance = lgF - mean_H + _tail_multiplier(far) * sd_H
@@ -629,12 +675,19 @@ def live_view(W, mask: np.ndarray | None = None):
     its column mean, returning a clean, NaN-free array so the correlation / SVD reads
     never see a gap.  No missing data -> returns ``W`` unchanged (backend preserved);
     otherwise returns a numpy array."""
+    return live_view_and_gaps(W, mask)[0]
+
+
+def live_view_and_gaps(W, mask: np.ndarray | None = None):
+    """:func:`live_view`, and the gaps it filled: ``(view, gaps)``, ``gaps`` a boolean array aligned
+    with ``view`` marking the cells that were missing (``None`` when none were).  A read that draws
+    a null from the view holds these cells in place: they are fixed structure, not samples."""
     xp = _env.ns(W)
     bad = ~xp.isfinite(xp.abs(W))
     if mask is not None:
         bad = bad | mask
     if not bool(bad.any()):
-        return W
+        return W, None
     Wn = np.asarray(_env.to_numpy(W))
     b = np.asarray(_env.to_numpy(bad), dtype=bool)
     if Wn.ndim == 2:
@@ -648,7 +701,7 @@ def live_view(W, mask: np.ndarray | None = None):
         total = np.where(b, 0.0, Wn).sum(axis=0)
         col = np.where(seen > 0, total / np.maximum(seen, 1), 0.0)
         Wn = np.where(b, col[None, :] if Wn.ndim == 2 else col, Wn)
-    return Wn
+    return Wn, (b if b.any() else None)
 
 
 def macheps(xp, ref) -> float:

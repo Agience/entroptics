@@ -11,7 +11,7 @@ ORCID [0009-0002-0150-4027](https://orcid.org/0009-0002-0150-4027)
 
 ## Abstract
 
-We apply a parameter-free rank-selection and reconstruction procedure to publicly released CHIME/FRB Catalog 1 waterfalls and compare the result against CHIME's own *fitburst* forward model. The procedure selects its rank against a derived Tracy–Widom noise floor, reconstructs the field as the orthogonal projection onto its resolved modes — lossless, with everything else kept in a residual — and moves persistent narrowband structure to that residual by a geometric cut on each mode's entropic footprint. No constant is fitted to the data, no template of a burst enters anywhere, and nothing is tuned per event. On four bright events the reconstruction correlates with the forward model at $0.421$–$0.533$ (mean $0.470$), against $0.115$–$0.373$ (mean $0.198$) for the raw waterfall and $0.214$ for a box-average control that applies frequency smoothing alone. To make those figures interpretable in the absence of ground truth we report two reference points: the forward model corrupted by the record's own measured noise scores $0.219$ against the model, and the forward model degraded by exactly the resolution the modes are read at scores $0.994$. The read therefore sits well above what the record's noise permits and well below what that resolution permits. It is taken at the recorded channel resolution and keeps structure along frequency that the smooth forward model does not carry; the remaining gap reflects that structure and the forward model's own parametric form, which we cannot separate without refitting the model. A further 12 waterfalls drawn uniformly at random from the same release are read by the identical path; all twelve are read without incident and seven resolve a mode above the floor. Neither the read nor the forward model is ground truth, and the noise floor is calibrated against an i.i.d. bulk which a serially correlated record violates; both limits are stated and quantified.
+We apply a parameter-free rank-selection and reconstruction procedure to publicly released CHIME/FRB Catalog 1 waterfalls and compare the result against CHIME's own *fitburst* forward model. The procedure selects its rank against an exact permutation noise floor, whose false-alarm level holds for any law of the noise, reconstructs the field as the orthogonal projection onto its resolved modes — lossless, with everything else kept in a residual — and moves persistent narrowband structure to that residual by a geometric cut on each mode's entropic footprint. No constant is fitted to the data, no template of a burst enters anywhere, and nothing is tuned per event. On four bright events the reconstruction correlates with the forward model at $0.421$–$0.533$ (mean $0.470$), against $0.115$–$0.373$ (mean $0.198$) for the raw waterfall and $0.214$ for a box-average control that applies frequency smoothing alone. To make those figures interpretable in the absence of ground truth we report two reference points: the forward model corrupted by the record's own measured noise scores $0.219$ against the model, and the forward model degraded by exactly the resolution the modes are read at scores $0.994$. The read therefore sits well above what the record's noise permits and well below what that resolution permits. It is taken at the recorded channel resolution and keeps structure along frequency that the smooth forward model does not carry; the remaining gap reflects that structure and the forward model's own parametric form, which we cannot separate without refitting the model. A further 12 waterfalls drawn uniformly at random from the same release are read by the identical path; all twelve are read without incident and seven resolve a mode above the floor. Neither the read nor the forward model is ground truth, and the noise floor is calibrated against an i.i.d. bulk which a serially correlated record violates; both limits are stated and quantified.
 
 ---
 
@@ -78,14 +78,14 @@ Figure 1 places the reconstruction beside *fitburst* and the raw waterfall on fo
 
 | event | DM | $T$ | live | read at | $K_{\mathrm{signal}}$ | contrast | $z$ | kept | dropped |
 |---|---|---|---|---|---|---|---|---|---|
-| FRB20190425A | 128.2 | 19 | 9,760 | 5,949 | 2 | 2.02 | −2.5 | 2 | 0 |
+| FRB20190425A | 128.2 | 19 | 9,760 | 5,949 | 2 | 2.03 | −2.5 | 2 | 0 |
 | FRB20190106B | 316.6 | 38 | 11,632 | 10,972 | 1 | 1.17 | 1.3 | 1 | 0 |
 | FRB20190227A | 394.0 | 38 | 11,696 | 10,727 | 2 | 1.48 | 5.2 | 2 | 0 |
-| FRB20190323B | 789.6 | 19 | 11,312 | 10,550 | 1 | 1.21 | −3.5 | 1 | 0 |
+| FRB20190323B | 789.6 | 19 | 11,312 | 10,550 | 1 | 1.22 | −3.5 | 1 | 0 |
 
 *Table 1. Per-burst reads, from `tables/events.csv`. "live" is the surviving width of the 16,384 recorded channels; "read at" is the width the modes are read at, the fold's. Contrast is $\sigma_1/\Phi$, the leading singular value over the screen floor; $z$ is the ordered-axis coherence. "kept" and "dropped" are the resolved modes on each side of the geometry cut.*
 
-Each event resolves at least one mode above the floor. The reported per-mode quantity is the bounded contrast $\sigma_1/\Phi$ rather than a tail probability: a per-mode $p_k$ would rest on a Tracy–Widom approximation [Chiani 2014] far outside its calibrated range at these deviates, and is therefore not reported.
+Each event resolves at least one mode above the floor. The reported per-mode quantity is the bounded contrast $\sigma_1/\Phi$.
 
 The record shapes are extreme — $T=19$–$38$ against $16{,}384$ recorded channels — so the aspect ratio each read was taken at is on the page beside it.
 
@@ -93,9 +93,9 @@ The record shapes are extreme — $T=19$–$38$ against $16{,}384$ recorded chan
 
 ### 3.2 A random spot-check
 
-A further **12 waterfalls drawn uniformly at random** from the same public release, at a fixed seed, are read by the identical path (`tables/spotcheck.csv`). All twelve are read without incident, and $K_{\mathrm{signal}}\ge1$ on seven of them.
+A further **12 waterfalls drawn uniformly at random** from the same public release, at a fixed seed, are read by the identical path (`tables/spotcheck.csv`). All twelve are read without incident, and $K_{\mathrm{signal}}\ge1$ on eight of them.
 
-The five that resolve nothing are the five whose leading singular value sits at or below the derived floor — contrast $0.99$–$1.00$, against $1.17$–$2.02$ for the events of Figure 1 — the floor declining to certify a mode it cannot separate from the bulk. Record length does not separate the two groups: the five that resolve nothing span $T=19$–$57$ and the seven that resolve span $T=19$–$95$, so the shortest records sit in both.
+The four that resolve nothing are the four whose leading singular value sits at or below the derived floor — contrast $0.99$–$1.00$, against $1.17$–$2.03$ for the events of Figure 1 — the floor declining to certify a mode it cannot separate from the bulk. Record length does not separate the two groups: the four that resolve nothing span $T=19$–$57$ and the eight that resolve span $T=19$–$95$, so the shortest records sit in both.
 
 This establishes that the untuned instrument runs on records it was not selected against, and reports what it finds on them. It is not a performance measurement: nothing here is scored against a reference.
 
@@ -154,8 +154,6 @@ One consequence of scoring on the full frame is worth naming. Off the burst, bot
 
 What this bounds is a record whose *noise* is correlated along the ordered axis. A dedispersed waterfall, whose noise is close to white in time, is not affected, and the reads above are not. A record carrying $1/f$ drift or a common-mode gain would be.
 
-**The Tracy–Widom approximation falls outside its calibrated range at these deviates.** The floor is a threshold and is used as one. A per-mode tail probability $p_k$ would require evaluating the Tracy–Widom$_1$ survival function far into a tail where the Chiani Gamma approximation [Chiani 2014], with its stated maximum CDF error of $\approx7\times10^{-3}$, is outside the range it was calibrated over. We therefore report the bounded contrast $\sigma_1/\Phi$ and not a $p$-value. The count $K_{\mathrm{signal}}$ is unaffected, since it depends on the threshold and not on the tail's shape.
-
 **The geometry cut is a criterion, not a test.** It carries no null and no level, and it drops persistent structure whether or not that structure is interference. A genuinely persistent narrowband astrophysical signal would be removed by it.
 
 **The sample is small.** Four events with a figure and twelve more read blind is a demonstration of transfer, not a survey. Nothing here supports a population statement about Catalog 1.
@@ -196,7 +194,6 @@ edited all output and takes full responsibility for the content of this publicat
 ## References
 
 - Z. Bao, G. Pan, W. Zhou, *Tracy–Widom law for the extreme eigenvalues of sample correlation matrices*, Electron. J. Probab. **17** (2012) no. 88, 1–32.
-- M. Chiani, *Distribution of the largest eigenvalue for real Wishart and Gaussian random matrices and a simple approximation for the Tracy–Widom distribution*, J. Multivariate Anal. **129** (2014) 69–81.
 - CHIME/FRB Collaboration, *The First CHIME/FRB Fast Radio Burst Catalog*, Astrophys. J. Suppl. Ser. **257** (2021) 59, arXiv:2106.04352. Data (public): CANFAR archive, CISTI.CANFAR/21.0007, https://www.canfar.net/.
 - I. M. Johnstone, *On the distribution of the largest eigenvalue in principal components analysis*, Ann. Statist. **29** (2001) 295–327.
 - I. J. Sessford, *Entroptics: reading a 2-D signal as a finite optical aperture at its own entropy-matched resolution*, pre-print, 2026. https://github.com/Agience/entroptics

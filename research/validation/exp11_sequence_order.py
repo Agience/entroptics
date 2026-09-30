@@ -24,7 +24,6 @@ N = 4000
 ALPHA = 4
 STRENGTHS = [0.0, 0.25, 0.5, 0.75, 0.95]
 SEED = 1111
-DRAWS = 40
 
 
 def _markov(strength, seed, n=N, k=ALPHA):
@@ -43,14 +42,14 @@ def run():
     rows, fired = [], []
     for i, s in enumerate(STRENGTHS):
         seq = _markov(s, SEED + i)
-        r = S.surrogate_test(seq, draws=DRAWS, n_max=6, seed=0)
+        r = S.surrogate_test(seq, n_max=6, seed=0)             # draws: the fewest the level allows
         # H_1 is invariant under permutation by construction, so the order signal is n >= 2;
         # ordering LOWERS the block entropies, so the departure is negative.
         zs = np.asarray(r["z"], dtype=float)[1:]
         z = float(np.nanmax(np.abs(zs)))
         h1 = float(S.block_entropies(seq, 1)[0])
         rows.append([s, round(h1, 4), round(z, 1), r["onset"] if r["onset"] else "-",
-                     "yes" if z > 3.0 else "no"])
+                     "yes" if r["onset"] else "no"])
         fired.append(z)
     table = C.md_table(["repeat prob.", "H_1 (bits)", "max |z| (n>=2)", "onset n", "order detected"], rows)
 
@@ -58,7 +57,8 @@ def run():
     seq = _markov(0.5, SEED)
     Hs = [float(S.block_entropies(seq, n)[n - 1]) for n in range(1, 9)]
     cap = [float(np.log2(N - n + 1)) for n in range(1, 9)]
-    sat = next((n for n in range(1, 9) if Hs[n - 1] > 0.9 * cap[n - 1]), None)
+    # the onset Proposition B.2 states: the first n whose possible words outnumber the windows
+    sat = next((n for n in range(1, 9) if ALPHA ** n > N - n + 1), None)
     sat_rows = [[n, round(Hs[n - 1], 3), round(cap[n - 1], 3),
                  round(ALPHA ** n / (N - n + 1), 3)] for n in range(1, 9)]
     table2 = C.md_table(["n", "H_n", "log2(N-n+1)", "words / windows"], sat_rows)
@@ -71,7 +71,8 @@ def run():
     return dict(
         title="11. Symbol sequences: order detection and the saturation bound",
         setup=(f"repeat-probability chains over an alphabet of {ALPHA}, N={N}, "
-               f"{DRAWS} surrogate draws, n_max=6."),
+               "the fewest surrogate draws the onset's level allows (99 at far = 0.05 over five "
+               "orders), n_max=6."),
         table=table + "\n\n" + table2,
         metrics=dict(z_iid=fired[0], z_ordered=fired[-1], saturation_onset_n=sat),
         headline=headline,

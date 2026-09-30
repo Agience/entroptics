@@ -106,7 +106,7 @@ def tensor_embed(data, d: int = TENSOR_EMBED_D, rank: tuple | None = None) -> di
 
     T_prime = T - d + 1
     if T_prime < 2:
-        raise ValueError(f"d={d} too large for T={T}: need d <= T-2")
+        raise ValueError(f"d={d} too large for T={T}: need d <= T-1")
 
     if rank is None:
         r_t = min(T_prime, TENSOR_EMBED_R_T)

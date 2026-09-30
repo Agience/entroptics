@@ -145,11 +145,20 @@ def band_limited(T: int, F: int, n_active: int, seed: int) -> np.ndarray:
 
 # ── stats helpers ─────────────────────────────────────────────────────────────
 
+def _average_ranks(v: np.ndarray) -> np.ndarray:
+    """Ranks 0..n-1, each run of equal values given the mean of the ranks it spans."""
+    order = np.argsort(v, kind="stable")
+    r = np.empty(v.size, float)
+    r[order] = np.arange(v.size, dtype=float)
+    vals, inv = np.unique(v, return_inverse=True)
+    return (np.bincount(inv, weights=r) / np.bincount(inv))[inv]
+
+
 def spearman(x, y) -> float:
-    """Spearman rank correlation (monotonicity), scipy-free."""
+    """Spearman rank correlation (monotonicity), scipy-free.  Tied values share their average rank:
+    ranking ties by position would read an order into them that the data does not carry."""
     x = np.asarray(x, float); y = np.asarray(y, float)
-    rx = np.argsort(np.argsort(x)).astype(float)
-    ry = np.argsort(np.argsort(y)).astype(float)
+    rx, ry = _average_ranks(x), _average_ranks(y)
     rx -= rx.mean(); ry -= ry.mean()
     d = np.sqrt((rx * rx).sum() * (ry * ry).sum())
     return float((rx * ry).sum() / d) if d > 0 else 0.0

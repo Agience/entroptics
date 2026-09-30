@@ -243,11 +243,25 @@ def fig_rank(acc):
 
 # ── 3. the noise test ──────────────────────────────────────────────────────────────────────────
 def null_table():
-    out = {}
+    """Per noise family: the default floor's false-alarm rate pooled over the record shapes, its
+    binomial standard error, the closed-form edge's pooled rate, and whether the default holds the
+    level -- at most ``FAR`` beyond its noise, at the gate's family-wise z (``entroptics.gate``).
+    Pooled, not the worst shape: an exact test runs AT its level in every shape, and the worst of
+    six noisy rates sits above it by chance."""
+    from statistics import NormalDist
+    fam = {}
     for r in rows("screen_null.jsonl"):
         if "null" in r:
-            out[r["null"]] = max(out.get(r["null"], 0.0), r["false_alarm_rate"])
-    return list(out.items())
+            fam.setdefault(r["null"], []).append(r)
+    z = NormalDist().inv_cdf(1.0 - FAR / max(len(fam), 1))
+    out = []
+    for name, rs in fam.items():
+        n = sum(r["records"] for r in rs)
+        p = sum(r["false_alarm_rate"] * r["records"] for r in rs) / n
+        p_mp = sum(r["false_alarm_rate_mp"] * r["records"] for r in rs) / n
+        se = (FAR * (1 - FAR) / n) ** 0.5
+        out.append((name, p, se, p_mp, p <= FAR + z * se))
+    return out
 
 
 def detect_table():
@@ -261,12 +275,15 @@ def detect_table():
 def fig_null(tab):
     fams = [t[0] for t in tab][::-1]
     rate = np.array([t[1] for t in tab][::-1])
+    err = np.array([t[2] for t in tab][::-1])
+    rate_mp = np.array([t[3] for t in tab][::-1])
     y = np.arange(len(fams))
-    fig, ax = plt.subplots(figsize=(7.5, 0.34 * len(fams) + 1.4))
-    ax.barh(y, 100 * rate, 0.6, color=[BLUE if v <= FAR else "#d62728" for v in rate])
+    fig, ax = plt.subplots(figsize=(7.5, 0.4 * len(fams) + 1.4))
+    ax.barh(y + 0.18, 100 * rate, 0.34, xerr=100 * err, color=BLUE, label="Entroptics (exact floor)")
+    ax.barh(y - 0.18, 100 * rate_mp, 0.34, color=GREY, label="closed-form edge (mp)")
     ax.axvline(100 * FAR, color="#d62728", lw=1.2, ls="--", label="the 5% you allow")
     ax.set_yticks(y, fams)
-    ax.set_xlabel("records in which a component is wrongly reported, % (worst shape, 200 each)")
+    ax.set_xlabel("records in which a component is wrongly reported, % (six shapes pooled, 1200 each)")
     ax.set_title("Components reported in pure noise (lower is better)")
     ax.legend(loc="lower right", frameon=False)
     fig.tight_layout()
@@ -292,10 +309,10 @@ def main():
         cnt = f"{a:.3f}" + ("" if used == tot else f" ({used} of {tot} cases)")
         print(f"| {name} | {cnt} | {'n/a' if sp is None else f'{sp:.1f}'} |")
     print()
-    print("| noise | wrongly reported | within the 5% you allow? |")
-    print("|---|---|---|")
-    for fam, v in nt:
-        print(f"| {fam} | {100 * v:.1f}% | {'yes' if v <= FAR else 'no'} |")
+    print("| noise | Entroptics (exact floor) | closed-form edge (mp) | within the 5% you allow? |")
+    print("|---|---|---|---|")
+    for fam, v, se, v_mp, ok in nt:
+        print(f"| {fam} | {100 * v:.1f}% ± {100 * se:.1f} | {100 * v_mp:.1f}% | {'yes' if ok else 'no'} |")
     print()
     print("| planted signal | found | counted exactly |")
     print("|---|---|---|")

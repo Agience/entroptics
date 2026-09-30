@@ -30,20 +30,21 @@ and `koopman_lift(x, d).modes()` for a 1-D one at a depth you choose.
   than the residual can tell apart -- the metric the span was read in stands.
 - **The certificate.** `defect` is the rows' orthonormality, and it bounds `inverse` and
   `idempotent`.
-- **Drift** reads a later record in that record's own noise metric. The residual is rotated into
-  the dimensions the basis leaves, where the existing floor's null applies. Measured over 80 records
-  by [`research/benchmarks/write_path.py`](../research/benchmarks/write_path.py), at `far = 0.05`:
-  - false alarms on later records from the same process: 0 of 80 with unequal channel noise, 2 of
-    80 with equal noise, and 0 of 80 on a complex process;
-  - detections: a planted extra mode in 80 of 80, and a local transient in 75 of 80.
-  - `drift` reports `identified=True` only when every channel's noise is fixed to within 1/z of
-    itself at the reader's level `far`: each channel's standard error -- from the moments' own
-    covariance, evaluated at the solved noise -- is below 1/z of it. Few channels outside the span,
-    a short record, or a channel lying (nearly) inside the span leave it `False`, and then the
-    level is not held. Where it is `True`, drift held its level (`write_path.py`): at most 5.9% of
-    identified records alarmed (8 of 135 at worst, within the binomial spread of the 6.75 the level
-    allows) on each of eight real and complex configurations, and over 4000 records with exact moments no identified
-    channel was off by more than 0.1%.
+- **Drift** asks whether a later record is the same process as the one the basis was read from.
+  It reads the record in its own noise metric, rotates the residual into the dimensions the basis
+  leaves, and compares it with the source record's residual in the same coordinates. The floor is
+  the exact rank over reads of random subsets of the two records' pooled rows, so a record of the
+  same process -- however correlated its unresolved modes -- reads structure at most at the level.
+  Measured over 80 records by
+  [`research/benchmarks/write_path.py`](../research/benchmarks/write_path.py), at `far = 0.05`:
+  - false alarms on later records from the same process: 2 of 80 with unequal channel noise, 4 of
+    80 with equal noise, and 1 of 80 on a complex process;
+  - detections: a planted extra mode in 80 of 80, and a local transient in 67 of 80.
+  - `identified` says whether each channel's noise is fixed to within 1/z of itself at `far` (each
+    channel's standard error, from the moments' own covariance, below 1/z of it). The level no
+    longer rests on it. Over eight real and complex configurations, same-process false alarms
+    stayed within the binomial spread of the level whether or not the record was identified: at
+    worst 6 of 135 identified and 3 of 55 not.
 
 ## How it compares
 
@@ -209,8 +210,8 @@ data-derived Tukey fence.
   - It returns `(clean, info)` in `W`'s own units, with `clean + info["residual"] == W`: an
     orthogonal projection, with the singular values kept as read.
   - On an exactly rank-1 record with no noise (`write_path.py`), it recovers a burst of any width,
-    from half a sample to 128 samples, to between 1.8e-16 and 1.1e-15 at `σ_top / floor` = 5.3. A
-    sine filling the record is recovered to 6.9e-16.
+    from half a sample to 128 samples, to between 1.8e-16 and 1.1e-15 at `σ_top / floor` of 4.6 to
+    5.3. A sine filling the record is recovered to 6.9e-16.
   - A noise-free record with several modes is recovered whole only where each mode clears the edge
     of the screen's null (above).
 - **Tensor**, `Aperture.tensor()`: a delay-embedded Tucker/HOSVD of the within-window fine structure.
@@ -221,7 +222,9 @@ data-derived Tukey fence.
   the 2-D screen.
 - **A stack at once**, `resolved_batch(X)` for `X: (B, T, F)`: the same resolved read over many
   frames. It runs on numpy (bit-identical to a per-frame `Projection`) or on a torch tensor on its
-  device. `ResolvedScreen` / `ResolvedScreenBatch` are its stateful siblings, and `ResourceLimits`
+  device. `ResolvedScreen` (one revisited screen, read on its stream's window at the exact floor) and
+  `ResolvedScreenBatch` (thousands at once, a cumulative Gram at the closed-form floor) are its
+  stateful siblings, and `ResourceLimits`
   bounds threads, memory and GPU.
 - **Records that are not a 2-D field:**
   - `entroptics.proximity` gives a magnitude-carrying spectral digest and a probe over a set of them.
@@ -265,7 +268,7 @@ Each read carries an optical name. Each entry points to the result in the paper 
 | **diffraction limit** `a_δ` | `2^{−H(C²)}`, the inverse resolvable spacing | Definition 4.4 |
 | **Mercer ratio** | the temporal over the spectral width | Prop 4.7 |
 | **propagation constant** | `α + iβ`: mode contrast and carrier | Definition 6.1, Lemma 6.2 |
-| **noise floor** | the Tracy–Widom edge at `far` | §8 |
+| **noise floor** | the exact permutation floor at `far`; the Tracy–Widom edge where only a covariance is held | §8 |
 | **K** | the modes standing above the floor | §8 |
 | **basis** (KLT) | the resolved modes' principal directions over the channels, orthonormal in the noise metric | `Aperture.basis()` |
 | **drift** | what a later record holds that a basis does not span, read against the floor | `Basis.drift` |

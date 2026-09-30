@@ -10,8 +10,8 @@ obtain.  At ``T=800, D=64``:
 
     energy, flow       the frame's own power                           ~0.3 ms
     basis, profile     which directions, and the amplitude on them     carried with the beam
-    phi_T, phi_F       the axis fills, hence ``etendue``               ~51 ms (a T x T
-                       eigendecomposition, inherent to the read)
+    phi_T, phi_F       the axis fills, hence ``etendue``               ~51 ms (an
+                       eigendecomposition of the smaller Gram, inherent to the read)
     modes              the constituent beams                           ~18 ms
 
 So there is one read per side -- ``Screen.beam(lens)`` -- and touching a field pays for that

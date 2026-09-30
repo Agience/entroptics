@@ -43,8 +43,12 @@ import numpy as np
 from .environment import ns as _ns   # shared numpy/torch dispatch (one source of truth)
 from .environment import to_numpy
 from .entropy import shannon_bits, macheps
-from .null_providers import apply_floor, johnstone, tw1_sf
+from .null_providers import apply_floor, johnstone, tw_sf
 from .projection import ModeSignificance
+
+# the float format's smallest normal number: where a magnitude is floored before a log, the floor is
+# the format's own, not a chosen one
+_TINY = float(np.finfo(float).tiny)
 
 
 # ── backend dispatch (numpy or torch, one code path) ─────────────────────────
@@ -403,8 +407,9 @@ class Dynamics:
         |mu| > 1.  A denoising truncation tied to the noise floor."""
         if self._srank is None:
             ev = self._feature_evals()
-            edge = apply_floor(self._null, spectrum=ev, data=None, shape=(self.n_frames, self.F),
-                               far=self._far, kind="bulk")   # caller's operating point (default mp @ 0.05)
+            edge = apply_floor(self._null, spectrum=ev, data=None, shape=(self.n_pairs, self.F),
+                               far=self._far, kind="bulk",   # caller's operating point (default mp @ 0.05)
+                               complex_=self._complex)
             self._srank = int(self._b.xp.sum(ev > edge))
         return self._srank
 
@@ -423,8 +428,8 @@ class Dynamics:
         ev = self._feature_evals()
         if int(ev.shape[0]) == 0:
             return None
-        edge = apply_floor(self._null, spectrum=ev, data=None, shape=(self.n_frames, self.F),
-                           far=self._far, kind="bulk")
+        edge = apply_floor(self._null, spectrum=ev, data=None, shape=(self.n_pairs, self.F),
+                           far=self._far, kind="bulk", complex_=self._complex)
         top = float(self._b.xp.max(ev))
         edge = float(edge)
         if not (edge > 0.0) or not math.isfinite(top):
@@ -456,7 +461,8 @@ class Dynamics:
             w = w[order]
         if int(w.shape[0]) == 0 or float(w[0]) <= 0:
             return b.zeros((0, 0), complex=self._complex), b.zeros((F, 0)), w[:0]
-        floor = float(w[0]) * 1e-10                            # data-derived rank (drop null modes)
+        floor = float(w[0]) * self.F * macheps(xp, w)          # numerical rank: an F x F eigensolve's
+                                                               # round-off (Higham), not a chosen ratio
         r = int((w > floor).sum())
         r = max(1, min(r, self.n_pairs, self.F))
         if self.n_pairs < 2 * self.F:                          # under-sampled (n_pairs < 2F): the DMD
@@ -528,15 +534,21 @@ class Dynamics:
         if not isinstance(P, _np.ndarray) or _np.iscomplexobj(P):
             return None                      # complex accumulators keep the full, well-trodden path
         F = int(P.shape[0])
-        k = min(F, max(1, int(self.n_pairs)) + 8)
-        if k >= F // 2:
-            return None                      # not rank-deficient enough to be worth a sketch
+        # rank(P) <= n_pairs exactly, and a Gaussian sketch as wide as an exact rank captures the
+        # whole range with probability one -- the trace check below is what certifies it
+        k = min(F, max(1, int(self.n_pairs)))
+        # the sketch costs ~4 F^2 k flops (two products with P) against ~4 F^3 / 3 for the full
+        # symmetric eigensolve: it pays only while k < F / 3
+        if 3 * k >= F:
+            return None
         Om = _np.random.default_rng(0).standard_normal((F, k))
         Q, _ = _np.linalg.qr(P @ Om)
         B = Q.T @ (P @ Q)
         wB, UB = _np.linalg.eigh(0.5 * (B + B.T))
         tr = float(_np.trace(P))
-        if not (tr > 0.0) or abs(float(wB.sum()) - tr) > 1e-10 * abs(tr):
+        # complete iff the captured eigenvalues account for the whole trace, to the round-off of an
+        # F-term sum (Higham)
+        if not (tr > 0.0) or abs(float(wB.sum()) - tr) > F * _np.finfo(float).eps * abs(tr):
             return None                      # range incomplete -> full eigendecomposition
         order = _np.argsort(wB)[::-1]
         return wB[order], _np.ascontiguousarray(Q @ UB[:, order])
@@ -625,7 +637,7 @@ class Dynamics:
         a0 = Vr.conj().T @ b.astype(xv, True)                # POD projection of the initial state (r,)
         amp = xp.linalg.solve(W, a0)                         # mode amplitudes b_k = (W^{-1} a0)  (r,)
         hs = b.astype(b.astype2d(np.asarray(horizons, dtype=float)).reshape(-1), True)   # (H,) complex
-        logmu = xp.log(b.clampmin(xp.abs(mu), 1e-300) * xp.exp(1j * xp.angle(mu)))       # (r,) safe log
+        logmu = xp.log(b.clampmin(xp.abs(mu), _TINY) * xp.exp(1j * xp.angle(mu)))       # (r,) safe log
         muH = xp.exp(hs[:, None] * logmu[None, :])           # (H, r) = mu^h, exact
         aH = (muH * amp[None, :]) @ W.T                      # (H, r): a_h = W (mu^h ⊙ b)
         xH = aH @ Vr.T                                       # (H, F): x_h = Vr a_h
@@ -648,7 +660,7 @@ class Dynamics:
         mag = xp.abs(mu)
         order = b.argsort_desc(mag)                      # dominant (largest |mu|) first
         mu, mag = mu[order], mag[order]
-        alpha = -xp.log(b.clampmin(mag, 1e-300))         # decay rate (>=0 stable; <0 growth)
+        alpha = -xp.log(b.clampmin(mag, _TINY))          # decay rate (>=0 stable; <0 growth)
         beta = xp.angle(mu)                              # frequency
         return DecayRates(
             mu=mu, alpha=alpha, beta=beta,
@@ -690,7 +702,7 @@ class Dynamics:
         mu, P = mu[order], P[order]
         total = float(P.sum())
         share = P / total if total > 0 else P * 0.0
-        return ModePowers(mu=mu, alpha=-xp.log(b.clampmin(xp.abs(mu), 1e-300)),
+        return ModePowers(mu=mu, alpha=-xp.log(b.clampmin(xp.abs(mu), _TINY)),
                           beta=xp.angle(mu), power=P, share=share)
 
     # ── decay reconstruction (exact, extrapolatable to any lag) ───────────────
@@ -769,7 +781,7 @@ class Dynamics:
         # through `b.clampmin`/`xp.log`: on the torch backend those are tensor methods and this
         # raised AttributeError for every resolved rate. math.log is exact on a float and agrees
         # with the numpy path it replaces.
-        return float(-math.log(max(mag, 1e-300)))
+        return float(-math.log(max(mag, _TINY)))
 
     def _feature_evals(self, *, k: int | None = None, oversample: int = 8,
                        n_power: int = 2, seed: int = 0):
@@ -781,7 +793,12 @@ class Dynamics:
         modes over a noise bulk; the bulk below the floor never needs resolving). Deterministic per ``seed``."""
         b, xp = self._b, self._b.xp
         Cov = self._centered()[0]                                # connected (mean-subtracted) covariance
-        d = xp.sqrt(b.clampmin(b.real(xp.diag(Cov)), 1e-30))
+        # RELATIVE floor (as reads.spectral_optics): the variances scale as the square of the data,
+        # so an absolute floor replaces the true variance of a small-amplitude stream
+        _dg = b.real(xp.diag(Cov))
+        _top = float(to_numpy(xp.max(_dg))) if int(_dg.shape[0]) else 0.0
+        d = xp.sqrt(b.clampmin(_dg, _top * macheps(xp, Cov)))
+        d = xp.where(d == 0, xp.ones_like(d), d)                 # an all-zero stream leaves the origin
         R = Cov / xp.outer(d, d)                                 # unit-diagonal correlation
         if k is None or int(k) + int(oversample) >= self.F:
             ev = b.clampmin(b.real(xp.linalg.eigvalsh(R)), 0.0)
@@ -809,23 +826,26 @@ class Dynamics:
             return 0
         xp = self._b.xp
         ev = self._feature_evals(k=k, seed=seed)
-        edge = apply_floor(null, spectrum=ev, data=None, shape=(self.n_frames, self.F),
-                           far=far, kind="bulk", seed=seed)
+        edge = apply_floor(null, spectrum=ev, data=None, shape=(self.n_pairs, self.F),
+                           far=far, kind="bulk", seed=seed, complex_=self._complex)
         return int(xp.sum(ev > edge))
 
     def significance(self):
         """Per-mode evidence of the feature spectrum against the noise null (the operator
         form of ``screen.mode_significance``): the standardized Tracy-Widom deviate
         ``g_k = (T*lambda_k - mu)/sigma_J`` of each ``Pxx`` correlation eigenvalue and its
-        tail probability ``p_k = P(TW1 > g_k)``.  ``resolved() == #(p_k < far)`` at ``mp``;
+        exact tail probability ``p_k = P(TW > g_k)`` (TW1; TW2 and the complex centring for a complex
+        stream).  ``resolved() == #(p_k < far)`` at ``mp``;
         the read exposes the evidence, the caller sets the false-alarm level."""
         if self._b is None or self.n_pairs < 1:
             e = np.zeros(0)
             return ModeSignificance(deviate=e, pvalue=e)
         ev = np.asarray(to_numpy(self._feature_evals()), dtype=float)
-        mu, sig_J = johnstone(self.n_frames, self.F)             # (T, N) = (frames, features)
-        g = (self.n_frames * ev - mu) / sig_J
-        p = np.array([tw1_sf(float(x)) for x in g])
+        # the covariance sums n_pairs outer products (an ensemble of short runs has far fewer pairs
+        # than frames), so the null is sized by the pairs
+        mu, sig_J = johnstone(self.n_pairs, self.F, complex_=self._complex)   # (pairs, features)
+        g = (self.n_pairs * ev - mu) / sig_J
+        p = np.asarray(tw_sf(g, complex_=self._complex), dtype=float)
         return ModeSignificance(deviate=g, pvalue=p)
 
     def phi_F(self) -> float:
@@ -879,10 +899,12 @@ class Dynamics:
         immediately follows ``self``'s, so the boundary transition is added too."""
         if self.lam != 1.0 or other.lam != 1.0:
             raise ValueError("exact merge requires forgetting=1 on both operators")
+        # the caller's operating point (far, null) travels with the merge on every branch
         if self._b is None:                      # empty (+) X = X -- nothing accumulated yet
-            return other if other._b is None else Dynamics.from_state(other.state(), rank=self.rank)
+            return other if other._b is None else Dynamics.from_state(
+                other.state(), rank=self.rank, far=self._far, null=self._null)
         if other._b is None:
-            return Dynamics.from_state(self.state(), rank=self.rank)
+            return Dynamics.from_state(self.state(), rank=self.rank, far=self._far, null=self._null)
         b = self._b
         out = Dynamics(self.F, forgetting=1.0, rank=self.rank, far=self._far, null=self._null)
         out._b = b
@@ -964,7 +986,7 @@ def dynamics(W, *, forgetting: float = 1.0, rank: int | None = None,
                     far=far, null=null).update_block(W)
 
 
-def carry_over_gaps(W, *, iters: int = 64):
+def carry_over_gaps(W):
     """Fill a record's unobserved cells from the record's OWN one-step operator, to a fixed point.
 
     Every other read here treats a missing cell as absent.  An operator cannot: it is read off
@@ -982,6 +1004,10 @@ def carry_over_gaps(W, *, iters: int = 64):
     nothing on a record with no operator to speak of: on white noise the slowest rate stays fast
     (no persistent mode appears) at every dropout level.
 
+    The fill is the fixed point of that re-reading.  It runs until a step moves no cell by more
+    than the arithmetic's own resolution; there is no iteration cap.  (Measured on the planted
+    system: 17, 28, 54 and 94 steps at 5, 20, 35 and 50% of cells dropped.)
+
     A record with nothing missing is returned unchanged, so a caller without gaps pays one
     ``isfinite`` scan and nothing else."""
     xp = _ns(W)
@@ -990,18 +1016,20 @@ def carry_over_gaps(W, *, iters: int = 64):
         return W                                   # nothing missing: one scan, then untouched
     # Backend-agnostic throughout: a record that arrived on a device goes back on it.
     Z = xp.where(miss, xp.zeros_like(W), W)
-    scale = float(abs(to_numpy(xp.max(xp.abs(Z))))) or 1.0
+    scale = float(abs(to_numpy(xp.max(xp.abs(Z)))))
     tol = scale * int(Z.shape[0]) * macheps(xp, Z)      # the arithmetic's own resolution
-    for _ in range(int(iters)):
+    while True:
         L, R = Z[:-1], Z[1:]
         A = (R.T @ xp.conj(L)) @ _pinv_of(xp, L.T @ xp.conj(L))
         pred = xp.zeros_like(Z)
         pred[1:] = Z[:-1] @ A.T
         nxt = xp.where(miss, pred, Z)
-        if float(abs(to_numpy(xp.max(xp.abs(nxt - Z))))) <= tol:
+        step = float(abs(to_numpy(xp.max(xp.abs(nxt - Z)))))
+        # the map contracts on a stable record, but its first steps can grow (a transient): only
+        # the arithmetic's resolution ends it
+        if step <= tol or not math.isfinite(step):
             return nxt
         Z = nxt
-    return Z
 
 
 def _pinv_of(xp, M):

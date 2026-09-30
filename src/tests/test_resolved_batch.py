@@ -12,7 +12,7 @@ import pytest
 
 from entroptics import Projection, resolved_batch, ResolvedBatch
 from entroptics.projection import normalize_batch, project_batch, fold_target_batch
-from entroptics.null_providers import reference_null, top_spectrum_value
+from entroptics.null_providers import reference_null, top_spectrum_value, mp
 
 
 def _frames(shape=(64, 16), n=12, seed=0):
@@ -173,7 +173,7 @@ def test_resolved_screen_concurrent_updates_safe():
     from concurrent.futures import ThreadPoolExecutor
     from entroptics.batch import ResolvedScreen
     rng = np.random.default_rng(2); F = 24
-    rs = ResolvedScreen(F, refresh_every=1_000_000)
+    rs = ResolvedScreen(F)
     chunks = [rng.standard_normal((4, F)) for _ in range(40)]
     with ThreadPoolExecutor(max_workers=8) as ex:
         list(ex.map(rs.update, chunks))
@@ -185,11 +185,12 @@ def test_resolved_screen_streams_and_resumes():
     rng = np.random.default_rng(1); F, T = 32, 400
     L = rng.standard_normal((2, F)); Z = rng.standard_normal((T, 2))
     X = Z @ L + rng.standard_normal((T, F)) * 0.5
-    rs = ResolvedScreen(F, refresh_every=16)
+    rs = ResolvedScreen(F)
     for i in range(0, T, 16):
         rs.update(X[i:i + 16])
-    batch = int(resolved_batch(X[None], fold=False).K_signal[0])
-    assert rs.K_signal == batch                             # streamed == batch (stationary stream)
+    batch = int(resolved_batch(rs.window[None], fold=False).K_signal[0])
+    assert rs.K_signal == batch == 2                        # streamed == the batch read of its window
+    assert rs.window.shape[0] >= F + 1                      # the window carries every direction
     en = rs.energy(X[-16:])
     assert np.asarray(en).shape == (16,) and np.all(np.asarray(en) >= 0)
     rs2 = ResolvedScreen.from_state(rs.state())             # resume across a session
@@ -197,20 +198,16 @@ def test_resolved_screen_streams_and_resumes():
 
 
 def test_resolved_screen_batch_matches_batch_and_per_screen():
-    """ResolvedScreenBatch (B screens in one (B,F,F) Gram) == the batch resolved_batch and the
-    per-screen ResolvedScreen on a stationary stream; batched energy is well-formed."""
+    """ResolvedScreenBatch (B screens in one (B,F,F) Gram) == the batch resolved_batch of every row
+    under the Gram's closed-form floor; batched energy is well-formed."""
     from entroptics.batch import ResolvedScreenBatch, ResolvedScreen
     rng = np.random.default_rng(0); B, F, T = 6, 24, 300
     L = rng.standard_normal((2, F))
     Xs = np.stack([rng.standard_normal((T, 2)) @ L + rng.standard_normal((T, F)) * 0.5 for _ in range(B)])
-    rsb = ResolvedScreenBatch(B, F, refresh_every=16)
+    rsb = ResolvedScreenBatch(B, F)
     for i in range(0, T, 16):
         rsb.update(Xs[:, i:i + 16, :])
-    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False).K_signal)   # == batch read
-    rs = ResolvedScreen(F, refresh_every=16)
-    for i in range(0, T, 16):
-        rs.update(Xs[0, i:i + 16, :])
-    assert rs.K_signal == int(rsb.K_signal[0])                                      # == per-screen
+    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False, null=mp).K_signal)   # == batch read
     en = rsb.energy(Xs[:, -8:, :])
     assert np.asarray(en).shape == (B, 8) and np.all(np.asarray(en) >= 0)
     assert np.array_equal(ResolvedScreenBatch.from_state(rsb.state()).K_signal, rsb.K_signal)
@@ -248,12 +245,12 @@ def test_resolved_screen_reads_against_the_callers_floor(null, expect):
     assert int(s.K_signal) == expect
 
 
-@pytest.mark.parametrize("null", [None, lambda ctx: 1e6, lambda ctx: 1e-9])
+@pytest.mark.parametrize("null", [lambda ctx: 1e6, lambda ctx: 1e-9])
 def test_resolved_screen_batch_takes_a_provider_and_matches_the_per_screen_read(null):
-    """The batched sibling reads the same screens the same way, provider included.
-
-    Both carry the same floor contract, so a provider gives the batch and the per-screen read
-    the same counts."""
+    """The batched sibling takes the same provider contract: a floor above every mode resolves
+    none on either, and one below every mode resolves all of them on either.  (Their reads differ
+    in what they read -- the batch every row, the screen its window -- so an unset floor is not
+    compared.)"""
     Xs = _revisited()
     B, _, F = Xs.shape
     batch = ResolvedScreenBatch(B, F, null=null)
@@ -275,18 +272,18 @@ def test_a_stream_of_noise_reads_as_the_batch_does():
     B, T, F = 40, 16, 64
     rng = np.random.default_rng(11)
     Xs = rng.standard_normal((B, T, F)) * np.exp(rng.uniform(-1, 1, F)) + 3.0
-    rsb = ResolvedScreenBatch(B, F, refresh_every=10 ** 9)
-    raw = ResolvedScreenBatch(B, F, refresh_every=10 ** 9, whiten=False)
+    rsb = ResolvedScreenBatch(B, F)
+    raw = ResolvedScreenBatch(B, F, whiten=False)
     for t in range(T):
         rsb.update(Xs[:, t, :])
         raw.update(Xs[:, t, :])
-    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False).K_signal)
+    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False, null=mp).K_signal)
     assert np.mean(rsb.K_signal > 0) <= 0.1
     assert np.mean(raw.K_signal > 0) >= 0.9
-    rs = ResolvedScreen(F, refresh_every=10 ** 9)
+    rs = ResolvedScreen(F)
     for t in range(T):
         rs.update(Xs[0, t])
-    assert rs.K_signal == int(resolved_batch(Xs[:1], fold=False).K_signal[0])
+    assert rs.K_signal == int(resolved_batch(rs.window[None], fold=False).K_signal[0])
 
 
 def test_a_streamed_flat_channel_leaves_the_live_width():
@@ -297,14 +294,14 @@ def test_a_streamed_flat_channel_leaves_the_live_width():
     hits_s, hits_b = 0, 0
     for i in range(20):
         X = np.hstack([rng.standard_normal((1024, 12)), np.full((1024, 4), 2.5)])
-        rs = ResolvedScreen(16, refresh_every=10 ** 9)
+        rs = ResolvedScreen(16)
         for k in range(0, 1024, 64):
             rs.update(X[k:k + 64])
-        rsb = ResolvedScreenBatch(1, 16, refresh_every=10 ** 9)
+        rsb = ResolvedScreenBatch(1, 16)
         rsb.update(X[None])
         hits_s += rs.K_signal > 0
         hits_b += int(rsb.K_signal[0]) > 0
-        assert rs.K_signal == int(resolved_batch(X[None, :, :12], fold=False).K_signal[0])
+        assert rs.K_signal == int(resolved_batch(rs.window[None], fold=False).K_signal[0])
     assert hits_s <= 2 and hits_b <= 2
 
 
@@ -320,9 +317,9 @@ def test_a_screen_with_no_live_channel_resolves_nothing():
     assert np.all(np.isfinite(np.asarray(b.energy(X[:, :2]))))
     Y = X.copy()
     Y[1] = 2.0
-    b = ResolvedScreenBatch(3, 8, refresh_every=10 ** 9)
+    b = ResolvedScreenBatch(3, 8)
     b.update(Y)
-    assert np.array_equal(b.K_signal, resolved_batch(Y, fold=False).K_signal)
+    assert np.array_equal(b.K_signal, resolved_batch(Y, fold=False, null=mp).K_signal)
 
 
 def test_a_provider_sees_the_live_spectrum_descending_on_every_path():
@@ -330,12 +327,13 @@ def test_a_provider_sees_the_live_spectrum_descending_on_every_path():
     W = np.random.default_rng(1).standard_normal((200, 8))
     W[:, 3] = 1.0
     prov = lambda ctx: 0.5 * ctx.spectrum[0]                     # noqa: E731
-    rs = ResolvedScreen(8, null=prov, refresh_every=10 ** 9)
+    rs = ResolvedScreen(8, null=prov)
     rs.update(W)
-    rb = ResolvedScreenBatch(1, 8, null=prov, refresh_every=10 ** 9)
+    rb = ResolvedScreenBatch(1, 8, null=prov)
     rb.update(W[None])
     want = int(resolved_batch(W[None], fold=False, null=prov).K_signal[0])
-    assert rs.K_signal == int(rb.K_signal[0]) == want == 7
+    assert int(rb.K_signal[0]) == want == 7
+    assert rs.K_signal == int(resolved_batch(rs.window[None], fold=False, null=prov).K_signal[0])
 
 
 def test_forgetting_does_not_depend_on_how_the_stream_is_blocked():
@@ -343,8 +341,34 @@ def test_forgetting_does_not_depend_on_how_the_stream_is_blocked():
     x = np.random.default_rng(2).standard_normal((1000, 8))
     out = []
     for blk in (1, 10):
-        rs = ResolvedScreen(8, forgetting=0.99, refresh_every=10 ** 9)
+        rs = ResolvedScreen(8, forgetting=0.99)
         for k in range(0, 1000, blk):
             rs.update(x[k:k + blk])
-        out.append((rs.T, rs._m.n))
-    assert out[0][0] == out[1][0] and abs(out[0][1] - out[1][1]) < 1e-9 * out[0][1]
+        out.append((rs.T, rs.window, rs.K_signal))
+    assert out[0][0] == out[1][0] and out[0][2] == out[1][2]
+    assert np.array_equal(out[0][1], out[1][1])
+
+
+@pytest.mark.parametrize("batched", [False, True])
+def test_every_read_is_the_batch_read_of_every_row_so_far(batched):
+    """No cadence: a read after any append is the batch read of what the stream reads -- every row
+    for the Gram batch, the window for the screen -- so a mode that arrives in a handful of rows is
+    seen at the next read, not after the stream's own refresh."""
+    rng = np.random.default_rng(4)
+    F = 16
+    noise = rng.standard_normal((200, F))
+    burst = np.outer(rng.standard_normal(12), rng.standard_normal(F)) * 8 + rng.standard_normal((12, F))
+    rs = ResolvedScreenBatch(1, F) if batched else ResolvedScreen(F)
+
+    def k():
+        return int(np.asarray(rs.K_signal).ravel()[0])
+
+    def want(rows):
+        if batched:
+            return int(resolved_batch(rows[None], fold=False, null=mp).K_signal[0])
+        return int(resolved_batch(rs.window[None], fold=False).K_signal[0])
+
+    rs.update(noise[None] if batched else noise)
+    assert k() == want(noise)
+    rs.update(burst[None] if batched else burst)
+    assert k() == want(np.vstack([noise, burst])) >= 1
