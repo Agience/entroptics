@@ -46,10 +46,20 @@ def _burst(T=64, F=256):
     return b / b.max() + np.random.default_rng(0).standard_normal((T, F)) / 10
 
 
+def _tones(T, F, seed=5):
+    """Two persistent tones (0.0402 and 0.0926, the second at 0.6) in white noise 0.05, each channel
+    at its own phase: the record ``operator_vs_fft.py`` times."""
+    r = np.random.default_rng(seed)
+    t = np.arange(T)[:, None]
+    ph = r.uniform(0, 2 * np.pi, (2, F))
+    return (np.cos(2 * np.pi * 0.0402 * t + ph[0]) + 0.6 * np.cos(2 * np.pi * 0.0926 * t + ph[1])
+            + 0.05 * r.standard_normal((T, F)))
+
+
 def _reads():
     """name -> (setup() -> inputs, read(inputs))."""
     import entroptics as E
-    from entroptics.batch import ResolvedScreen
+    from entroptics.batch import ResolvedScreen, ResolvedScreenBatch
     from entroptics.reads import spectral_optics
 
     def proj(T, F):
@@ -64,6 +74,17 @@ def _reads():
                 rs.update(X[i:i + 16])
             return rs.K_signal
         return (lambda: X), run
+
+    def stream_batch(B):
+        X = np.stack([_record(400, 32, s) for s in range(B)])
+
+        def run(X):
+            rb = ResolvedScreenBatch(B, 32)
+            for i in range(0, 400, 16):
+                rb.update(X[:, i:i + 16])
+                rb.K_signal
+            return rb.K_signal
+        return (lambda: X), run
     return {
         "projection.256x32": proj(256, 32),
         "projection.1024x64": proj(1024, 64),
@@ -74,6 +95,9 @@ def _reads():
         "resolved_batch.32x128x16": ((lambda: np.stack([_record(128, 16, s) for s in range(32)])),
                                      (lambda X: E.resolved_batch(X))),
         "resolved_screen.400x32": stream(),
+        "resolved_screen_batch.16x400x32": stream_batch(16),
+        "stream.65536x16": ((lambda: _tones(65536, 16)),
+                            (lambda X: (lambda D: (D.resolved(), D.modes()))(E.Aperture(X).dynamics()))),
     }
 
 

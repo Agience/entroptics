@@ -53,6 +53,64 @@ _TINY = float(np.finfo(float).tiny)
 
 # ── backend dispatch (numpy or torch, one code path) ─────────────────────────
 
+class _Rows:
+    """The window's frames, held as the blocks they arrived in: a list of frames to every reader
+    (``len``, truth, iteration, ``append``, ``extend``, ``del rows[:n]``), stacked by
+    :meth:`stack` in one concatenation instead of one array per frame."""
+
+    def __init__(self, rows=()):
+        self._blocks: list = []
+        self._n = 0
+        self.extend(rows)
+
+    def __len__(self) -> int:
+        return self._n
+
+    def __bool__(self) -> bool:
+        return self._n > 0
+
+    def __iter__(self):
+        for blk in self._blocks:
+            yield from blk
+
+    def append(self, row) -> None:
+        self._blocks.append(row[None])
+        self._n += 1
+
+    def extend(self, rows) -> None:
+        for r in rows:
+            self.append(r)
+
+    def add_block(self, block) -> None:
+        """Hold ``block`` (``k x F``, owned by the window) as it is."""
+        if int(block.shape[0]):
+            self._blocks.append(block)
+            self._n += int(block.shape[0])
+
+    def __delitem__(self, sl) -> None:
+        if not (isinstance(sl, slice) and sl.start is None and sl.step is None):
+            raise TypeError("a window drops its oldest frames only: del rows[:n]")
+        n = min(max(int(sl.stop), 0), self._n)
+        self._n -= n
+        while n:
+            blk = self._blocks[0]
+            k = int(blk.shape[0])
+            if n >= k:
+                self._blocks.pop(0)
+                n -= k
+            else:                    # the rest of a block, copied so the dropped frames are freed
+                rest = blk[n:]
+                self._blocks[0] = rest.clone() if hasattr(rest, "clone") else rest.copy()
+                n = 0
+
+    def stack(self, *, copy: bool = True) -> np.ndarray:
+        """The frames as one numpy ``(n, F)`` array, oldest first.  ``copy=False`` may return the
+        held block itself (one block), for a reader that does not write to it."""
+        if len(self._blocks) == 1 and not copy:
+            return np.asarray(to_numpy(self._blocks[0]))
+        return np.concatenate([np.asarray(to_numpy(b)) for b in self._blocks])
+
+
 class _Backend:
     """Thin numpy/torch dispatch bound to a reference array (namespace + device).
     Only the handful of ops whose numpy/torch spellings differ are wrapped here;
@@ -206,6 +264,7 @@ class DynamicsState:
     n_frames:   int
     n_pairs:    int
     Px:         object | None = None   # sum of left states (the mean, for centred reads)
+    held:       object | None = None   # the window: the frames the reads are taken on
 
 
 class Dynamics:
@@ -227,8 +286,9 @@ class Dynamics:
         # far/null: the detection operating point for the well-posed DMD truncation in the
         # under-sampled regime (n_pairs < 2F; see _signal_rank).  The truncation is a detection
         # decision (which feature modes are signal), so -- per the null-provider contract -- the
-        # caller owns its risk level and null, not a hard-wired constant; default = the derived
-        # mp floor at far=0.05, so well-sampled records (which never truncate) are unaffected.
+        # caller owns its risk level and null, not a hard-wired constant; default = the exact
+        # permutation floor drawn from the held left states, at far=0.05, so well-sampled records
+        # (which never truncate) are unaffected.
         self._far = float(far)
         self._null = null
         self._b: _Backend | None = None
@@ -244,11 +304,26 @@ class Dynamics:
         self._red = None       # cached raw _reduced() result; invalidated on every mutation
         self._red_c = None     # cached connected _reduced_c() result
         self._srank = None     # cached resolved signal rank (DMD truncation, well-posed at T<F)
+        # The window: the most recent frames, which every feature-floor read (``resolved``, the
+        # truncation, ``floor_contrast``, ``significance``) is taken on.  Frames expire at the rate
+        # the aperture forgets (``_expire``): at least F + 1 are held, and more for as long as a mode
+        # the operator resolves is still coherent.  Holding the rows is what lets the floor be the
+        # exact permutation test; a covariance alone cannot price a heavy right tail.
+        self._win = _Rows()
+        self._wcache: dict = {}  # window reads, keyed on (null, far, seed); invalidated on mutation
+        self._hz = None          # (n_frames, horizon): the horizon read at the last expiry point
+        self._expiring = False   # inside an expiry: the horizon's own reads take the frames as held
+        self._block = 1          # frames of the latest ingest: a block is a record, held whole
 
     # ── streaming update ──────────────────────────────────────────────────────
     def update(self, x) -> "Dynamics":
         """Feed one frame (an F-vector; numpy or torch)."""
+        self._block = 1
+        return self._update_frame(x)
+
+    def _update_frame(self, x) -> "Dynamics":
         self._red = self._red_c = self._srank = None
+        self._wcache = {}
         if self._b is None:
             self._b = _Backend(x)
             self.Pxx = self._b.zeros((self.F, self.F))
@@ -288,6 +363,9 @@ class Dynamics:
             self.n_pairs += 1
             self._carry_inverse(b, self._prev)
         self._prev = x
+        self._win.append(b.copy(x))
+        if self.n_frames % self.window_min == 0:
+            self._expire()
         return self
 
     def _carry_inverse(self, b, u) -> None:
@@ -315,6 +393,97 @@ class Dynamics:
         if float(abs(to_numpy(d))) > 0.0:     # would promote a real inverse and break the matmul
             self.Pinv = self.Pinv - xp.outer(Mu, xp.conj(Mu)) / d
 
+    @property
+    def window_min(self) -> int:
+        """The fewest frames the window holds, ``F + 1``: the fewest that carry every feature
+        direction, the aperture stream's minimum window (``Aperture.window``)."""
+        return self.F + 1
+
+    @property
+    def window(self) -> np.ndarray:
+        """The frames the feature-floor reads are taken on (numpy ``(n, F)``), what has been
+        forgotten since the last expiry point dropped first."""
+        if not self._expiring and len(self._win) > self.window_min:
+            self._expire()
+        if not self._win:
+            return np.zeros((0, self.F), dtype=np.complex128 if self._complex else np.float64)
+        X = self._win.stack()
+        return X.astype(np.complex128) if self._complex else X
+
+    def horizon(self) -> int:
+        """Frames of still-coherent history to keep beyond the minimum window, set by the signal
+        itself (not a clock): the memory an active mode implies.  Read off the operator's forgetting
+        margin ``m = max_k|mu_k|`` -- the correlation length to decay to ``eps`` is
+        ``ln(1/eps)/(-ln m)``.  ``0`` when no mode is resolved on the window (forget to the minimum);
+        the whole stream when a mode is persistent (``m -> 1``: never truncate an active signal).
+
+        ``eps`` is derived, not chosen: the operator's own noise floor as a fraction of its dominant
+        mode, ``eps = edge / lambda_1 = 1 / floor_contrast``, off the same read ``resolved`` counts
+        with.  A mode has been forgotten when its amplitude reaches the level the read cannot tell
+        from noise.  Without a readable contrast the horizon is 0, and memory stays bounded.  The
+        aperture's window (``Aperture._coherence_horizon``) is this read."""
+        if self._hz is not None and self._hz[0] == self.n_frames:
+            return self._hz[1]
+        out = self._horizon()
+        self._hz = (self.n_frames, out)
+        return out
+
+    def _horizon(self) -> int:
+        if self._b is None or self.n_pairs < 1 or self.resolved() < 1:
+            return 0
+        fg = self.forgetting()
+        m = float(fg["margin"])
+        persistent = not fg["forgets"]                     # the operator's own test, at its round-off
+        eps = self.floor_contrast()
+        eps = (1.0 / eps) if (eps is not None and math.isfinite(eps) and eps > 1.0) else None
+        if not math.isfinite(m) or m <= 0.0:
+            return 0
+        if persistent:
+            return 1 << 60          # a persistent active mode: keep all (a memory bound, entering no read)
+        if eps is None:
+            return 0
+        return int(math.ceil(math.log(1.0 / eps) / (-math.log(m))))
+
+    def _expire(self) -> None:
+        """Drop the frames the aperture has forgotten: keep ``max(F + 1, horizon(), block)``, the
+        aperture stream's own rule, at the same points -- every ``F + 1`` frames and before a read
+        (``Aperture._materialize``).  The horizon is read on the frames held before the cut.
+
+        ``block`` is the frames of the latest ingest.  A block handed in at once is a record, and a
+        record is read whole, as a batch ``Aperture(W)`` reads it: expiry acts on what streamed in
+        before it, never on the record itself.  A frame-by-frame stream has ``block = 1`` and keeps
+        the aperture's window."""
+        if self._expiring or not self._can_cut():
+            return
+        self._expiring = True
+        try:
+            keep = max(self.window_min, self.horizon(), self._block)
+        finally:
+            self._expiring = False
+        if len(self._win) > keep:
+            del self._win[: len(self._win) - keep]
+            self._wcache = {}
+            self._srank = None
+
+    def _can_cut(self) -> bool:
+        """Whether an expiry could drop a frame: the window holds more than the minimum and the
+        latest block, the two it keeps whatever the horizon reads.  Where it cannot, the horizon is
+        not read -- it is a function of the held frames alone, read when it is next asked for."""
+        return len(self._win) > max(self.window_min, self._block)
+
+    def _window_read(self, null, far: float, seed: int = 0):
+        """``(ev, edge)``: the descending unit-diagonal correlation eigenvalues of the window's
+        centred frames and the floor ``null`` sets for them (cut point ``"bulk"``; the default is
+        the library's, :func:`null_providers.default_provider`, drawn from the window's own rows).
+        An operator that holds no frames -- one resumed from a state that carried none -- reads its
+        accumulated covariance, which carries no rows: only a closed-form provider applies there."""
+        if not self._expiring and len(self._win) > self.window_min:
+            self._expire()                  # what has been forgotten since the last expiry point
+        key = _wkey(null, far, seed)
+        if key not in self._wcache:
+            _window_reads([self], null, far, seed)
+        return self._wcache[key]
+
     def update_block(self, X, *, adjacent: bool = True) -> "Dynamics":
         """Ingest a block of frames ``X`` (rows = frames, ``T x F``) in one vectorised
         pass: the accumulators become two matmuls instead of a Python per-frame loop -- the
@@ -334,11 +503,18 @@ class Dynamics:
         the members into a single accumulator instead is the SAME operator (verified bit-identical,
         ``max|dPxx| = 0``) at one operator's memory -- which at ``F = 32768`` is the difference
         between 24 GB and about 72 GB, i.e. between fitting on a host and not."""
+        if self._ingest_block(X, adjacent=adjacent):
+            self._expire()
+        return self
+
+    def _ingest_block(self, X, *, adjacent: bool = True) -> bool:
+        """:meth:`update_block` up to its expiry: whether an expiry point passed, the expiry left
+        to the caller (a batch reads the horizons of many operators together)."""
         b0 = self._b if self._b is not None else _Backend(X)
         Xb = b0.astype2d(X)                                    # (T, F) on the operator's backend
         T = int(Xb.shape[0])
         if T == 0:
-            return self
+            return False
         if int(Xb.shape[1]) != self.F:
             raise ValueError(f"expected blocks of {self.F}-vectors, got {int(Xb.shape[1])}")
         Xb = carry_over_gaps(Xb)             # a block IS a record: a hole in it is carried by the
@@ -348,10 +524,12 @@ class Dynamics:
         if not adjacent:
             self._prev = None                  # a new run: no transition spans the join
         if self.lam != 1.0:                                    # rare: exact per-frame recurrence
+            self._block = T
             for t in range(T):
-                self.update(Xb[t])
-            return self
+                self._update_frame(Xb[t])
+            return False
         self._red = self._red_c = self._srank = None
+        self._wcache = {}
         if self._b is None:
             self._b = b0
             self.Pxx = b0.zeros((self.F, self.F))
@@ -380,10 +558,13 @@ class Dynamics:
             self.Pyx = self.Pyx + Rr.T @ xp.conj(L)           # sum_t x_{t+1} x_t^H
             self.Px = self.Px + xp.sum(L, axis=0)             # sum_t x_t (the mean, for centering)
             self.n_pairs += (T - 1)
+        before = self.n_frames
         self.n_frames += T
         self._prev = b.copy(Xb[-1])
         self.Pinv = None          # block ingest moved Pxx wholesale: reseed
-        return self
+        self._block = T
+        self._win.add_block(Xb)           # a fresh array of the operator's own (``finite``)
+        return self.n_frames // self.window_min > before // self.window_min   # an expiry point passed
 
     def _centered(self):
         """The connected (mean-subtracted) accumulators ``(P_{xx}-\\bar x\\bar x^H,
@@ -400,39 +581,33 @@ class Dynamics:
         return self.Pxx - corr, self.Pyx - corr
 
     def _signal_rank(self) -> int:
-        """The resolved signal dimension -- the count of connected feature-correlation
-        eigenvalues above the derived (mp) floor.  The DMD is truncated to it (below), so the
-        operator fits only the well-determined signal modes and stays well-posed when T < F
+        """The resolved signal dimension -- the count of feature-correlation eigenvalues of the
+        window above the caller's floor (``_window_read``).  The DMD is truncated to it (below), so
+        the operator fits only the well-determined signal modes and stays well-posed when T < F
         (short cutouts, rank-deficient), so the noise bulk cannot be overfitted into spurious
         |mu| > 1.  A denoising truncation tied to the noise floor."""
         if self._srank is None:
-            ev = self._feature_evals()
-            edge = apply_floor(self._null, spectrum=ev, data=None, shape=(self.n_pairs, self.F),
-                               far=self._far, kind="bulk",   # caller's operating point (default mp @ 0.05)
-                               complex_=self._complex)
-            self._srank = int(self._b.xp.sum(ev > edge))
+            ev, edge = self._window_read(self._null, self._far)
+            self._srank = int(np.sum(ev > edge))
         return self._srank
 
     def floor_contrast(self) -> float | None:
-        """``lambda_1 / edge`` -- the dominant feature-correlation eigenvalue over the derived
+        """``lambda_1 / edge`` -- the window's dominant feature-correlation eigenvalue over its
         noise floor.  ``None`` when the operator carries no spectrum to read it from.
 
-        The same ``apply_floor`` call and the same caller operating point (``far``) that
-        ``_signal_rank`` counts modes against, so the floor a mode is measured against and the
-        floor a mode is said to have decayed to are one number, not two that can drift.  Published
-        because the reciprocal is the only non-arbitrary ``eps`` for "this mode has been
-        forgotten": a mode is gone when its amplitude reaches the level this spectrum cannot tell
-        from noise.  ``Aperture._coherence_horizon`` is the caller."""
+        The same read and the same caller operating point (``far``) that ``_signal_rank`` and
+        ``resolved`` count modes against, so the floor a mode is measured against and the floor a
+        mode is said to have decayed to are one number, not two that can drift.  Published because
+        the reciprocal is the only non-arbitrary ``eps`` for "this mode has been forgotten": a mode
+        is gone when its amplitude reaches the level this spectrum cannot tell from noise.
+        :meth:`horizon` is the caller."""
         if self._b is None or self.n_pairs < 1:
             return None
-        ev = self._feature_evals()
+        ev, edge = self._window_read(self._null, self._far)
         if int(ev.shape[0]) == 0:
             return None
-        edge = apply_floor(self._null, spectrum=ev, data=None, shape=(self.n_pairs, self.F),
-                           far=self._far, kind="bulk", complex_=self._complex)
-        top = float(self._b.xp.max(ev))
-        edge = float(edge)
-        if not (edge > 0.0) or not math.isfinite(top):
+        top = float(np.max(ev))
+        if not (edge > 0.0) or not math.isfinite(top) or not math.isfinite(edge):
             return None
         return top / edge
 
@@ -815,38 +990,57 @@ class Dynamics:
         return w[b.argsort_desc(w)]                              # top-ell approx eigenvalues, descending
 
     def resolved(self, *, null=None, far: float = 0.05, seed: int = 0, k: int | None = None) -> int:
-        """Streaming ``K_signal``: the number of feature modes above the noise floor, from
-        the accumulated feature covariance ``Pxx`` (its unit-diagonal correlation
-        eigenvalues) scored by the null provider -- the operator form of the screen's
-        resolved dimension (cut point ``"bulk"``; only closed-form providers apply, the
-        accumulator holds no raw samples).  O(F^3) once, no O(T^2) screen SVD; pass ``k``
-        (an upper bound on the expected mode count) for the O(F^2 k) randomized path on a
-        wide ``F``.  Backend-agnostic: the eigendecomposition and count stay on-device."""
+        """Streaming ``K_signal``: the number of feature modes above the noise floor on the window
+        (cut point ``"bulk"``) -- the frames the aperture currently sees, at least ``F + 1`` and more
+        while a mode is coherent.  The default floor is the library's: the exact permutation test
+        drawn from the window's rows, or the closed form where no single row could carry a noise
+        eigenvalue over it (:func:`null_providers.closed_form_holds`), so the level is ``far``
+        whatever the law of the noise.  ``k`` is accepted for compatibility and unused: the window's
+        spectrum comes from the smaller of its two Grams."""
         if self._b is None or self.n_pairs < 1:
             return 0
-        xp = self._b.xp
-        ev = self._feature_evals(k=k, seed=seed)
-        edge = apply_floor(null, spectrum=ev, data=None, shape=(self.n_pairs, self.F),
-                           far=far, kind="bulk", seed=seed, complex_=self._complex)
-        return int(xp.sum(ev > edge))
+        ev, edge = self._window_read(null, far, seed)
+        return int(np.sum(ev > edge))
 
-    def significance(self):
-        """Per-mode evidence of the feature spectrum against the noise null (the operator
-        form of ``screen.mode_significance``): the standardized Tracy-Widom deviate
-        ``g_k = (T*lambda_k - mu)/sigma_J`` of each ``Pxx`` correlation eigenvalue and its
-        exact tail probability ``p_k = P(TW > g_k)`` (TW1; TW2 and the complex centring for a complex
-        stream).  ``resolved() == #(p_k < far)`` at ``mp``;
-        the read exposes the evidence, the caller sets the false-alarm level."""
-        if self._b is None or self.n_pairs < 1:
+    def significance(self, *, null=None, far: float | None = None, seed: int = 0):
+        """Per-mode evidence of the window's feature spectrum against the noise null of the floor
+        ``resolved`` uses: the standardized Tracy-Widom deviate ``g_k = (n*lambda_k - mu)/sigma_J``
+        of each window correlation eigenvalue (``n`` the window's frames), and a p-value.  Where the
+        floor is the exact permutation test (``permutation()``, or the default where it takes the
+        exact branch) the p-value is the exact Monte Carlo one from the floor's own draws,
+        ``(1 + #{draws >= lambda_k}) / (draws + 1)``, and ``resolved == #(p <= far)``; elsewhere it
+        is the Tracy-Widom tail ``P(TW > g_k)`` (TW2 for a complex stream), and ``resolved ==
+        #(p < far)`` under the closed form."""
+        from .null_providers import (FloorContext, _select_provider, fewest_draws, _scored,
+                                     _roundoff, top_spectrum_value, shuffle_in_time)
+        far = self._far if far is None else float(far)
+        X = self.window
+        n = int(X.shape[0])
+        if self._b is None or self.n_pairs < 1 or n < 2:
             e = np.zeros(0)
             return ModeSignificance(deviate=e, pvalue=e)
-        ev = np.asarray(to_numpy(self._feature_evals()), dtype=float)
-        # the covariance sums n_pairs outer products (an ensemble of short runs has far fewer pairs
-        # than frames), so the null is sized by the pairs
-        mu, sig_J = johnstone(self.n_pairs, self.F, complex_=self._complex)   # (pairs, features)
-        g = (self.n_pairs * ev - mu) / sig_J
-        p = np.asarray(tw_sf(g, complex_=self._complex), dtype=float)
-        return ModeSignificance(deviate=g, pvalue=p)
+        ev, _ = self._window_read(null, far, seed)
+        mu, sig_J = johnstone(n, self.F, complex_=self._complex)
+        g = (n * ev - mu) / sig_J
+        closed = ModeSignificance(deviate=g, pvalue=np.asarray(tw_sf(g, complex_=self._complex), dtype=float))
+        Xc = X - X.mean(axis=0, keepdims=True)
+        prov = _select_provider(null, "bulk", Xc)
+        spec = getattr(prov, "exact_permutation", None)
+        if spec is None:
+            return closed
+        holds = getattr(prov, "closed_form_holds", None)
+        ctx = FloorContext(spectrum=ev, data=Xc, shape=(n, self.F), far=far, kind="bulk",
+                           rng=np.random.default_rng(seed), complex_=self._complex)
+        if holds is not None and holds(ctx):
+            return closed
+        draws, pfar = spec
+        nd = fewest_draws(far if pfar is None else pfar) if draws is None else int(draws)
+        rng = np.random.default_rng(seed)                    # the floor's own draws, in order
+        Xs = Xc[:, np.any(Xc != 0, axis=0)]
+        tops = np.sort([_scored(shuffle_in_time(Xs, rng), "bulk") for _ in range(nd)])
+        tops = tops + _roundoff(Xc, "bulk", top_spectrum_value(Xc, "bulk"))
+        ge = nd - np.searchsorted(tops, ev, side="left")     # draws at or above each eigenvalue
+        return ModeSignificance(deviate=g, pvalue=(1.0 + ge) / (nd + 1.0))
 
     def phi_F(self) -> float:
         """Feature fill fraction ``2^H(feature-correlation eigenvalues)/F`` from ``Pxx`` --
@@ -871,7 +1065,8 @@ class Dynamics:
         cp = (lambda a: None if a is None else b.copy(a)) if b else (lambda a: a)
         return DynamicsState(
             Pxx=cp(self.Pxx), Pyx=cp(self.Pyx), first=cp(self._first), prev=cp(self._prev),
-            forgetting=self.lam, n_frames=self.n_frames, n_pairs=self.n_pairs, Px=cp(self.Px))
+            forgetting=self.lam, n_frames=self.n_frames, n_pairs=self.n_pairs, Px=cp(self.Px),
+            held=[cp(r) for r in self._win])
 
     @classmethod
     def from_state(cls, s: DynamicsState, *, rank: int | None = None,
@@ -891,6 +1086,9 @@ class Dynamics:
         dyn.n_pairs = int(s.n_pairs)
         sPx = getattr(s, "Px", None)
         dyn.Px = dyn._b.copy(sPx) if sPx is not None else dyn._b.zeros((F,))   # no left-state history yet -> zero
+        held = getattr(s, "held", None)
+        dyn._win = _Rows() if held is None else _Rows(dyn._b.copy(r) for r in held)
+        dyn._block = max(len(dyn._win), 1)        # the window as it was exported is read as it was
         return dyn
 
     def merge(self, other: "Dynamics", *, adjacent: bool = False) -> "Dynamics":
@@ -927,6 +1125,11 @@ class Dynamics:
             out.Pyx = out.Pyx + b.xp.outer(f, b.xp.conj(p))
             out.Px = out.Px + p                                    # boundary left state -> the mean
             out.n_pairs += 1
+        # the concatenated stream's window: both sides' frames, then expired by the merged operator
+        out._win = _Rows([b.astype(r, out._complex) for r in self._win]
+                         + [b.astype(r, out._complex) for r in other._win])
+        out._block = max(self._block, other._block)
+        out._expire()
         return out
 
     def seed(self, A_prior, *, weight: float = 1.0) -> "Dynamics":
@@ -946,6 +1149,7 @@ class Dynamics:
             self.Px = b.astype(self.Px, True)
         w = float(weight)
         self._red = self._red_c = self._srank = None
+        self._wcache = {}
         self.Pxx = self.Pxx + w * b.eye(self.F, complex=self._complex)
         self.Pinv = None          # Pxx moved outside the recurrence: reseed
         self.Pyx = self.Pyx + w * b.astype(A_prior, self._complex)
@@ -979,7 +1183,8 @@ def dynamics(W, *, forgetting: float = 1.0, rank: int | None = None,
     :class:`Dynamics` and return the fitted operator -- via the vectorised ``update_block``
     (two matmuls, no per-frame Python loop; BLAS/GPU-friendly).  Exact at
     ``forgetting=1``.  ``W`` numpy -> CPU; ``W`` torch -> its device.  Rows are the states x_t.
-    ``far``/``null`` set the under-sampled DMD-truncation operating point (default mp @ 0.05)."""
+    ``far``/``null`` set the under-sampled DMD-truncation operating point (default: the exact
+    permutation floor at 0.05)."""
     if W.ndim != 2:
         raise ValueError("W must be 2-D (T, F)")
     return Dynamics(int(W.shape[1]), forgetting=forgetting, rank=rank,
@@ -1257,3 +1462,80 @@ def bootstrap(samples, read, *, draws: int | None = None, rng=0, indices=None) -
     if not reps:
         raise ValueError("bootstrap needs at least one replicate")
     return np.stack(reps)
+
+
+def _wkey(null, far: float, seed: int):
+    """The key a window read is cached on."""
+    return (id(null) if null is not None else None, float(far), int(seed))
+
+
+def _window_reads(dyns, null, far: float, seed: int = 0) -> None:
+    """Fill each operator's window read at ``(null, far, seed)`` where it is not cached, on the
+    frames it holds now: :meth:`Dynamics._window_read` of each, bit for bit, the floors of those
+    that hold rows taken together (:func:`null_providers.apply_floors`)."""
+    from .null_providers import apply_floors
+    key = _wkey(null, far, seed)
+    pend, items = [], []
+    for d in dyns:
+        if key in d._wcache:
+            continue
+        if not d._win:
+            ev = np.asarray(to_numpy(d._feature_evals()), dtype=float)
+            edge = (apply_floor(null, spectrum=ev, data=None, shape=(d.n_pairs, d.F), far=far,
+                                kind="bulk", seed=seed, complex_=d._complex)
+                    if d.n_pairs >= 1 else float("inf"))
+            d._wcache[key] = (ev, float(edge))
+            continue
+        X = d._win.stack(copy=False)
+        X = X.astype(np.complex128) if d._complex else X
+        n = int(X.shape[0])
+        if n < 2:
+            d._wcache[key] = (np.zeros(0), float("inf"))
+            continue
+        Xc = X - X.mean(axis=0, keepdims=True)
+        Gc = None
+        if n >= d.F:
+            # the unit-diagonal frame's Gram is the centred Gram scaled by its own diagonal, so the
+            # T x F scaled frame is never formed; the floor reads the same Gram (its row bounds)
+            Gc = Xc.conj().T @ Xc
+            G = Gc
+            e = np.real(np.diag(G)).copy()
+        else:
+            e = np.real(np.sum(Xc.conj() * Xc, axis=0))
+        top = float(e.max()) if e.size else 0.0
+        dd = np.sqrt(np.clip(e, top * np.finfo(float).eps, None))
+        dd = np.where(dd == 0, 1.0, dd)
+        if n >= d.F:
+            G = G / np.outer(dd, dd)
+        else:
+            Y = Xc / dd
+            G = Y @ Y.conj().T                                # the smaller Gram: same nonzero spectrum
+        ev = np.sort(np.clip(np.linalg.eigvalsh(G), 0.0, None))[::-1]
+        pend.append((d, ev))
+        items.append(dict(spectrum=ev, data=Xc, shape=(n, d.F), complex_=d._complex,
+                          gram=Gc if n >= d.F else None))
+    if items:
+        edges = apply_floors(null, items=items, far=far, kind="bulk", seed=seed)
+        for (d, ev), edge in zip(pend, edges):
+            d._wcache[key] = (ev, float(edge))
+
+
+def _update_blocks(dyns, blocks) -> None:
+    """:meth:`Dynamics.update_block` of each operator with its block, bit for bit, the operators
+    whose expiry point passed expiring together (:func:`_expire_together`)."""
+    _expire_together([d for d, X in zip(dyns, blocks) if d._ingest_block(X)])
+
+
+def _expire_together(dyns) -> None:
+    """:meth:`Dynamics._expire` of each operator, bit for bit: the horizons not yet read at the
+    operators' frame counts are read on their held frames together (:func:`_window_reads`) before
+    each expires."""
+    held: dict = {}
+    for d in dyns:
+        if (not d._expiring and d._can_cut() and d._b is not None and d.n_pairs >= 1
+                and not (d._hz is not None and d._hz[0] == d.n_frames)):
+            held.setdefault((id(d._null) if d._null is not None else None, d._far), []).append(d)
+    for ds in held.values():
+        _window_reads(ds, ds[0]._null, ds[0]._far)
+    for d in dyns:
+        d._expire()

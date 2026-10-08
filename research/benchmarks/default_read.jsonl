@@ -1,4 +1,4 @@
-{"file": "/home/builder/entroptics-work/bench/research/benchmarks/../../src/entroptics/__init__.py", "source_sha256": "73e3c12c5cb5a2e9e0f8f996a7ae3cee3c2d05de44331baff6f4aa8eedeb9936"}
+{"file": "/home/builder/entroptics-work/r028y/research/benchmarks/../../src/entroptics/__init__.py", "source_sha256": "03557eecbc0c6a373d42bed7cae56fb9f15180f940e27a6e47c318b7c5f7998f"}
 {"flat": "8 gaussian channels", "records": 200, "false_alarm_rate": 0.06}
 {"flat": "8 gaussian + 2 constant", "records": 200, "false_alarm_rate": 0.06}
 {"flat": "8 gaussian + 8 constant", "records": 200, "false_alarm_rate": 0.06}

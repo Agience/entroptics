@@ -141,63 +141,60 @@ def count_table():
     return out
 
 
-COST_LINES = {  # key in the jsonl row -> (label, colour, style)
-    "fft_ms": ("FFT alone (a spectrum only)", "#bbbbbb", ":"),
-    "pipeline_ms": ("FFT pipeline", GREY, "--"),
-    "pipeline_pad16_ms": ("FFT pipeline, 16x padded (as in the accuracy table)", DARK, "--"),
-    "fixed_depth_ms": (FIXED, TEAL, "-"),
-    "operator_read_ms": (AUTO, "#9467bd", "-"),
-    "streaming_ms": (STREAM, BLUE, "-"),
+COST_LINES = {  # method in count_vs_fft.jsonl -> (label, colour, style)
+    "fft": ("FFT alone (a spectrum only)", "#bbbbbb", ":"),
+    "pipeline": ("FFT pipeline", GREY, "--"),
+    "read": ("Entroptics", BLUE, "-"),
 }
 
 
 def cost_table():
-    """{F: {key: {T: value}}} from the like-for-like timings: the median over the repeated sweeps
-    of each time, and each count (the same record every sweep)."""
-    t = {}
+    """{F: {method: {T: (instructions, se)}}} from ``count_vs_fft.jsonl`` -- each read's retired
+    instructions per call (valgrind), which do not carry the host's load or clock -- and
+    {F: {T: (K read, K pipeline)}}, the counts the same reads return, from the like-for-like rows of
+    ``operator_vs_fft.jsonl`` (the pipeline's one-sided peaks taken as components, two each)."""
+    t, k = {}, {}
+    for r in rows("count_vs_fft.jsonl"):
+        if "method" in r:
+            t.setdefault(r["F"], {}).setdefault(r["method"], {})[r["T"]] = (r["instructions"], r["se"])
     for r in rows("operator_vs_fft.jsonl"):
-        if r.get("timing") != "like for like":
-            continue
-        for k, v in r.items():
-            if k.endswith("_ms") or k.endswith("_K"):
-                t.setdefault(r["F"], {}).setdefault(k, {}).setdefault(r["T"], []).append(v)
-    return {F: {k: {T: float(np.median(v)) if k.endswith("_ms") else v[0] for T, v in d.items()}
-                for k, d in kk.items()} for F, kk in t.items()}
+        if r.get("timing") == "like for like" and r.get("rep") == 0:
+            kr = r.get("streaming_K", r.get("fixed_depth_K"))
+            k.setdefault(r["F"], {})[r["T"]] = (kr, 2 * r["pipeline_K"])
+    return t, k
 
 
-def cost_spread():
-    """Per (F, T): the smallest and largest ratio of the Entroptics read's time to the FFT
-    pipeline's over the repeated sweeps."""
-    out = {}
-    for r in rows("operator_vs_fft.jsonl"):
-        if r.get("timing") == "like for like":
-            e = r.get("streaming_ms", r.get("fixed_depth_ms"))
-            out.setdefault((r["F"], r["T"]), []).append(e / r["pipeline_ms"])
-    return {k: (min(v), max(v)) for k, v in out.items()}
+def _mi(c):
+    """An instruction count in millions, with its uncertainty where that is more than a tenth of it
+    (a call of a few hundred thousand instructions is at the measurement's own noise)."""
+    v, se = c[0] / 1e6, c[1] / 1e6
+    return f"{v:.3g} ± {se:.2g}" if se > 0.1 * abs(v) else f"{v:.3g}"
 
 
 def fig_cost(tab):
+    t, _ = tab
     fig, axes = plt.subplots(1, 2, figsize=(11, 4.4), sharey=True)
     for ax, F in zip(axes, (1, 16)):
-        for k, (name, c, ls) in COST_LINES.items():
-            pts = tab[F].get(k)
+        for m, (name, c, ls) in COST_LINES.items():
+            pts = t[F].get(m)
             if not pts:
                 continue
             Ts = sorted(pts)
-            ax.plot(Ts, [pts[T] for T in Ts], ls, color=c, marker="o", ms=4, label=name,
-                    lw=2.2 if name.startswith("Entroptics") else 1.4)
+            ax.plot(Ts, [pts[T][0] for T in Ts], ls, color=c, marker="o", ms=4,
+                    label=(FIXED if F == 1 else STREAM) if m == "read" else name,
+                    lw=2.2 if m == "read" else 1.4)
         ax.set_xscale("log", base=2)
         ax.set_yscale("log")
         ax.set_xlabel("record length T")
         ax.set_title("one channel" if F == 1 else f"{F} channels")
         ax.grid(color="#eeeeee")
-    axes[0].set_ylabel("time per call, ms (log scale; lower is faster)")
+    axes[0].set_ylabel("instructions per call (valgrind; log scale; lower is cheaper)")
     h, l = [], []
     for ax in axes:
         for hh, ll in zip(*ax.get_legend_handles_labels()):
             if ll not in l:
                 h.append(hh); l.append(ll)
-    fig.legend(h, l, loc="lower center", ncol=3, fontsize=8, frameon=False)
+    fig.legend(h, l, loc="lower center", ncol=4, fontsize=8, frameon=False)
     fig.suptitle("Cost of a count, frequencies and decay rates at a 5% false-alarm rate")
     fig.tight_layout(rect=(0, 0.12, 1, 1))
     fig.savefig(HERE / "fig_cost.png", dpi=150)
@@ -292,7 +289,7 @@ def fig_null(tab):
 
 
 def main():
-    ft, ct, spread = fft_table(), cost_table(), cost_spread()
+    ft, ct = fft_table(), cost_table()
     dt_, kt = decay_table(), count_table()
     acc, spur = rank_tables()
     nt, dt = null_table(), detect_table()
@@ -349,23 +346,15 @@ def main():
         c = [f"**{x}**" if e == min(d) else x for x, e in zip(c, d)]
         print(f"| {r['case']} | {r['true']} | " + " | ".join(c) + " |")
     print()
+    t, kk = ct
     for F in (1, 16):
-        keys = [k for k in COST_LINES if k in ct[F]]
-        print(f"F = {F}")
-        print("| T | " + " | ".join(COST_LINES[k][0] for k in keys) + " | fastest full read | Entroptics / pipeline, over the sweeps |")
-        print("|---|" + "---|" * (len(keys) + 2))
-        for T in sorted(ct[F]["fft_ms"]):
-            cells, full = [], []
-            for k in keys:
-                v = ct[F][k].get(T)
-                kk = ct[F].get(k[:-3] + "_K", {}).get(T)
-                if kk is not None and k.startswith("pipeline"):
-                    kk *= 2                                   # one-sided peaks, as components
-                cells.append("—" if v is None else f"{v:.3g} ms" + ("" if kk is None else f" (K {kk})"))
-                if v is not None and k != "fft_ms":
-                    full.append((v, COST_LINES[k][0]))
-            lo, hi = spread[(F, T)]
-            print(f"| {T} | " + " | ".join(cells) + f" | {min(full)[1]} | {lo:.2f}–{hi:.2f} |")
+        print(f"F = {F}, instructions per call (M)")
+        print("| T | FFT alone (a spectrum only) | FFT pipeline | Entroptics | Entroptics / pipeline |")
+        print("|---|---|---|---|---|")
+        for T in sorted(t[F]["read"]):
+            f, p, r = (t[F][m][T] for m in ("fft", "pipeline", "read"))
+            kr, kp = kk.get(F, {}).get(T, (None, None))
+            print(f"| {T} | {_mi(f)} | {_mi(p)} (K {kp}) | {_mi(r)} (K {kr}) | {r[0] / p[0]:.3g} |")
         print()
 
 

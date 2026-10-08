@@ -46,11 +46,10 @@ figure dependencies.
 - **Messy data welcome.** Missing cells, dead or stuck channels, channels at very different levels,
   few samples across many channels.
 - **Light and fast.** numpy only; torch (and a GPU) when you pass a tensor. Streams at O(F²) per
-  frame, with state you can save, resume and splice. On multichannel records it is faster than the
+  frame, with state you can save, resume and splice. On multichannel records it is cheaper than the
   FFT at the same job: with 16 channels and 16384 samples or more, its count, frequencies and decay
-  rates take 1.8–2.7× less time than an FFT pipeline that computes them, and from 262144 samples
-  about what the bare FFT alone takes. On a single channel the FFT pipeline is faster
-  ([cost](research/benchmarks/README.md#2-cost)).
+  rates take 1.2–1.6× fewer instructions than an FFT pipeline that computes them. On a single
+  channel the FFT pipeline is cheaper ([cost](research/benchmarks/README.md#2-cost)).
 
 ## When to reach for it
 
@@ -207,7 +206,7 @@ and [`PLEDGE.md`](https://github.com/Agience/entroptics/blob/main/PLEDGE.md).
 
 ## Declaration of generative AI use
 
-The author used Anthropic's Claude Opus (versions 4.8 and 5) in the preparation of this work. Its
+The author used Anthropic's Claude Opus (versions 4.8, 5, and 5.5) in the preparation of this work. Its
 contribution was to write code, and to generate and validate content. The ideas, the construction
 and the claims are the author's. No other generative AI tool was used. The author reviewed and
 edited all output and takes full responsibility for the content of this publication.

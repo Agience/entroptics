@@ -820,19 +820,32 @@ class Projection:
         """Per-mode evidence against the noise null of the floor this projection used, with
         ``K_signal == #(p_k <= far)``.
 
-        Under an exact permutation floor (the default, or any ``permutation()``, directly or
-        through a mapping) ``p_k`` is the exact Monte Carlo p-value of ``s_k`` against the same
+        Under an exact permutation floor (``permutation()``, directly or through a mapping, or the
+        default where it takes the exact branch) ``p_k`` is the exact Monte Carlo p-value of ``s_k`` against the same
         surrogate draws the floor was read from, ``(1 + #{draws >= s_k}) / (n + 1)``, each draw
         and the observed read carrying its round-off bound as the floor does; it resolves steps
         of ``1 / (n + 1)``, so the identity holds at the level the draws were sized for (the
-        smallest attainable p is that level).  Under ``null=mp``, and under any other provider,
+        smallest attainable p is that level).  Under ``null=mp``, the default where it takes the
+        closed form (:func:`null_providers.closed_form_holds`), and under any other provider,
         it is the closed-form Tracy-Widom evidence of :func:`mode_significance` (and the identity
         is ``mp``'s, with ``<``).  ``deviate`` is the Tracy-Widom deviate in every case: where
         each value sits against the light-tailed edge."""
         closed = mode_significance(self.screen, self.S)
-        spec = getattr(_select_provider(self.null, "projection", self.screen), "exact_permutation", None)
+        prov = _select_provider(self.null, "projection", self.screen)
+        spec = getattr(prov, "exact_permutation", None)
         if spec is None:
             return closed
+        holds = getattr(prov, "closed_form_holds", None)
+        if holds is not None:
+            # the library default answers in closed form where no single row can carry a noise
+            # eigenvalue over its floor: its evidence there is the closed form's
+            from .null_providers import FloorContext
+            scr = np.asarray(_env.to_numpy(self.screen))
+            ctx = FloorContext(spectrum=np.asarray(_env.to_numpy(self.S)), data=scr,
+                               shape=(int(scr.shape[0]), live_columns(scr)), far=self._far,
+                               kind="projection", rng=np.random.default_rng(self._seed))
+            if holds(ctx):
+                return closed
         return self._c_sig(closed, spec)
 
     def _c_sig(self, closed: ModeSignificance, spec) -> ModeSignificance:

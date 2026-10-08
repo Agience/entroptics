@@ -11,12 +11,12 @@ is committed beside it. The figures and tables are drawn from those outputs by
 |---|---|---|---|
 | [Counting components exactly](#1-counting-components) (27 planted cases) | **1.000** | AIC 0.946, Gavish–Donoho 0.935, MDL 0.889 | **Entroptics** |
 | [Components reported in correlated noise](#1-counting-components), nothing planted (lower is better) | **9.0** | Gavish–Donoho 17.9, MDL 18.9, AIC 44.7 | **Entroptics** |
-| [Cost of a full read](#2-cost), 16 channels, T = 16384 to 1M | **1.89–212 ms** (counts 3 of 4 at T = 262144) | FFT pipeline, 3.6–534 ms | **Entroptics**, 1.8–2.7× faster |
 | [Decay rates of damped tones](#3-against-the-fft-on-tones) (8 tones) | **best on 5** (fixed depth) | FFT pipeline, best on 3 | **Entroptics** |
 | [Placing tone frequencies](#3-against-the-fft-on-tones) (15 tones) | **best on 8** | FFT pipeline, best on 7 | **Entroptics** |
 | [Counting tones](#3-against-the-fft-on-tones) (7 records) | exact on 3, closer on 2 | FFT pipeline: exact on 4, closer on 1 | even |
-| [Cost of a full read](#2-cost), 16 channels, T up to 4096 | 0.64–0.88 ms | **FFT pipeline, 0.28–0.80 ms** | FFT |
-| [Cost of a full read](#2-cost), one channel | 0.74–329 ms | **FFT pipeline, 0.12–28 ms** | FFT, 6.2–15× faster |
+| [Cost of a full read](#2-cost), 16 channels, T = 16384 to 1M (instructions per call) | **29.7 M–1.66 G** | FFT pipeline, 35.7 M–2.66 G | **Entroptics**, 1.2–1.6× fewer |
+| [Cost of a full read](#2-cost), 16 channels, T up to 4096 | 5.7–11.0 M | **FFT pipeline, 3.0–10.1 M** | FFT |
+| [Cost of a full read](#2-cost), one channel (instructions per call) | 6.4 M–1.72 G | **FFT pipeline, 1.1 M–206 M** | FFT, 5.8–8.5× fewer |
 
 Two more checks of the count:
 - **[Pure noise](#4-pure-noise).** Entroptics reports a component in the 5% of noise records you
@@ -68,10 +68,11 @@ Scripts: [`exp17_rank_baselines.py`](../validation/exp17_rank_baselines.py) and
 
 **The test.** Two tones in white noise, each channel with its own phases. Every method returns the
 same things: how many components there are at a 5% false-alarm rate, and each one's frequency,
-decay rate and power. Each time is the best of three to five calls on one thread, and the tables
-show the median over three full sweeps.
+decay rate and power. Cost is counted as retired instructions per call, by valgrind, on one thread:
+the release's own measure, which carries neither the host's load nor its clock. Each count is the
+difference between a run that makes the call three times and the same run without it, taken twice.
 
-![Time per call against record length, one channel and 16 channels](fig_cost.png)
+![Instructions per call against record length, one channel and 16 channels](fig_cost.png)
 
 K is the count, and the truth is 4 in every row:
 - **The FFT pipeline** counts peaks. A tone counts as two components, its positive- and
@@ -79,48 +80,53 @@ K is the count, and the truth is 4 in every row:
 - **The streaming read** counts independent patterns across the channels. Two tones, each at its own
   phase in every channel, make four.
 
-The fastest full read is in bold.
+The cheaper full read is in bold. Instructions per call, in millions.
 
 **16 channels.**
 
-| T | FFT alone (a spectrum only) | FFT pipeline | FFT pipeline, 16× padded | Entroptics, streaming |
-|---|---|---|---|---|
-| 1024 | 0.029 ms | **0.277 ms** (K 4) | 2.13 ms (K 4) | 0.636 ms (K 4) |
-| 4096 | 0.166 ms | **0.799 ms** (K 4) | 13.3 ms (K 4) | 0.883 ms (K 3) |
-| 16384 | 0.921 ms | 3.60 ms (K 4) | 85.2 ms (K 4) | **1.89 ms** (K 4) |
-| 65536 | 6.26 ms | 22.0 ms (K 4) | 349 ms (K 4) | **9.32 ms** (K 4) |
-| 262144 | 44.3 ms | 122 ms (K 4) | 1.57 s (K 4) | **45.6 ms** (K 3) |
-| 1048576 | 214 ms | 534 ms (K 6) | — | **212 ms** (K 4) |
+| T | FFT alone (a spectrum only) | FFT pipeline | Entroptics, streaming |
+|---|---|---|---|
+| 1024 | 0.53 ± 0.21 | **2.96 ± 0.34** (K 4) | 5.69 (K 4) |
+| 4096 | 2.60 | **10.1** (K 4) | 11.0 (K 3) |
+| 16384 | 11.3 | 35.7 (K 4) | **29.7** (K 4) |
+| 65536 | 65.9 | 160 (K 4) | **108** (K 4) |
+| 262144 | 270 | 646 (K 4) | **419** (K 3) |
+| 1048576 | 1,170 | 2,660 (K 6) | **1,660** (K 4) |
 
-- **Speed.** From T = 16384 the streaming read is faster than the FFT pipeline: 1.8–2.0× at
-  16384, and 2.1–2.7× from 65536 in every sweep. From T = 262144 it costs about what the FFT alone
-  does, and the FFT alone returns no count and no decay rates.
-- **Why it scales.** It folds each frame into a fixed-size summary, so its cost grows in step with
-  T. The FFT's cost grows as T log T, once per channel, and the pipeline then works through the
-  spectrum.
+- **Cost.** From T = 16384 the streaming read takes 1.2–1.6× fewer instructions than the FFT
+  pipeline; at T = 4096 they are level, and below it the pipeline is cheaper.
+- **Why it scales.** It folds each frame into a fixed-size summary, then reads its floor off the
+  window it holds: a few passes over the record, against the FFT's T log T once per channel and the
+  pipeline's work through the spectrum.
+- **The floor.** Where no single row can carry a noise eigenvalue over the closed-form edge, that
+  edge is the floor, at no draws. Where one can -- very heavy right tails -- the floor is the exact
+  permutation test, whose false-alarm rate is the 5% you allow whatever the noise
+  ([section 4](#4-pure-noise)); its 19 draws each pass over the record. The pipeline's peak test
+  assumes Gaussian noise.
 - **Where it misses.** At T = 4096 and 262144 it counts 3, missing one of the weaker tone's two
   patterns.
 
 **One channel.**
 
-| T | FFT alone (a spectrum only) | FFT pipeline | FFT pipeline, 16× padded | Entroptics, fixed depth | Entroptics, automatic depth |
-|---|---|---|---|---|---|
-| 1024 | 0.0048 ms | **0.118 ms** (K 4) | 0.258 ms (K 4) | 0.737 ms (K 4) | 2.23 ms (K 4) |
-| 4096 | 0.0136 ms | **0.155 ms** (K 4) | 0.804 ms (K 4) | 1.02 ms (K 4) | 15.0 ms (K 4) |
-| 16384 | 0.0559 ms | **0.318 ms** (K 4) | 3.43 ms (K 4) | 2.38 ms (K 4) | 412 ms (K 4) |
-| 65536 | 0.303 ms | **1.13 ms** (K 6) | 19.9 ms (K 6) | 11.3 ms (K 4) | 30.6 s (K 4) |
-| 262144 | 1.30 ms | **4.69 ms** (K 4) | 124 ms (K 4) | 70.8 ms (K 4) | — |
-| 1048576 | 8.25 ms | **28.4 ms** (K 4) | 586 ms (K 4) | 329 ms (K 4) | — |
+| T | FFT alone (a spectrum only) | FFT pipeline | Entroptics, fixed depth |
+|---|---|---|---|
+| 1024 | 0.76 ± 0.37 | **1.09** (K 4) | 6.35 (K 4) |
+| 4096 | 0.61 ± 0.09 | **1.75 ± 0.71** (K 4) | 12.2 (K 4) |
+| 16384 | 1.22 ± 0.53 | **4.23** (K 4) | 31.1 (K 4) |
+| 65536 | 6.49 | **14.5** (K 6) | 112 (K 4) |
+| 262144 | 24.6 | **50.8** (K 4) | 433 (K 4) |
+| 1048576 | 103 | **206** (K 4) | 1,720 (K 4) |
 
-- **The FFT pipeline wins on one channel,** 6.2–15× faster than the fixed-depth read.
-- **Against the padded pipeline** (the 16×-padded one, whose accuracy section 3 reports), the
-  fixed-depth read is faster from T = 16384. It also counts right at every length.
-- **The automatic depth** reads a deeper window the longer a tone persists. Its cost grows much
-  faster than T: from 412 ms at T = 16384 to 30.6 s at 65536, where it is timed with one call per
-  sweep.
+- **The FFT pipeline wins on one channel,** with 5.8–8.5× fewer instructions than the fixed-depth
+  read. The fixed-depth read lifts the channel to 16 delays and reads them as 16 channels. It counts
+  right at every length.
+- A call of under a few million instructions is near the measurement's own noise; those cells carry
+  their spread.
 
-Script: [`operator_vs_fft.py`](operator_vs_fft.py) → [`operator_vs_fft.jsonl`](operator_vs_fft.jsonl)
-(the `like for like` rows).
+Scripts: [`count_vs_fft.py`](count_vs_fft.py) → [`count_vs_fft.jsonl`](count_vs_fft.jsonl) (the
+instructions), and [`operator_vs_fft.py`](operator_vs_fft.py) →
+[`operator_vs_fft.jsonl`](operator_vs_fft.jsonl) (the counts, and the same reads' wall-clock times on
+the host that ran them).
 
 ## 3. Against the FFT on tones
 
@@ -272,6 +278,7 @@ Script: [`screen_null.py`](screen_null.py) (the `detect` records).
 | [`figures.py`](figures.py) | `fig_*.png` | the figures and tables on this page, from the outputs above |
 | [`baseline.py`](baseline.py) | `baseline_metrics.json` | the release baseline: sensitivity on a ladder of planted strengths, and accuracy, each with its sampling error |
 | [`cost.py`](cost.py) | `cost_metrics.json` | the release baseline: instructions (valgrind) and peak bytes per read |
+| [`count_vs_fft.py`](count_vs_fft.py) | `count_vs_fft.jsonl` | section 2: the cost, in instructions per call (valgrind) |
 | [`gate.py`](gate.py) | exit status | a candidate against the baseline, by `entroptics.gate.compare`: fails on any metric worse beyond its noise |
 
 ```bash

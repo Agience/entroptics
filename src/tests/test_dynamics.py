@@ -15,9 +15,12 @@ def test_undersampled_truncation_far_is_caller_settable():
     rng = np.random.default_rng(0)
     U = rng.standard_normal((30, 3)); V, _ = np.linalg.qr(rng.standard_normal((60, 3)))
     W = U @ V.T + 0.3 * rng.standard_normal((30, 60))       # T=30 < F=60 (under-sampled)
+    # the default floor is the exact permutation test where a single row could carry a noise
+    # eigenvalue over the closed form, and the closed form where none can -- which a strict level
+    # reaches without the 1/far - 1 draws the exact test would take
     n_lax = dynamics(W, far=0.9).rates().n_modes
     n_default = dynamics(W).rates().n_modes
-    n_strict = dynamics(W, far=1e-8).rates().n_modes
+    n_strict = dynamics(W, far=1e-12).rates().n_modes
     assert n_lax >= n_default >= n_strict                    # laxer far -> more modes kept
     assert n_lax > n_strict                                  # far actually moves the truncation
     assert dynamics(W, far=0.05).rates().n_modes == n_default

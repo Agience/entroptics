@@ -48,7 +48,7 @@ reported and left in place.
 | Reproducibility of reported results | `research/validation/run_all.py` regenerates `RESULTS.md` byte-identically; each paper directory carries a `reproduce.py` and a `verify.py` |
 | Archive with a DOI | Zenodo concept DOI `10.5281/zenodo.21273400` (resolves to the latest; each release also gets its own version DOI, minted when the release is tagged) |
 | Author ORCID | `0009-0002-0150-4027`, in the paper front matter, `CITATION.cff` and `.zenodo.json` |
-| Version consistency | `0.2.7` in `pyproject.toml`, `CITATION.cff` and `.zenodo.json`; the library reports it from installed distribution metadata rather than a literal |
+| Version consistency | `0.2.8` in `pyproject.toml`, `CITATION.cff` and `.zenodo.json`; the library reports it from installed distribution metadata rather than a literal |
 
 ## Gaps
 

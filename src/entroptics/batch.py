@@ -592,120 +592,71 @@ def resolved_batch(X, *, fold="auto", far: float = 0.05, null=None, seed: int = 
 # The batch functions above are pure (no memoization -- required for the "expensive is
 # independent" rule and for cross-caller privacy).  A revisited screen (an LLM KV head read on
 # many turns, tokens appended each turn) instead keeps state: ``ResolvedScreen`` keeps the rows of
-# its window (the stream's own, so its floor is exact), and ``ResolvedScreenBatch`` keeps the
-# additive feature Gram ``C = S^T S`` of thousands of screens at once (appended rows are a rank-k
-# update; its floor is the closed form).  Both are caller-owned (no global registry): the
+# its window (the stream's own: its rows expire at the rate the aperture forgets), and
+# ``ResolvedScreenBatch`` reads many such screens behind one batched interface.  Both are
+# caller-owned (no global registry): the
 # caller keys ``{(session, layer, head) -> ResolvedScreen}`` and owns eviction / privacy, so there
 # is no cross-caller overlap by construction (ownership, not keying, is the isolation guarantee).
 
-def _diag(xp, C):
-    """The diagonal of the last two axes of ``C`` (numpy / torch)."""
-    return (xp.diagonal(C, dim1=-2, dim2=-1) if _env.is_torch(xp)
-            else np.diagonal(C, axis1=-2, axis2=-1))
+def _read_rows(W, *, whiten: bool, far: float, null, seed: int):
+    """Read held rows ``W`` ``(n, F)`` at native resolution: ``(K, V, keep, (live, centre), inv)``
+    -- the count, the right singular vectors of the screen, which of them clear the floor, the
+    live channels and their whitening.  ``resolved_batch(W[None], fold=False)`` bit for bit when
+    ``whiten`` (the floor is the read's: by default the exact permutation test, drawn from the
+    rows).  ``V`` is ``None`` when nothing can be read (fewer than two rows, no live channel)."""
+    return _read_rows_many([W], whiten=whiten, far=far, null=null, seed=seed)[0]
 
 
-class _Moments:
-    """The additive statistics a whitened Gram is formed from, for ``(..., k, F)`` row blocks: the
-    weight ``n``, the first moment ``s1 = sum x`` and the raw Gram ``G = sum x^T x``, each faded by
-    ``forgetting`` per ROW (a block of ``k`` rows fades what came before by ``forgetting**k`` and
-    weights its own rows as if appended one at a time, so the memory does not depend on how the
-    stream is blocked).  Complex rows take the Hermitian Gram.  Rows are taken relative to the first
-    row the screen saw (``shift``),
-    which is exact algebra and keeps ``G - n mu mu^T`` from cancelling at a large level; a channel
-    that never moved then has exactly zero moments.
-
-    :meth:`whitened` returns what :func:`entropy.normalize` would give the rows accumulated so far --
-    each channel centred on its mean and scaled by its RMS about it, the Gram of those columns -- and
-    the live width (channels that moved).  Mean and RMS are sums, so nothing is frozen: the read is
-    the batch read of the same rows at every refresh."""
-
-    def __init__(self, whiten: bool, forgetting: float):
-        self.whiten = bool(whiten)
-        self.lam = float(forgetting)
-        self.n = 0.0
-        self.shift = self.s1 = self.G = None
-
-    def _on(self, xp, R):
-        """Bring state loaded from numpy onto the rows' backend and device."""
-        if _env.is_torch(xp) and self.G is not None and not _env.is_torch(_env.ns(self.G)):
-            to = lambda a: xp.as_tensor(a, device=R.device)                   # noqa: E731
-            self.shift, self.s1, self.G = to(self.shift), to(self.s1), to(self.G)
-
-    def add(self, xp, R):
-        self._on(xp, R)
-        if self.shift is None:
-            self.shift = R[..., :1, :] * 1                                  # (..., 1, F)
-        X = R - self.shift if self.whiten else R
-        k = int(R.shape[-2])
-        w = self.lam ** np.arange(k - 1, -1, -1, dtype=np.float64)          # row i fades lam^(k-1-i)
-        wx = (xp.as_tensor(w, dtype=X.real.dtype, device=X.device) if _env.is_torch(xp)
-              else w.astype(np.asarray(X).real.dtype))
-        Xw = X * wx[:, None]
-        Xh = _env.movedim(xp, Xw, -2, -1)
-        G = (Xh.conj() if hasattr(Xh, "conj") else Xh) @ X                  # (..., F, F), Hermitian
-        s1 = _env.sum_ax(xp, Xw, -2)                                         # (..., F)
-        fade = self.lam ** k
-        if self.G is None:
-            self.G, self.s1, self.n = G, s1, float(w.sum())
+def _read_rows_many(Ws, *, whiten: bool, far: float, null, seed: int):
+    """:func:`_read_rows` of each of ``Ws``, bit for bit, the floors taken together
+    (:func:`null_providers.apply_floors`)."""
+    from .projection import _screen_resample, live_columns
+    from .entropy import normalize
+    from .null_providers import apply_floors
+    out: list = [None] * len(Ws)
+    items, held = [], []
+    for i, W in enumerate(Ws):
+        W = np.asarray(_env.to_numpy(W))
+        if W.shape[0] < 2:
+            out[i] = (0, None, None, None, None)
+            continue
+        # a channel that never moved carries nothing: it leaves the live width, and the rows are
+        # read on the rest, as ``resolved_batch`` reads such a frame
+        moved = (np.ptp(np.real(W), axis=0) > 0) | (np.ptp(np.imag(W), axis=0) > 0)             if np.iscomplexobj(W) else np.ptp(W, axis=0) > 0
+        live = moved if whiten else np.any(W != 0, axis=0)
+        if not live.any():
+            out[i] = (0, None, None, None, None)
+            continue
+        Wl = W[:, live]
+        if whiten:
+            Z, centre, scale = normalize(Wl, None, return_stats=True)
+            Z, centre, scale = (np.asarray(_env.to_numpy(a)) for a in (Z, centre, scale))
+            inv = np.where(scale > 0, 1.0 / np.where(scale > 0, scale, 1.0), 0.0)
         else:
-            self.G = fade * self.G + G
-            self.s1 = fade * self.s1 + s1
-            self.n = fade * self.n + float(w.sum())
-
-    def whitened(self, xp):
-        """``(C, centre, inv_scale, live)``: the whitened Gram ``(..., F, F)``, each channel's centre
-        and inverse scale ``(..., F)`` (0 on a flat channel), and the live width per screen."""
-        if not self.whiten:
-            live = _diag(xp, self.G).real > 0
-            one = xp.ones_like(self.s1)
-            return self.G, xp.zeros_like(self.s1), xp.where(live, one, one * 0), live
-        mu = self.s1 / self.n                                                # (..., F)
-        Cc = self.G - self.n * (mu[..., :, None].conj() * mu[..., None, :])  # centred Gram
-        d2 = _diag(xp, Cc).real / self.n
-        live = d2 > 0
-        inv = xp.where(live, 1.0 / xp.sqrt(xp.where(live, d2, xp.ones_like(d2))), xp.zeros_like(d2))
-        C = inv[..., :, None] * Cc * inv[..., None, :]
-        return C, self.shift[..., 0, :] + mu, inv, live
-
-    def state(self) -> dict:
-        t = _env.to_numpy
-        return dict(n=self.n, shift=None if self.shift is None else t(self.shift),
-                    s1=None if self.s1 is None else t(self.s1), G=None if self.G is None else t(self.G))
-
-    def load(self, s: dict):
-        self.n = float(s["n"])
-        self.shift = None if s["shift"] is None else np.asarray(s["shift"])
-        self.s1 = None if s["s1"] is None else np.asarray(s["s1"])
-        self.G = None if s["G"] is None else np.asarray(s["G"])
-
-
-def _floor_sq_on(ev, T, live, far, null, seed, complex_=False):
-    """The squared floor for one screen from its whitened Gram's eigenvalues ``ev`` (numpy), at the
-    live width.  The derived ``mp`` edge, or a caller provider on the resolved spectrum, squared;
-    ``complex_`` is the stream's ensemble (a complex Gram takes TW2 and the complex centring)."""
-    F = int(live)
-    if F < 1:
-        return float("inf")
-    ev = np.sort(np.clip(np.asarray(ev, dtype=np.float64), 0.0, None))[::-1][:F]   # the live spectrum,
-    if null is None:                                                                 # descending
-        return float(screen_floor_sq(noise_sigma2_from_spectrum(ev, T, F), T, F, far,
-                                     complex_=complex_))
-    fl = apply_floor(null, spectrum=np.sqrt(ev), data=None,
-                     shape=(T, F), far=far, kind="projection", seed=seed, complex_=complex_)
-    return float(fl) ** 2
+            Z, centre, inv = Wl, np.zeros(Wl.shape[1]), np.ones(Wl.shape[1])
+        _, S, Vt = np.linalg.svd(Z, full_matrices=False)
+        items.append(dict(spectrum=S, data=Z, shape=(int(Z.shape[0]), live_columns(Z)),
+                          resample=_screen_resample(Wl, None, Z, None)))
+        held.append((i, S, Vt, live, centre, inv))
+    if items:
+        floors = apply_floors(null, items=items, far=far, kind="projection", seed=seed)
+        for (i, S, Vt, live, centre, inv), floor in zip(held, floors):
+            keep = S > floor
+            out[i] = (int(keep.sum()), Vt.conj().T, keep, (live, centre), inv)
+    return out
 
 
 class ResolvedScreen:
     """A stateful, resumable resolved screen for a revisited screen (e.g. an LLM KV attention head
     across turns): append rows (tokens) incrementally and read ``K_signal`` / per-row ``energy``.
 
-    The read is the screen's WINDOW, the one an :class:`aperture.Aperture` stream keeps: at least
-    ``F + 1`` rows -- the fewest that carry every feature direction -- and more for as long as a
-    mode the stream's own operator resolves is still coherent (its correlation length, read off the
-    operator), so the signal sets the memory, not a clock.  The window holds the rows themselves, so
-    the floor is the exact permutation test by default (its level is ``far`` for any law of the
-    noise), as for every read that holds its samples; each read is ``resolved_batch`` of the window
-    at native resolution, bit for bit.  An append leaves the read stale and the next read
+    The read is the screen's WINDOW, the one its operator keeps (:attr:`dynamics.Dynamics.window`):
+    every row of the latest append -- a block handed in at once is a record, read whole -- and of
+    what streamed in before it, at least ``F + 1`` rows (the fewest that carry every feature
+    direction) and more for as long as a mode the operator resolves is still coherent, so the
+    signal sets the memory, not a clock.  The window holds the rows themselves, so the floor is the
+    library's (its level is ``far`` for any law of the noise), as for every read that holds its
+    samples; each read is ``resolved_batch`` of the window at native resolution, bit for bit.  An append leaves the read stale and the next read
     refreshes it, so the expensive step runs as often as the caller reads.  ``whiten=False`` reads
     rows already normalised.  Native feature resolution only (``fold=False``: the revisit case is
     unordered bases -- KV head_dim / embeddings).
@@ -716,12 +667,12 @@ class ResolvedScreen:
 
     def __init__(self, F, *, far: float = 0.05, null=None, seed: int = 0,
                  whiten: bool = True, forgetting: float = 1.0):
-        from .aperture import Aperture              # deferred: aperture imports this module
+        from .dynamics import Dynamics
         self.F = int(F)
         self.far = float(far); self.null = null; self.seed = int(seed)
         self.whiten = bool(whiten); self.forgetting = float(forgetting)
         self.T = 0                       # rows appended
-        self._ap = Aperture(forgetting=self.forgetting)   # the stream and its window
+        self._dyn = Dynamics(self.F, forgetting=self.forgetting)   # the stream and its window
         self._read = None                # (K, V, keep, centre, inv) of the current window
         self._since = 0                  # rows appended since the last read
         self._lock = threading.RLock()   # guard concurrent update/refresh/read on one instance
@@ -733,8 +684,7 @@ class ResolvedScreen:
         if R.ndim == 1:
             R = R[None, :]
         with self._lock:
-            for r in R:
-                self._ap.update(r)
+            self._dyn.update_block(R)
             self.T += int(R.shape[0])
             self._since += int(R.shape[0])
         return self
@@ -742,40 +692,13 @@ class ResolvedScreen:
     @property
     def window(self) -> np.ndarray:
         """The rows the read is taken on (numpy ``(n, F)``)."""
-        W = self._ap.W
-        return np.asarray(_env.to_numpy(W)) if W is not None else np.zeros((0, self.F))
+        return self._dyn.window
 
     def refresh(self):
         """Read the current window: its resolved basis and count, against the floor."""
-        from .projection import _screen_resample, noise_floor
-        from .entropy import normalize
         with self._lock:
-            W = self.window
-            if W.shape[0] < 2:
-                self._read = (0, None, None, None, None)
-                self._since = 0
-                return self
-            # a channel that never moved in the window carries nothing: it leaves the live width,
-            # and the window is read on the rest, as ``resolved_batch`` reads such a frame
-            moved = (np.ptp(np.real(W), axis=0) > 0) | (np.ptp(np.imag(W), axis=0) > 0) \
-                if np.iscomplexobj(W) else np.ptp(W, axis=0) > 0
-            live = moved if self.whiten else np.any(W != 0, axis=0)
-            if not live.any():
-                self._read = (0, None, None, None, None)
-                self._since = 0
-                return self
-            Wl = W[:, live]
-            if self.whiten:
-                Z, centre, scale = normalize(Wl, None, return_stats=True)
-                Z, centre, scale = (np.asarray(_env.to_numpy(a)) for a in (Z, centre, scale))
-                inv = np.where(scale > 0, 1.0 / np.where(scale > 0, scale, 1.0), 0.0)
-            else:
-                Z, centre, inv = Wl, np.zeros(Wl.shape[1]), np.ones(Wl.shape[1])
-            _, S, Vt = np.linalg.svd(Z, full_matrices=False)
-            floor = noise_floor(Z, far=self.far, null=self.null, s=S, seed=self.seed,
-                                resample=_screen_resample(Wl, None, Z, None))
-            keep = S > floor
-            self._read = (int(keep.sum()), Vt.conj().T, keep, (live, centre), inv)
+            self._read = _read_rows(self.window, whiten=self.whiten, far=self.far, null=self.null,
+                                    seed=self.seed)
             self._since = 0
         return self
 
@@ -810,131 +733,137 @@ class ResolvedScreen:
         """Export the full state (resume across sessions): the window's rows and the operator."""
         return dict(F=self.F, far=self.far, seed=self.seed, whiten=self.whiten,
                     forgetting=self.forgetting, T=self.T, window=self.window,
-                    operator=self._ap.state())
+                    operator=self._dyn.state())
 
     @classmethod
     def from_state(cls, s: dict) -> "ResolvedScreen":
         """Resume a :class:`ResolvedScreen` from :meth:`state`."""
-        from .aperture import Aperture
+        from .dynamics import Dynamics, DynamicsState
         obj = cls(s["F"], far=s["far"], seed=s["seed"], whiten=s["whiten"],
                   forgetting=s["forgetting"])
-        obj._ap = Aperture.from_state(s["operator"])
-        for r in np.asarray(s["window"]):
-            obj._ap._buf.append(r)                  # the window as it was; the operator already has it
+        op = s["operator"]
+        if isinstance(op, DynamicsState):
+            obj._dyn = Dynamics.from_state(op)
+            if getattr(op, "held", None) is None:     # a state that carried no window: the rows given
+                from .dynamics import _Rows
+                obj._dyn._win = _Rows(np.asarray(r) for r in np.asarray(s["window"]))
+                obj._dyn._block = max(len(obj._dyn._win), 1)
+        else:                                        # an aperture state (0.2.7): rebuild from the window
+            obj._dyn.update_block(np.asarray(s["window"]))
         obj.T = int(s["T"])
         obj._since = 1
         return obj
 
 
 class ResolvedScreenBatch:
-    """The scalable stateful resolved screen -- ``B`` revisited screens (e.g. every layer x head of an
-    LLM KV cache -- often thousands) held as one ``(B, F, F)`` Gram with a batched lazy refresh and
-    batched ``K_signal`` / ``energy`` reads.  Thousands of individual :class:`ResolvedScreen` objects
-    (each its own lock, Gram, and ``eigh``) do not scale for live serving; this keeps one tensor and
-    one batched refresh (the Fermi matrix-sign projector on CUDA -- matmul-only, the fast path where
-    batched dense cuSOLVER is ~1-2 s).
+    """``B`` revisited screens (e.g. every layer x head of an LLM KV cache) read together: one
+    :class:`ResolvedScreen` per screen behind a batched interface.  Append ``(B, k, F)`` blocks (``k``
+    new tokens for each of the ``B`` screens) with :meth:`update`; :attr:`K_signal` and
+    :meth:`energy` read all ``B`` at once, each screen refreshed when a row has arrived since its last
+    read.
 
-    Append ``(B, k, F)`` blocks (``k`` new tokens for each of the ``B`` screens) with :meth:`update`;
-    the statistics accumulate by a batched rank-``k`` update that leaves the projector stale, and
-    :attr:`K_signal` / :meth:`energy` refresh a stale projector and read all ``B`` at once.  Each
-    refresh forms every screen's whitened Gram from its count, sum and raw Gram, exactly as
-    :class:`ResolvedScreen` does, so the read is the batch read of the same rows; ``whiten=False``
-    reads rows already normalised.  Caller-owned; thread-safe (one lock).  ``forgetting`` in (0,1]
-    fades old rows."""
+    Each screen holds the window its own stream keeps -- every row of the latest append (a block is
+    a record, read whole), and of what streamed in before it at least ``F + 1`` rows and more for as
+    long as a mode the operator resolves is still coherent -- so streamed rows expire at the rate
+    the aperture forgets, memory is bounded by what the signal keeps coherent, and each read is
+    ``resolved_batch(window, fold=False)`` bit for bit, at the library's floor (the exact
+    permutation test where a single row could carry a noise eigenvalue over the closed form, the
+    closed form where none can).  ``forgetting`` in (0,1] is the operator's; ``whiten=False`` reads
+    rows already normalised.  Caller-owned; thread-safe (one lock)."""
 
     def __init__(self, B, F, *, far: float = 0.05, null=None, seed: int = 0,
                  whiten: bool = True, forgetting: float = 1.0):
         self.B = int(B); self.F = int(F); self.far = float(far)
         self.null = null; self.seed = int(seed)
         self.whiten = bool(whiten); self.forgetting = float(forgetting)
-        self.T = 0                       # rows accumulated per screen (uniform)
-        self._m = _Moments(whiten, forgetting)
-        self._K = self._P = None         # cached batched K_signal (B,) / projector (B, F, F)
-        self._centre = self._inv = None  # the whitening the projector was read under, (B, F)
-        self._since = 0
+        self.T = 0                       # rows appended per screen (uniform)
+        self._screens = [ResolvedScreen(self.F, far=self.far, null=null, seed=self.seed,
+                                        whiten=self.whiten, forgetting=self.forgetting)
+                         for _ in range(self.B)]
         self._lock = threading.RLock()
 
     def update(self, rows) -> "ResolvedScreenBatch":
-        """Append ``rows`` ``(B, k, F)`` -- ``k`` new tokens for each of the ``B`` screens -- as a
-        batched rank-``k`` update; the projector is refreshed by the next read.
-        Backend-agnostic (torch rows stay on-device).  Thread-safe."""
-        xp = _env.ns(rows)
-        R = _env.asnum(rows)
+        """Append ``rows`` ``(B, k, F)`` -- ``k`` new tokens for each of the ``B`` screens (or
+        ``(B, F)``, one token each); each screen's read is refreshed by its next read.
+        Thread-safe."""
+        R = np.asarray(_env.to_numpy(rows))
         if R.ndim == 2:                                          # (B, F) -> one token per screen
             R = R[:, None, :]
+        if int(R.shape[0]) != self.B:
+            raise ValueError(f"expected rows for {self.B} screens; got {int(R.shape[0])}")
+        from .dynamics import _update_blocks
         with self._lock:
-            self._m.add(xp, R)
-            self.T = int(round(self._m.n))                       # the rows the Gram weighs
-            self._since += int(R.shape[1])
+            _update_blocks([s._dyn for s in self._screens], list(R))
+            for s in self._screens:
+                s.T += int(R.shape[1])
+                s._since += int(R.shape[1])
+            self.T += int(R.shape[1])
         return self
+
+    @property
+    def screens(self) -> list:
+        """The per-screen :class:`ResolvedScreen` objects (read-only use)."""
+        return self._screens
+
+    @property
+    def windows(self) -> list:
+        """Each screen's held window, the rows its read is taken on (numpy ``(n_b, F)``)."""
+        return [s.window for s in self._screens]
 
     def refresh(self) -> "ResolvedScreenBatch":
-        """Recompute the batched projector + K_signal from the current statistics (the
-        expensive step, run by the first read after an append) -- one batched Fermi matrix-sign solve over all ``B`` screens."""
+        """Read every screen's current window (the expensive step; run by the first read after an
+        append)."""
         with self._lock:
-            if self._m.G is None:
-                return self
-            xp = _env.ns(self._m.G)
-            C, self._centre, self._inv, live = self._m.whitened(xp)
-            ev = np.clip(np.asarray(_env.to_numpy(xp.linalg.eigvalsh(C)), dtype=np.float64),
-                         0.0, None)                                                              # (B, F)
-            F_live = np.asarray(_env.to_numpy(live)).sum(axis=1)
-            cx = _env.is_complex_obj(self._m.G)
-            fl = np.array([_floor_sq_on(ev[j], self.T, F_live[j], self.far, self.null, self.seed,
-                                        complex_=cx) for j in range(self.B)])
-            # A screen with no live channel has nothing to resolve: K = 0 and a zero projector.
-            # Its floor is infinite, which the sign iteration cannot take, so it is left out of it.
-            on = np.flatnonzero(np.isfinite(fl))
-            K = np.zeros(self.B, dtype=np.int64)
-            P = C * 0
-            if on.size:
-                idx = xp.as_tensor(on, device=C.device) if _env.is_torch(xp) else on
-                floor2 = _env.asdtype_of(C.real if hasattr(C, "real") else C, fl[on])             # squared
-                Kon, sign = _fermi_sign_from_gram(xp, C[idx], floor2)
-                K[on] = np.asarray(_env.to_numpy(Kon)).astype(np.int64)
-                P[idx] = 0.5 * (_env.eye(xp, self.F, ref=C) + sign)
-            self._K, self._P = K, P
-            self._since = 0
+            self._refresh(self._screens)
         return self
 
-    def _fresh(self):
-        with self._lock:
-            if self._K is None or self._since:
-                self.refresh()
+    def _refresh(self, screens) -> None:
+        """Read ``screens``' windows together: each read is its screen's own, bit for bit, the
+        floors drawn screen by screen and scored across them (:func:`_read_rows_many`)."""
+        if not screens:
+            return
+        from .dynamics import _expire_together
+        _expire_together([s._dyn for s in screens if len(s._dyn._win) > s._dyn.window_min])
+        reads = _read_rows_many([s.window for s in screens], whiten=self.whiten, far=self.far,
+                                null=self.null, seed=self.seed)
+        for s, r in zip(screens, reads):
+            s._read, s._since = r, 0
+
+    def _fresh(self) -> None:
+        self._refresh([s for s in self._screens if s._read is None or s._since])
 
     @property
     def K_signal(self):
         """``(B,)`` numpy int array -- resolved-mode count per screen (refreshes if stale)."""
-        self._fresh()
-        if self._K is None:
-            return np.zeros(self.B, dtype=np.int64)
-        return np.asarray(_env.to_numpy(self._K)).astype(np.int64)
+        with self._lock:
+            self._fresh()
+            return np.array([int(s._read[0]) for s in self._screens], dtype=np.int64)
 
     def energy(self, rows):
-        """Per-row resolved-subspace energy of query ``rows`` ``(B, k, F)`` against the current
-        batched projector -- ``energy[b,t] = s_t P_b s_t^T``, the rows whitened as the projector was
-        read -- returned ``(B, k)`` on the backend."""
-        self._fresh()
+        """Per-row resolved-subspace energy of query ``rows`` ``(B, k, F)`` against each screen's
+        resolved basis, the rows whitened as that screen's window was -- returned ``(B, k)``, on the
+        query's backend."""
         xp = _env.ns(rows)
-        R = _env.asnum(rows)
+        R = np.asarray(_env.to_numpy(rows))
         if R.ndim == 2:
             R = R[:, None, :]
-        Sw = (R - self._centre[:, None, :]) * self._inv[:, None, :]
-        e = _env.sum_ax(xp, (Sw @ self._P) * (Sw.conj() if hasattr(Sw, "conj") else Sw), 2)
-        return e.real if (hasattr(e, "is_complex") and e.is_complex()) or np.iscomplexobj(e) else e  # (B, k)
+        with self._lock:
+            self._fresh()
+            e = np.stack([s.energy(r) for s, r in zip(self._screens, R)])
+        return xp.as_tensor(e, device=rows.device) if _env.is_torch(xp) else e
 
     def state(self) -> dict:
         """Export the full batched state (resume across sessions; numpy)."""
-        return dict(B=self.B, F=self.F, far=self.far, seed=self.seed,
-                    whiten=self.whiten,
-                    forgetting=self.forgetting, T=self.T, moments=self._m.state())
+        return dict(B=self.B, F=self.F, far=self.far, seed=self.seed, whiten=self.whiten,
+                    forgetting=self.forgetting, T=self.T,
+                    screens=[s.state() for s in self._screens])
 
     @classmethod
     def from_state(cls, s: dict) -> "ResolvedScreenBatch":
         obj = cls(s["B"], s["F"], far=s["far"], seed=s["seed"],
                   whiten=s["whiten"], forgetting=s["forgetting"])
         obj.T = int(s["T"])
-        obj._m.load(s["moments"])
+        obj._screens = [ResolvedScreen.from_state(x) for x in s["screens"]]
         return obj
 
 

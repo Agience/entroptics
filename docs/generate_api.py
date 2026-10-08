@@ -35,8 +35,10 @@ GROUPS = [
      "Whiten, fold to the entropy-matched grid, and count what stands above the noise "
      "floor: an exact permutation test by default."),
     ("entroptics.null_providers", "Null providers",
-     "The threshold a detection is taken against. The exact permutation test is the default "
-     "where the screen is held, the Tracy-Widom edge where only a covariance is; a caller may "
+     "The threshold a detection is taken against. Where the rows are held the default chooses "
+     "from them: the Tracy-Widom edge where no single row can carry a noise eigenvalue over it, "
+     "the exact permutation test where one can -- and on a screen that resolves the level, the "
+     "exact test throughout. Where only a covariance is held, the Tracy-Widom edge. A caller may "
      "supply their own."),
     ("entroptics.dynamics", "The streaming operator",
      "Online DMD / Koopman: per-mode decay rates from a fixed-size sufficient statistic, "

@@ -10,6 +10,159 @@ Released versions are archived on Zenodo under the concept DOI
 [10.5281/zenodo.21273400](https://doi.org/10.5281/zenodo.21273400), which resolves to the latest
 version.
 
+## [Unreleased]
+
+### Planned
+- **A heavy-tail guard that reads the noise, not the modes.** The row bound behind the switched
+  floor (`null_providers.row_influence`) measures how much any single row lifts the *top*
+  eigenvalue. On a record with a strong mode the top eigenvalue is that mode, and its own rows
+  carry a large share of it, so the guard sends the record to the exact permutation test although
+  no noise eigenvalue is in question. That costs time, not accuracy: `rates.2000x32` reads at
+  2.1× and `resolved_screen.400x32` at 1.24× 0.2.7's instructions for this reason. The guard will
+  bound the lift of the largest eigenvalue the closed form would leave unresolved, so a record
+  whose only large row contributions belong to a resolved mode keeps the closed form. It is held
+  to the release gate: no accuracy metric may move the worse way, and both reads must come back to
+  0.2.7's cost.
+
+## [0.2.8] - 2026-10-08
+
+Every read holds the rows it thresholds, and the floor chooses, per read, between the exact
+permutation test and the closed form from the data itself: heavy right tails no longer read as
+modes anywhere, the operator's window reads light tails at the closed form's cost, and streamed rows
+expire as the aperture forgets. The release gate now also catches a loss spread thinly over many
+metrics, and its accuracy baseline covers all three reads.
+
+### Changed
+- **One floor where samples are held, chosen per read from the data: the closed form where no row
+  can carry a noise eigenvalue over it, the exact permutation test where one can.**
+  - The closed-form edge alone over-read heavy right tails: on lognormal noise (σ = 1.5) up to
+    41% of noise records claimed a mode at `far = 0.05`, Pareto (3) up to 17%. On light tails it
+    under-read (0–2%). The excess is made of single rows: a channel's largest cell carries most of
+    its energy, and channels whose largest cells share a row read as a mode. One such row carries
+    30–53% of the top eigenvalue.
+  - A screen (`Projection`, `spectral_optics`) takes the exact test wherever `far * n >= 1` for
+    the `n` rows read, as it did in 0.2.7. There the exact test is the more powerful floor: on light
+    tails the closed form sits above it (the edge of a sample covariance, where a sample
+    correlation's top eigenvalue fluctuates less).
+  - The operator's window and a pool (cut point `"bulk"`) take the closed form at every level where
+    no row can cross it: 0.2.7's floor and cost on light tails, which keeps the streaming read
+    cheaper than an FFT pipeline on long multichannel records. Taking the exact test there instead
+    cost 13–15× the pipeline's instructions on 16 channels: each of its 19 draws is a pass over every
+    row.
+  - The closed form answers where its room above the null edge's centre, `q(far)` times the
+    Tracy–Widom scale, clears two things:
+    - the most any row lifts the top eigenvalue as it stands, `max_t |v . y_t|^2`
+      (Courant–Fischer; `null_providers.row_influence`);
+    - the largest lift a coincidence of two channels' cells reaches under the null with probability
+      above `far`: the `(floor(far T) + 1)`-th largest cross-channel product `|y_tj| |y_t'k|`
+      (each cell pair shares a row with probability exactly `1/T`;
+      `null_providers.coincidence_influence`).
+  - The coincidence bound is decided by a count: the `k`-th largest product is within the room
+    exactly when fewer than `k` products exceed it, and only a cell above the room over the largest
+    cell can be in such a product.
+  - `closed_form_holds` states the switch, and `closed_form_far` gives the level where a record
+    switches.
+  - `default_provider` returns `switched` wherever data is held. It applies to `Projection`,
+    `spectral_optics` and every pool. `Projection.significance` and `Dynamics.significance` report
+    the evidence of the branch taken.
+  - No cap or tuned constant enters. Light tails reach the closed form without the `1/far - 1` draws
+    wherever it answers, and heavy tails keep the exact test wherever a coincidence could cross the
+    floor.
+  - The row bounds cost about three passes over the record. The largest cell is bounded first from
+    the whole record's extremes, two contiguous passes, and read column by column only where that
+    bound does not settle it.
+- **The streams hold windows that expire as the aperture forgets. A record handed in at once is
+  read whole.**
+  - `Dynamics` keeps every frame of its latest ingest (a block is a record). Of what streamed in
+    before it, it keeps the frames an aperture stream keeps: at least `F + 1`, and more while a mode
+    it resolves is still coherent (`Dynamics.horizon`, the derivation `Aperture._coherence_horizon`
+    used, now shared).
+  - `resolved`, the DMD truncation, `floor_contrast` and `significance` read that window at the
+    library floor. `Dynamics.window` returns it, and `DynamicsState.held` carries it.
+  - The aperture's frame window and the operator's window are the same frames.
+  - The operator itself (rates, modes, prediction) still accumulates every pair.
+- **`ResolvedScreenBatch` is one `ResolvedScreen` per screen** behind the batched interface.
+  `.windows` and `.screens` expose them. `ResolvedScreen` takes its window from its own `Dynamics`:
+  an append is read whole, and earlier streamed rows expire. The `(B, F, F)` Gram read at the
+  closed form is removed: its level did not hold (above).
+  - Its screens' exact floors are taken together (`null_providers.apply_floors`), for its reads and
+    for the horizons its operators read at an expiry point. Each screen draws from its own
+    generator, as it would alone, and the screens' `j`-th draws share one stacked eigensolve. Every
+    read is the screen's own, bit for bit. Sixteen screens of 400 rows, appended 16 at a time and
+    read after each append, take 10.6% fewer instructions. The release baseline gains that read,
+    `resolved_screen_batch.16x400x32`.
+  - An expiry that cannot drop a frame (the window holds no more than `F + 1` rows and the latest
+    block) no longer reads the horizon. The horizon depends on the held frames alone and is read
+    when next asked for.
+- **A correlation floor scores its draws from the smaller Gram.** `top_spectrum_value` at the
+  `"spectral"` and `"bulk"` cut points reads the top eigenvalue of the column-scaled frame's
+  `min(T, F)`-square Gram, as the projection cut point already did, not an SVD of the `T x F` frame
+  (0.15 ms against 0.70 ms a draw at 2000 x 32). The round-off margin the rank test adds was
+  already a Gram's. The floors move by round-off only; the level is unchanged.
+- **An exact floor reads each draw's column energies once.** A correlation draw's score and its
+  round-off margin each took a pass over the draw for the same energies; they now share one, and
+  so does the observed record's floor. Every floor is bit for bit what it was (1056 floors across
+  the three reads, four noise laws, six shapes, real and complex), at 4% fewer instructions on a
+  long read. The draws themselves, numpy's per-column shuffle, are about three quarters of an exact
+  floor on a long record: a sort-based uniform permutation measured 3.6× more instructions.
+- **`research/benchmarks/count_vs_fft.py` counts the FFT comparison in instructions.** The like-for-
+  like reads of `operator_vs_fft.py` -- the bare FFT, the FFT pipeline and the library's read, one
+  channel and 16, T = 1024 to 1048576 -- costed as `cost.py` costs a read (valgrind, the difference
+  between runs with and without three calls, each run first warmed by one, taken twice). The
+  benchmark README's cost section and `fig_cost.png` are drawn from it. An instruction count does
+  not carry the host's load or clock, so two releases and the FFT are compared on what each
+  computes.
+- **The release gate tests the direction of the metrics that moved.** `entroptics.gate.compare`
+  also fails a candidate when the `higher` / `lower` metrics that changed moved the worse way more
+  often than a change that is no worse would. That count is at most Binomial(n, 1/2), and the test
+  takes its exact tail. A loss spread thinly over many cells passes every per-metric test: taking
+  the closed form at every level where its bounds hold for the screen reads as well (`Projection`)
+  moved 21 sensitivity cells down and 4 up, none beyond its own noise, and a narrowband line at
+  1024 × 64 was found 9% of the time instead of 20% (P = 0.0005). The per-metric test and the sign test share the level, each at `far / 2`, so
+  `z` is the normal quantile at `far / (2 M)`. A `bound` metric is held to its bound alone. The
+  gate's report prints the count and its chance.
+- **The accuracy baseline covers every read whose floor is a different cut point.** `baseline.py`
+  measured `Projection` alone, and 0.2.8's change of floor left all 457 of its metrics
+  bit-identical. It now measures the correlation read (`spectral_optics`, keys `spectral.`) and the
+  operator's resolved count on its window (`Dynamics.resolved`, keys `operator.`) on the same
+  signals, noise laws, record shapes, strength ladder and record counts.
+- **The release baselines (`baseline_metrics.json`, `cost_metrics.json`) are 0.2.8's.**
+  - Accuracy: 1345 metrics over the three reads, each detection rate tagged with its level. Against
+    0.2.7 on the same harness no metric is worse, and the metrics that moved went 51 the worse way
+    and 65 the better. 144 of 0.2.7's rates are set aside: its operator read claimed a mode in 16–36%
+    of lognormal noise records and 20% of complex 32 × 512 ones at `far = 0.05`, and 0.2.8 holds
+    5% there.
+  - Cost, against 0.2.7 (instructions, valgrind): `spectral.1024x64` 280 M → 186 M (the smaller
+    Gram, above); `stream.65536x16`, the streaming read of two tones in 16 channels, 201 M → 233 M;
+    `resolved_screen.400x32` 328 M → 405 M; `rates.2000x32` 138 M → 290 M; every other read level.
+    New reads: `resolved_screen_batch.16x400x32` and `stream.65536x16`.
+  - On the FFT benchmark's records from T = 16384 (`count_vs_fft.py`) the streaming read costs
+    1.3–1.4× 0.2.7's, with the same counts, and 1.2–1.6× fewer instructions than the FFT pipeline
+    on 16 channels (0.2.7: 1.6–2.3× fewer). The excess is the row bounds' passes over the window.
+  - `rates.2000x32` and `resolved_screen.400x32` read a record with one strong mode. The row bound
+    reads the top eigenvalue, there the mode itself, whose rows carry a large share of it, so the
+    exact test answers: their excess is its draws. A guard that reads the noise eigenvalues is
+    planned (Unreleased, above).
+- **`SpectralAccumulator` holds every plane** (an ensemble does not age) and reads them at the
+  library floor. `spectral()` takes `far` and `seed`, and each draw shuffles every channel within its
+  own plane, gaps held. Memory is the pooled planes.
+- **A burst that has streamed out of the window is no longer read.** A 12-row burst streamed into
+  noise frame by frame is found in 100% of streams at its end and in 3% once `F + 1` further frames
+  have arrived. A burst inside a record handed in at once is read with the record.
+- `test_dynamics`'s strict truncation level is `1e-12`: there the closed form answers. The
+  ensemble-of-runs and operator-significance tests take the exact test's identity, `#(p <= far)`.
+  The blocked-stream forgetting test compares blocks no longer than the minimum window.
+
+### Removed
+- `ResolvedScreenBatch`'s Gram state (`_Moments`) and its batched closed-form refresh.
+
+### Fixed
+- **A pool of planes reads the closed-form edge at its own degrees of freedom.** Each plane is
+  centred on its own mean, so `M` planes of `T` rows in all carry `T - M` degrees of freedom; the
+  edge was read at `T - 1` and sat too low: on Gaussian noise, 4 planes of 16 × 128 claimed a mode
+  in 10.5% of records (complex: 17.5%) at `far = 0.05`. `SpectralAccumulator.dof` is `T - M`, and
+  `FloorContext.dof` / `apply_floor(dof=)` carry it to `mp`. One plane reads as before.
+
 ## [0.2.7] - 2026-09-30
 
 Every floor that holds its samples is now an exact test: the screen and correlation reads take a
@@ -668,7 +821,8 @@ surface is unchanged from 0.2.2.
 - An empty spectrum reads NaN instead of `1/n`.
 - A zero-length axis raises `ValueError` instead of an internal error.
 
-[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.7...HEAD
+[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.8...HEAD
+[0.2.8]: https://github.com/Agience/entroptics/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Agience/entroptics/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Agience/entroptics/compare/v0.2.5...v0.2.6
 [0.2.5]: https://github.com/Agience/entroptics/compare/v0.2.3...v0.2.5

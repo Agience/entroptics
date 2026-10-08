@@ -256,24 +256,9 @@ class Aperture:
         floor trades a guarantee the caller relies on for a number nobody measured."""
         if self._dyn is None and self._batch is None and self._nfeat is None:
             return 0                                       # no data yet -> minimum window
-        core = self._core()
-        if core.resolved() < 1:
-            return 0                                       # no active signal -> minimum window
-        fg = core.forgetting()
-        m = float(fg["margin"])
-        persistent = not fg["forgets"]                     # the operator's own test, at its round-off
-        eps = core.floor_contrast()
-        eps = (1.0 / eps) if (eps is not None and math.isfinite(eps) and eps > 1.0) else None
-        if not math.isfinite(m) or m <= 0.0:
-            return 0
-        if persistent:
-            return 1 << 60          # persistent active mode -> keep all.  This margin bounds the
-                                    # frame WINDOW (a locality/resource bound, PAPER §11.1) and
-                                    # enters no read, unlike the operator's own `forgets`, which is
-                                    # reported and so is taken at the arithmetic's resolution.
-        if eps is None:
-            return 0            # no readable floor -> minimum window, and memory stays bounded
-        return int(math.ceil(math.log(1.0 / eps) / (-math.log(m))))
+        # the operator's own horizon, read on the frames it holds: one derivation, so the frames
+        # this window keeps and the frames the operator's reads are taken on expire together
+        return self._core().horizon()
 
     # ── why _materialize short-circuits the horizon ───────────────────────────────────────────
     #
@@ -773,12 +758,9 @@ class Aperture:
 
     def resolved(self, *, far: float | None = None, k: int | None = None) -> int:
 
-        """Streaming ``K_signal`` from the operator (``P_{xx}``, all frames), scored by the
-
-        aperture's effective floor (``reference_null`` if a ``reference`` was given, else
-
-        ``mp``).  The global, O(F^3)-once form of the window ``Projection``'s ``K_signal``
-
+        """Streaming ``K_signal`` from the operator's window -- the frames it holds, which expire
+        as this aperture forgets -- scored by the aperture's effective floor (``reference_null`` if a
+        ``reference`` was given, else the library default, :func:`null_providers.default_provider`)
         (see :meth:`dynamics.Dynamics.resolved`)."""
 
         return self._core().resolved(null=self._effective_null("bulk"),

@@ -12,7 +12,11 @@ number exactly.  Cost -- instructions and memory per read -- is measured by ``co
   sensitivity  the share of records in which a planted signal is found, on a ladder of strengths
                relative to the noise edge ``sqrt(T) + sqrt(F)`` (a factor of sqrt 2 per rung, from a
                third of the edge to twice it), for four signal shapes, four noise laws and three
-               shapes of record, at the library's default floor and ``far = 0.05``;
+               shapes of record, at the library's default floor and ``far = 0.05`` -- by each of the
+               three reads whose floor is a different cut point: the screen (``Projection``, cut
+               point "projection"; keys unprefixed), the correlation read (``spectral_optics``,
+               "spectral"; keys ``spectral.``) and the operator's resolved count on its window
+               (``Dynamics.resolved``, "bulk"; keys ``operator.``);
   accuracy     the share of records whose planted rank is counted exactly (at and above the edge);
                the false-alarm rate on noise alone (a bound, at ``far``); the decay-rate and
                frequency error of the dynamical operator against a known linear system across
@@ -42,6 +46,8 @@ import numpy as np  # noqa: E402
 
 import entroptics as E  # noqa: E402
 from entroptics import Aperture, Projection  # noqa: E402
+from entroptics.dynamics import Dynamics  # noqa: E402
+from entroptics.reads import spectral_optics  # noqa: E402
 
 FAR = 0.05
 N_REC = 100                                   # records per sensitivity / level cell
@@ -99,24 +105,39 @@ def _seed(*parts):
     return int.from_bytes(hashlib.sha256(repr(parts).encode()).digest()[:8], "little")
 
 
+def _count(read, W, i):
+    """The resolved count of ``W`` by ``read``, at the library's default floor and ``FAR``."""
+    if read == "projection":
+        return int(Projection(W, far=FAR, seed=i).K_signal)
+    if read == "spectral":
+        return int(spectral_optics(W, far=FAR, seed=i).resolved_modes)
+    d = Dynamics(int(W.shape[1]), far=FAR)
+    d.update_block(W)
+    return int(d.resolved(far=FAR, seed=i))
+
+
+READS = ("projection", "spectral", "operator")
+PREFIX = {"projection": "", "spectral": "spectral.", "operator": "operator."}
+
+
 def _sensitivity_cell(args):
-    kind, noise, T, F, strength = args
+    read, kind, noise, T, F, strength = args
     found = exact = 0
     for i in range(N_REC):
         r = np.random.default_rng(_seed("sens", kind, noise, T, F, strength, i))
         W = NOISE[noise](r, T, F) + _signal(kind, r, T, F, strength)
-        K = Projection(W, far=FAR, seed=i).K_signal
+        K = _count(read, W, i)
         found += K > 0
         exact += K == RANK[kind]
     return args, found / N_REC, exact / N_REC
 
 
 def _level_cell(args):
-    noise, T, F = args
+    read, noise, T, F = args
     hits = 0
     for i in range(N_REC * 2):
         r = np.random.default_rng(_seed("level", noise, T, F, i))
-        hits += Projection(NOISE[noise](r, T, F), far=FAR, seed=i).K_signal > 0
+        hits += _count(read, NOISE[noise](r, T, F), i) > 0
     return args, hits / (N_REC * 2), N_REC * 2
 
 
@@ -171,18 +192,21 @@ def _binom_se(p, n):
 
 
 def main():
-    sens = [(k, n, T, F, s) for k in SIGNALS for n in NOISE for (T, F) in SHAPES for s in RUNGS]
-    level = [(n, T, F) for n in NOISE for (T, F) in SHAPES]
+    sens = [(rd, k, n, T, F, s) for rd in READS for k in SIGNALS for n in NOISE for (T, F) in SHAPES
+            for s in RUNGS]
+    level = [(rd, n, T, F) for rd in READS for n in NOISE for (T, F) in SHAPES]
     metrics = {}
     with Pool(int(os.environ.get("BASELINE_PROCS", os.cpu_count() or 1))) as pool:
-        for (k, n, T, F, s), found, exact in pool.imap_unordered(_sensitivity_cell, sens):
-            key = f"{k}.{n}.{T}x{F}.x{s:.3f}"
-            metrics[f"sensitivity.{key}"] = dict(value=found, se=_binom_se(found, N_REC), better="higher")
+        for (rd, k, n, T, F, s), found, exact in pool.imap_unordered(_sensitivity_cell, sens):
+            key = f"{PREFIX[rd]}{k}.{n}.{T}x{F}.x{s:.3f}"
+            lvl = f"accuracy.level.{PREFIX[rd]}{n}.{T}x{F}"      # the level this rate was read at
+            metrics[f"sensitivity.{key}"] = dict(value=found, se=_binom_se(found, N_REC), better="higher",
+                                                 level=lvl)
             if s >= 1.0:
                 metrics[f"accuracy.count.{key}"] = dict(value=exact, se=_binom_se(exact, N_REC),
-                                                        better="higher")
-        for (n, T, F), rate, cnt in pool.imap_unordered(_level_cell, level):
-            metrics[f"accuracy.level.{n}.{T}x{F}"] = dict(value=rate, se=_binom_se(FAR, cnt),
+                                                        better="higher", level=lvl)
+        for (rd, n, T, F), rate, cnt in pool.imap_unordered(_level_cell, level):
+            metrics[f"accuracy.level.{PREFIX[rd]}{n}.{T}x{F}"] = dict(value=rate, se=_binom_se(FAR, cnt),
                                                           better="bound", bound=FAR)
         for snr_db, ea, eb in pool.imap_unordered(_decay_cell, (60, 40, 30, 20, 10)):
             v, se = _mean_se(ea)

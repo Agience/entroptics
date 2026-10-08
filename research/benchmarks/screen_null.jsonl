@@ -1,4 +1,4 @@
-{"file": "/home/builder/entroptics-work/final/research/benchmarks/../../src/entroptics/__init__.py", "source_sha256": "2f749d3c781a14304267317321b57a1e46cd092bff493c734c6a202e656be992"}
+{"file": "/home/builder/entroptics-work/r028y/research/benchmarks/../../src/entroptics/__init__.py", "source_sha256": "03557eecbc0c6a373d42bed7cae56fb9f15180f940e27a6e47c318b7c5f7998f"}
 {"null": "gaussian", "T": 256, "F": 8, "records": 200, "false_alarm_rate": 0.05, "false_alarm_rate_mp": 0.005}
 {"null": "gaussian", "T": 256, "F": 32, "records": 200, "false_alarm_rate": 0.04, "false_alarm_rate_mp": 0.01}
 {"null": "gaussian", "T": 1024, "F": 64, "records": 200, "false_alarm_rate": 0.05, "false_alarm_rate_mp": 0.015}

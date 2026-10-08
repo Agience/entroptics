@@ -489,13 +489,15 @@ class SpectralOptics:
 
 def _spectral_from_cov(xp, Cov, T: int, N: int, *, null=None, far: float = 0.05,
                        data=None, seed: int = 0, kind: str = "spectral",
-                       resample=None) -> SpectralOptics:
+                       resample=None, dof: int | None = None) -> SpectralOptics:
     """Assemble ``SpectralOptics`` from an (N, N) column-covariance ``Cov`` accumulated over
     ``T`` samples (rows) of ``N`` variables (columns).  Shared by ``spectral_optics`` (one
     screen, one covariance) and ``SpectralAccumulator`` (a covariance pooled over intact
     planes / an ensemble), so the two cannot drift.  ``null`` is the noise-floor provider
     (``None`` = the derived default ``mp``); ``data`` is the centred samples a resampling
-    provider needs (``None`` for a covariance-only accumulator -> only closed-form providers)."""
+    provider needs (``None`` for a covariance-only accumulator -> only closed-form providers).
+    ``dof``: the covariance's degrees of freedom when they are not ``T - 1`` (planes centred one
+    by one), for the closed-form edge."""
     if int(N) < 2 or int(T) < 3:
         return SpectralOptics(contrast=0.0, top_share=0.0, resolved_modes=0,
                               noise_floor=float("inf"), attenuation=0.0, phase=0.0,
@@ -525,7 +527,7 @@ def _spectral_from_cov(xp, Cov, T: int, N: int, *, null=None, far: float = 0.05,
     # pass any provider (see null_providers); a resampling one uses ``data``.
     edge = _apply_floor(null, spectrum=ev, data=data, shape=(T, N),
                         far=far, kind=kind, seed=seed, complex_=_env.is_complex_obj(Cov),
-                        resample=resample)
+                        resample=resample, dof=dof)
     lam1 = float(ev[0]) if int(ev.shape[0]) else 0.0
     lam2 = float(ev[1]) if int(ev.shape[0]) > 1 else 0.0
     ref = max(lam2, edge)
@@ -882,24 +884,50 @@ class SpectralAccumulator:
     planes, keeping each plane's within-plane correlation intact.  Feed it from
     ``fields.slabs`` (intact planes), never a bare flatten of the volume.
 
-    The pooled sample count ``T`` grows with the ensemble, so the certified band
-    (``concentration_band(T, F)``) tightens; ``spectral()`` then reads one ``SpectralOptics``
-    on which ``attenuation_interval`` / ``resolved_dimension_interval`` certify.  This is the
-    ensemble-level Aperture bound: a certificate over the whole configuration ensemble rather
-    than a single sample.  Numpy accumulation (the occasional certified read, not the hot path).
+    The pool is an ensemble, not a stream: its planes are independent realisations with no ordered
+    axis between them, so nothing ages and every plane added is held and read (``T`` is every row
+    pooled, and the band tightens with the ensemble).  The floor is the library's
+    (:func:`null_providers.default_provider`): the exact permutation test, each draw shuffling every
+    channel in time within its own plane, gaps held -- its false-alarm rate is ``far`` whatever the
+    law of the noise -- or the closed form where no single row could carry a noise eigenvalue over
+    it, read at the pool's degrees of freedom (the rows less one per plane).  The closed form alone
+    over-read heavy right tails (lognormal noise, sigma = 1.5, 64 planes of 16 x 64: 50% false
+    alarms at ``far = 0.05``): a heavy right tail puts the top eigenvalue in single rows, which a
+    covariance has summed away.
     """
 
     def __init__(self, n_features: int, *, whiten: bool = False) -> None:
         self.F = int(n_features)     # number of variables (columns), fixed across planes
-        self.T = 0                   # total pooled samples (rows) accumulated
-        self._cov = None             # (F, F) running column-covariance; dtype follows the data
         self.whiten = bool(whiten)   # per-channel whitening (entropy.normalize) before accumulation
+        self._planes: list = []      # held planes: (centred plane, gaps or None)
+
+    @property
+    def T(self) -> int:
+        """Rows pooled."""
+        return int(sum(int(Xc.shape[0]) for Xc, _ in self._planes))
+
+    @property
+    def n_planes(self) -> int:
+        """Planes pooled."""
+        return len(self._planes)
+
+    @property
+    def dof(self) -> int:
+        """The pooled covariance's degrees of freedom: the rows less one per plane, since each
+        plane is centred on its own mean."""
+        return self.T - self.n_planes
+
+    @property
+    def _cov(self):
+        """The pooled covariance, ``sum_p Xc_p^H Xc_p``."""
+        if not self._planes:
+            return None
+        return sum(Xc.conj().T @ Xc for Xc, _ in self._planes)
 
     def add(self, plane) -> "SpectralAccumulator":
         """Accumulate one intact 2-D plane ``(T_p samples, F features)``: de-meaned per plane
         (the connected read; with ``whiten=True`` each channel is first whitened by
-        the library's per-channel mean and RMS, the screen's own scale removal), its
-        column-covariance summed in."""
+        the library's per-channel mean and RMS, the screen's own scale removal), held."""
         X = np.asarray(_env.to_numpy(plane))
         if X.ndim != 2:
             raise ValueError(f"SpectralAccumulator.add expects a 2-D plane; got {X.ndim}-D")
@@ -907,33 +935,44 @@ class SpectralAccumulator:
             raise ValueError(f"plane has {int(X.shape[1])} features; accumulator holds {self.F}")
         if int(X.shape[0]) < 1:
             return self
+        gaps = None
         if self.whiten:
             X = np.asarray(_env.to_numpy(normalize(X)))
-            X = np.where(np.isfinite(X), X, 0.0)
+            gaps = ~np.isfinite(X)
+            X = np.where(gaps, 0.0, X)
+            gaps = gaps if gaps.any() else None
         Xc = X - X.mean(axis=0, keepdims=True)
-        G = Xc.conj().T @ Xc
-        self._cov = G if self._cov is None else self._cov + G
-        self.T += int(X.shape[0])
+        self._planes.append((Xc, gaps))
         return self
 
     def merge(self, other: "SpectralAccumulator") -> "SpectralAccumulator":
-        """Splice another accumulator in (sum the covariances and the sample counts)."""
+        """Splice another accumulator in: its planes join this one's."""
         if int(other.F) != self.F:
             raise ValueError(f"feature mismatch: {self.F} vs {int(other.F)}")
-        if other._cov is not None:
-            self._cov = other._cov.copy() if self._cov is None else self._cov + other._cov
-        self.T += int(other.T)
+        self._planes = self._planes + list(other._planes)
         return self
 
-    def spectral(self, *, null=None) -> SpectralOptics:
-        """One ``SpectralOptics`` read on the pooled covariance (large ``T`` -> tight band).
-        This is the ``"bulk"`` cut point (the pooled ENSEMBLE floor); ``null`` is its
-        provider (``None`` = derived default ``mp``, or the ``"bulk"`` entry of a
-        ``{kind: provider}`` mapping).  Only closed-form providers (``mp`` / ``robust`` /
-        a ``reference_null``) apply here -- a resampling provider needs the raw samples the
-        accumulator does not retain."""
-        cov = np.zeros((self.F, self.F)) if self._cov is None else self._cov
-        return _spectral_from_cov(np, cov, self.T, self.F, null=null, kind="bulk")
+    def _draw(self):
+        """One null draw of the pooled samples: every channel shuffled in time within its own
+        plane, the plane's gaps held where they are (:func:`null_providers._held_shuffle`)."""
+        draws = [(_held_shuffle(Xc, g) if g is not None else None, Xc) for Xc, g in self._planes]
+
+        def draw(rng):
+            return np.vstack([d(rng) if d is not None else rng.permuted(Xc, axis=0)
+                              for d, Xc in draws])
+        return draw
+
+    def spectral(self, *, null=None, far: float = 0.05, seed: int = 0) -> SpectralOptics:
+        """One ``SpectralOptics`` read on the pooled covariance (large ``T`` -> tight band).  This is the
+        ``"bulk"`` cut point (the pooled ENSEMBLE floor); ``null`` is its provider (``None`` = the
+        library default, or the ``"bulk"`` entry of a ``{kind: provider}`` mapping).  ``seed``
+        makes the draws deterministic."""
+        if not self._planes:
+            return _spectral_from_cov(np, np.zeros((self.F, self.F)), 0, self.F, null=null,
+                                      far=far, kind="bulk")
+        data = np.vstack([Xc for Xc, _ in self._planes])    # their Gram is the pooled covariance
+        return _spectral_from_cov(np, self._cov, self.T, self.F, null=null, far=far, data=data,
+                                  seed=seed, kind="bulk", resample=self._draw(), dof=self.dof)
 
     def band(self, **kw) -> float:
         """The certified band for the pooled spectrum (``concentration_band``)."""

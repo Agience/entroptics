@@ -228,13 +228,20 @@ def test_aperture_prefers_reference_null_when_given():
 
 def test_operator_significance_consistent_with_resolved():
     # the operator's per-mode p-values and its resolved count are the same object at the
-    # same far: resolved() == #(p_k < far), the streaming form of the screen identity.
+    # same far: resolved() == #(p_k <= far) where the floor is the exact test (Monte Carlo
+    # p-values), #(p_k < far) where it is the closed form -- the streaming form of the screen identity.
     from entroptics.dynamics import Dynamics
+    from entroptics.null_providers import FloorContext, closed_form_holds
     r = np.random.default_rng(3); T, F = 400, 80
     X = r.standard_normal((T, F)) @ r.standard_normal((F, F))     # correlated feature structure
     d = Dynamics(F); d.update_block(X)
     sig = d.significance()
-    assert int((sig.pvalue < 0.05).sum()) == d.resolved()
+    W = d.window
+    Wc = W - W.mean(0)
+    closed = closed_form_holds(FloorContext(spectrum=None, data=Wc, shape=W.shape, far=0.05,
+                                            kind="bulk", rng=None))
+    count = (sig.pvalue < 0.05).sum() if closed else (sig.pvalue <= 0.05).sum()
+    assert int(count) == d.resolved()
     assert (sig.pvalue >= 0.0).all() and (sig.pvalue <= 1.0).all()
 
 

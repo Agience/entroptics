@@ -1,4 +1,4 @@
-source: /home/builder/entroptics-work/bench/src/entroptics/__init__.py sha256 73e3c12c5cb5a2e9e0f8f996a7ae3cee3c2d05de44331baff6f4aa8eedeb9936
+source: /home/builder/entroptics-work/r028y/src/entroptics/__init__.py sha256 03557eecbc0c6a373d42bed7cae56fb9f15180f940e27a6e47c318b7c5f7998f
 components found: 3
 components in pure noise: 0
 max |clean + residual - W|: 4.440892098500626e-16

@@ -268,7 +268,7 @@ Each read carries an optical name. Each entry points to the result in the paper 
 | **diffraction limit** `a_δ` | `2^{−H(C²)}`, the inverse resolvable spacing | Definition 4.4 |
 | **Mercer ratio** | the temporal over the spectral width | Prop 4.7 |
 | **propagation constant** | `α + iβ`: mode contrast and carrier | Definition 6.1, Lemma 6.2 |
-| **noise floor** | the exact permutation floor at `far`; the Tracy–Widom edge where only a covariance is held | §8 |
+| **noise floor** | the level at `far`: the exact permutation floor on a screen, the Tracy–Widom edge on the operator's window where no single row can cross it (the exact test where one can), the Tracy–Widom edge where only a covariance is held | §8 |
 | **K** | the modes standing above the floor | §8 |
 | **basis** (KLT) | the resolved modes' principal directions over the channels, orthonormal in the noise metric | `Aperture.basis()` |
 | **drift** | what a later record holds that a basis does not span, read against the floor | `Basis.drift` |

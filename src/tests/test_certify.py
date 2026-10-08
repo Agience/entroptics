@@ -56,15 +56,16 @@ def test_resolved_count_soundness_under_perturbation(seed):
 
 # ── SpectralAccumulator: pooling the feature correlation ──────────────────────
 
-def test_accumulator_matches_spectral_optics_single_plane():
-    # the accumulator holds a covariance only, so its floor is the closed form; the single-plane
-    # read agrees with it under the same floor
+@pytest.mark.parametrize("floor", ["default", "mp"])
+def test_accumulator_matches_spectral_optics_single_plane(floor):
+    # one plane pooled is the single-plane read, under the library default (the accumulator holds
+    # the plane and draws the same shuffles) and under the closed form
     from entroptics.null_providers import mp
     X = build_W(7)
-    sg = spectral_optics(X, null=mp)
+    sg = spectral_optics(X, null=None if floor == "default" else mp)
     acc = SpectralAccumulator(X.shape[1])
     acc.add(X)
-    sga = acc.spectral()
+    sga = acc.spectral(null=mp if floor == "mp" else None)
     assert sga.attenuation == pytest.approx(sg.attenuation, rel=1e-9, abs=1e-12)
     assert sga.noise_floor == pytest.approx(sg.noise_floor, rel=1e-9)
     assert sga.resolved_modes == sg.resolved_modes
@@ -88,6 +89,7 @@ def test_accumulator_merge_is_additive():
 
 
 def test_accumulator_band_tightens_with_pooling():
+    """An ensemble pool holds every plane: nothing ages between independent realisations."""
     acc = SpectralAccumulator(48)
     acc.add(build_W(0, T=40))
     b1 = acc.band()

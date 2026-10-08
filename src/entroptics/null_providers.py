@@ -24,9 +24,9 @@ empirically as its long-term surrogate sample grows.
 
 So the read parameter is not a strategy name; it is a provider callback, and the library only
 
-  1. ships a limited set of providers here -- the exact ``permutation`` test (the default at
-     the projection cut point), the closed-form edge ``mp`` (the default where only a covariance
-     is held, and at the correlation cut points) and ``robust`` -- nothing fitted; and
+  1. ships a limited set of providers here -- the exact ``permutation`` test, the closed-form
+     edge ``mp``, the library default that chooses between them per read (``switched``) and
+     ``robust`` -- nothing fitted; and
   2. offers the plumbing to build a sampled null (``top_spectrum_value``,
      ``shuffle_in_time``, ``floor_from_null_sampler``).
 
@@ -34,15 +34,21 @@ The library does not calibrate the caller's null for them.  A confined-vacuum re
 a phase-randomised surrogate, a physics null -- the caller writes it with the plumbing
 (or from scratch) and passes it in; the library never needs to know what the null is.
 
-The default is :func:`default_provider`: the exact permutation test wherever the read holds
-its screen, the closed-form edge wherever it holds only a covariance.  The caller plugs any
-method -- or its own callback -- via ``null=``:
+The default is :func:`default_provider`, wherever the read holds its samples -- a screen, a
+correlation read's centred samples, and the windows the pools hold (``ResolvedScreen`` and
+``ResolvedScreenBatch``, ``SpectralAccumulator``, ``Dynamics``), whose rows expire as the aperture
+forgets: :func:`switched`, the closed form where no single row of the data can carry a noise
+eigenvalue over it at the read's level, the exact permutation test where one can.  The caller
+plugs any method -- or its own callback -- via ``null=``:
 
   (1) analytic edge -- i.i.d. light-tailed noise, no reference:
       mp                                 finite-size Johnstone / Tracy-Widom edge; the noise
                                          level is estimated from the data, so nothing is supplied.
-                                         The default where only a covariance is held; its level
-                                         holds for light tails and is exceeded by heavy ones.
+                                         Alone its level is not ``far``: on a sample correlation
+                                         it sits below on light tails and above on heavy right
+                                         tails, where single rows carry the top eigenvalue.  The
+                                         default takes it only where no row can
+                                         (``closed_form_holds``).
   (2) robust fence -- heavy-tailed spectrum, no reference:
       robust                             Tukey upper fence ``Q3 + 1.5*(Q3 - Q1)`` of the spectrum
                                          (a heuristic outlier fence, not a calibrated null).
@@ -317,11 +323,13 @@ class FloorContext:
       "spectral"   -- ``spectrum`` are eigenvalues of a unit-diagonal correlation matrix;
                     ``data`` is the (T, N) centred samples; a surrogate is scored by the top
                     eigenvalue of its correlation matrix (one screen).
-      "bulk"       -- as "spectral" but the pooled ensemble floor (``SpectralAccumulator``):
-                    same correlation units, a separate key so it takes its own provider.
-    ``data`` may be ``None`` when only a pooled covariance is available (``bulk`` via a
-    ``SpectralAccumulator``): then only the closed-form providers (``mp`` / ``robust`` /
-    a ``reference_null``) apply, and a resampling provider raises."""
+      "bulk"       -- as "spectral" but a pooled floor (``SpectralAccumulator``, the
+                    ``Dynamics`` feature spectrum): same correlation units, a separate key so it
+                    takes its own provider; ``data`` is the pool's held samples (its window), whose
+                    Gram is the pooled covariance, and ``resample`` the pool's own null draw of them.
+    ``data`` is ``None`` only where no rows are held (a ``Dynamics`` resumed from a state that
+    carried none): then only the closed-form providers (``mp`` / ``robust`` / a ``reference_null``)
+    apply, and a resampling provider raises."""
     spectrum: np.ndarray | None            # descending singular values (screen) or corr eigenvalues
     data:     np.ndarray | None            # the matrix behind the spectrum, or None (covariance-only)
     shape:    tuple                        # (N, F) screen; (T, N) correlation ("spectral"/"bulk")
@@ -330,11 +338,16 @@ class FloorContext:
     rng:      "np.random.Generator"        # seeded generator for any resampling (determinism)
     complex_: bool = False                 # the data's ensemble when ``data`` is None (a covariance)
     resample: "Callable[[np.random.Generator], np.ndarray] | None" = None
+    dof: "int | None" = None               # correlation kinds: the covariance's degrees of freedom
+    gram: "np.ndarray | None" = None       # data^H data, when the read already formed it (T >= F)
     # ``resample(rng)`` is one surrogate SCREEN drawn by the read that made ``data``: its whitened
     # record with each channel's measured values shuffled among that channel's measured cells, the
     # mask held, then folded as the observed screen was.  A read with the record offers it; with
     # missing cells it must, because the missingness is fixed structure: shuffling the finished screen would scatter the
     # zeros standing in for the missing cells, which is not a draw from the null.
+    # ``dof`` is the degrees of freedom of a correlation kind's covariance when they are not the
+    # rows less one: a covariance pooled over planes each centred on its own mean has the rows less
+    # one per plane.  ``None``: the rows less one, one centring.
 
     # ``far`` is the false-alarm level (alpha) delivered with the null, because the
     # noise-vs-signal cutoff is one decision, not two: the provider owns it.  ``ctx.far``
@@ -352,8 +365,9 @@ class FloorContext:
 # ══════════════════════════════════════════════════════════════════════════════
 
 def mp(ctx: FloorContext) -> float:
-    """The closed-form provider: the finite-size Johnstone / Tracy-Widom edge; the default where
-    only a covariance is held and at the correlation cut points.  Projection:
+    """The closed-form provider: the finite-size Johnstone / Tracy-Widom edge; the default's branch
+    where no single row can carry a noise eigenvalue over it (:func:`closed_form_holds`), and the
+    floor where no rows are held.  Projection:
     ``sqrt(sigma^2 * (mu + q*sigma_J))`` with the null's per-cell variance
     (:func:`noise_sigma2_from_spectrum`).  Correlation
     floor: ``(mu + q*sigma_J)/T`` in correlation units.  Parameter-free; only ``far``."""
@@ -367,7 +381,11 @@ def mp(ctx: FloorContext) -> float:
         xp = _env.ns(ctx.data)
         s2 = noise_sigma2(xp, ctx.data, N, F, complex_=cx, s=ctx.spectrum)
         return math.sqrt(screen_floor_sq(s2, N, F, ctx.far, complex_=cx))
-    T, N = int(ctx.shape[0]), int(ctx.shape[1])
+    # the closed form reads the rows as one centring's worth: a covariance with ``dof`` degrees of
+    # freedom is the edge of ``dof + 1`` rows (a pool of planes centred one by one has fewer than
+    # its rows, and its edge is that of the smaller sample)
+    T = int(ctx.shape[0]) if ctx.dof is None else int(ctx.dof) + 1
+    N = int(ctx.shape[1])
     mu, sig_J = johnstone(T, N, complex_=cx)
     return (mu + q * sig_J) / T
 
@@ -395,13 +413,11 @@ def top_spectrum_value(X: np.ndarray, kind: str) -> float:
     kind -- ``"spectral"`` / ``"bulk"``).  The building block for a sampled null provider.
     Numpy (the occasional calibrated read).
 
-    The correlation branch is read off the column-scaled frame, not an ``FxF`` matrix.  Scaling
-    column ``j`` by ``1/d_j`` gives ``Y`` with ``Y^H Y == R`` exactly, so ``R``'s top eigenvalue is
-    ``sigma_max(Y)**2`` -- and ``sigma_max`` comes off the ``TxF`` frame directly, without ever
-    forming the ``FxF`` covariance to eigendecompose for one eigenvalue.  Agrees with the direct
-    eigendecomposition to round-off (not a different quantity), and needs no shape assumption --
-    checked at ``T<F`` and ``T>F`` (64x256, 300x256, 64x16, 400x64) -- because it never forms the
-    Gram either way.
+    The correlation branch is read off the column-scaled frame.  Scaling column ``j`` by ``1/d_j``
+    gives ``Y`` with ``Y^H Y == R`` exactly, so ``R``'s top eigenvalue is the top eigenvalue of
+    ``Y``'s smaller Gram, ``min(T, F)`` square -- the projection branch's own read, at a fraction of
+    an SVD of the ``T x F`` frame (0.15 ms against 0.70 ms at 2000 x 32), and within the round-off
+    :func:`_roundoff` prices, which is a Gram's.
 
     This stays pure numpy: ``scipy.linalg.eigh(subset_by_index=...)`` also returns just the top
     eigenvalue, bit-identically, but scipy is an optional extra here (``pyproject``: core is
@@ -424,11 +440,18 @@ def top_spectrum_value(X: np.ndarray, kind: str) -> float:
     # RELATIVE floor: column energies scale as the square of the data (see reads.spectral_optics)
     if X.size == 0:
         return 0.0                                     # no live column: nothing to correlate
-    e = np.real(np.sum(X.conj() * X, axis=0))
+    return _correlation_top(X, np.real(np.sum(X.conj() * X, axis=0)))
+
+
+def _correlation_top(X: np.ndarray, e: np.ndarray) -> float:
+    """:func:`top_spectrum_value` at a correlation cut point, from the column energies ``e`` already
+    read off ``X`` -- so a caller that also prices the round-off reads them once."""
     top = float(e.max()) if e.size else 0.0
     d = np.sqrt(np.clip(e, top * np.finfo(float).eps, None))
     d = np.where(d == 0, 1.0, d)
-    return float(np.linalg.svd(X / d, compute_uv=False)[0] ** 2)
+    Y = X / d
+    G = Y.conj().T @ Y if Y.shape[0] >= Y.shape[1] else Y @ Y.conj().T
+    return float(max(np.linalg.eigvalsh(G)[-1], 0.0))
 
 
 def shuffle_in_time(X: np.ndarray, rng) -> np.ndarray:
@@ -549,10 +572,15 @@ def _scored(X: np.ndarray, kind: str) -> float:
     deviate, because a draw's screen need not have the observed one's width -- its fold is decided
     on the draw -- and a singular value is only comparable to another at the same width; at the
     same width the deviate is the singular value's own order, so nothing else moves."""
-    v = top_spectrum_value(X, kind)
-    if kind != "projection":
-        return v + _roundoff(X, kind, v)
     X = np.asarray(X)
+    if kind != "projection":
+        if kind not in KINDS or X.size == 0:
+            v = top_spectrum_value(X, kind)
+            return v + _roundoff(X, kind, v)
+        e = np.real(np.sum(X.conj() * X, axis=0))            # one pass, shared by both reads
+        v = _correlation_top(X, e)
+        return v + _roundoff(X, kind, v, e)
+    v = top_spectrum_value(X, kind)
     e = np.real(np.sum(X.conj() * X, axis=0))                # one pass, shared by both reads
     scale = _screen_scale(X, e)
     g = _deviate(v, scale)
@@ -570,9 +598,12 @@ def _observed_floor(score: float, X: np.ndarray, kind: str) -> float:
     """A floor found in scoring units, stated in the observed screen's spectrum units, raised by
     the observed read's own round-off."""
     X = np.asarray(X)
-    v = top_spectrum_value(X, kind)
     if kind != "projection":
-        return score + _roundoff(X, kind, v)
+        if kind not in KINDS or X.size == 0:
+            return score + _roundoff(X, kind, top_spectrum_value(X, kind))
+        e = np.real(np.sum(X.conj() * X, axis=0))            # one pass, shared by both reads
+        return score + _roundoff(X, kind, _correlation_top(X, e), e)
+    v = top_spectrum_value(X, kind)
     scale = _screen_scale(X)
     if scale is None or not math.isfinite(score):
         return float("inf") if (scale is None or score > 0) else 0.0
@@ -958,14 +989,282 @@ def by_kind(**providers) -> Callable[[FloorContext], float]:
 _EXACT_PERMUTATION = permutation()
 
 
+def _score_frame(X, kind: str) -> np.ndarray:
+    """``X`` in the frame whose Gram the floor reads: the screen itself at the projection cut point,
+    unit-norm columns (a correlation frame) at the correlation ones."""
+    X = np.asarray(_env.to_numpy(X))
+    if kind == "projection" or X.size == 0:
+        return X
+    e = np.real(np.sum(X.conj() * X, axis=0))
+    top = float(e.max()) if e.size else 0.0
+    d = np.sqrt(np.clip(e, top * np.finfo(float).eps, None))
+    return X / np.where(d == 0, 1.0, d)
+
+
+def row_influence(X, kind: str) -> float:
+    """``delta``: the most any single row of ``X``, as it stands, lifts the top eigenvalue the floor
+    thresholds, in that eigenvalue's units -- the squared singular value at the projection cut
+    point, the unit-diagonal correlation eigenvalue at the correlation ones.
+
+    The Gram is a sum of one rank-one term per row, ``G = sum_t y_t y_t^H``.  Deleting row ``t``
+    leaves ``lambda_1(G - y_t y_t^H) >= v^H (G - y_t y_t^H) v = lambda_1 - |v . y_t|^2`` for the top
+    eigenvector ``v`` (Courant-Fischer), so no row carries more of ``lambda_1`` than
+    ``max_t |v . y_t|^2`` -- an exact bound, read off one eigensolve of the smaller Gram.  On a
+    light tail every row carries about ``lambda_1 / T``; on a heavy right tail one row carries a
+    third to a half of it (the coincidence of two channels' extreme cells)."""
+    X = np.asarray(_env.to_numpy(X))
+    return _row_influence(X, kind, _column_scale(X, kind) if X.ndim == 2 and X.size else None)
+
+
+def _row_influence(X: np.ndarray, kind: str, d, G=None) -> float:
+    """:func:`row_influence` with the column scale ``d`` already read, and the Gram ``X^H X`` when
+    the read formed it."""
+    if X.ndim != 2 or X.size == 0:
+        return 0.0
+    if X.shape[0] >= X.shape[1]:
+        # the scaled frame's Gram is the record's, scaled: Y = X / d gives Y^H Y = G / (d d^T) and
+        # Y v = X (v / d), so the T x F frame is never formed
+        G = X.conj().T @ X if G is None else G
+        w, V = np.linalg.eigh(G if d is None else G / np.outer(d, d))
+        proj = X @ (V[:, -1] if d is None else V[:, -1] / d)
+    else:
+        Y = _score_frame(X, kind)
+        w, U = np.linalg.eigh(Y @ Y.conj().T)
+        proj = U[:, -1] * math.sqrt(max(float(w[-1]), 0.0))
+    return float(np.max(np.abs(proj) ** 2)) if proj.size else 0.0
+
+
+def _column_scale(X: np.ndarray, kind: str, G=None):
+    """``d``: what :func:`_score_frame` divides each column by -- its 2-norm at the correlation cut
+    points, ``None`` at the projection one.  ``G``: the Gram ``X^H X``, whose diagonal is the
+    column energies, when the read formed it."""
+    if kind == "projection":
+        return None
+    if G is not None:
+        e = np.real(np.diag(G)).copy()
+    else:
+        e = np.real(np.sum(X.conj() * X, axis=0)) if np.iscomplexobj(X) else np.einsum("ij,ij->j", X, X)
+    top = float(e.max()) if e.size else 0.0
+    d = np.sqrt(np.clip(e, top * np.finfo(float).eps, None))
+    return np.where(d == 0, 1.0, d)
+
+
+def coincidence_influence(X, kind: str, far: float) -> float:
+    """``delta_null(far)``: the largest lift of the top eigenvalue that a coincidence of two
+    channels' cells in one row reaches under the null with probability more than ``far``.
+
+    Under the permutation null each channel's values are placed in the rows independently and
+    uniformly, so a given cell of channel ``j`` and a given cell of channel ``k`` share a row with
+    probability exactly ``1 / T``; when they do, the row adds ``y_tj y_t'k`` to the Gram's
+    ``(j, k)`` entry, which lifts the top eigenvalue by up to ``|y_tj| |y_t'k|`` (the top eigenvalue
+    of the two-channel off-diagonal block).  The probability that any of the ``N(I)`` cell pairs
+    with ``|y_tj| |y_t'k| >= I`` shares a row is at most ``N(I) / T`` (union bound), so a lift above
+    the closed-form room happens with probability at most ``far`` exactly when fewer than
+    ``k = floor(far T) + 1`` cross-channel cell pairs reach it: the bound is the ``k``-th largest
+    cross-channel product of absolute cell values (0 when fewer than ``k`` pairs exist).  It reads
+    the potential arrangement, not the one observed, so a heavy tail whose extreme cells happen not
+    to share a row in this record is still priced; a light tail's largest products sit inside the
+    collective fluctuation the closed form already holds.  Exact, by counting: the ``k``-th largest product is
+    the least ``t`` with fewer than ``k`` products above it (:func:`_cross_above`), found by
+    bisection over the floats; no product is formed beyond the cells that can exceed ``t``."""
+    X = np.asarray(_env.to_numpy(X))
+    if X.ndim != 2 or X.size == 0 or X.shape[1] < 2:
+        return 0.0
+    d = _column_scale(X, kind)
+    k = int(math.floor(Fraction(far) * int(X.shape[0]))) + 1
+    if _cross_above(X, d, 0.0) < k:
+        return 0.0
+    m = _largest_cell(X, d)
+    top = m * m
+    lo, hi = 0, int(np.float64(top).view(np.int64))         # non-negative floats order as their bits
+    while lo < hi:                                          # the least t with fewer than k above it
+        mid = (lo + hi) // 2
+        if _cross_above(X, d, float(np.int64(mid).view(np.float64))) < k:
+            hi = mid
+        else:
+            lo = mid + 1
+    return float(np.int64(lo).view(np.float64))
+
+
+def _pairs_above(v: np.ndarray, t: float) -> int:
+    """Ordered pairs ``(a, b)`` of ``v`` (an element with itself included) whose float product
+    ``v_a * v_b`` exceeds ``t``: per value, the first partner past ``t / v_a`` -- moved until the
+    products themselves agree, so the count is of the products as computed, not of the quotient."""
+    if v.size == 0:
+        return 0
+    u, c = np.unique(v, return_counts=True)                 # ascending, non-negative
+    above = np.concatenate([np.cumsum(c[::-1])[::-1], [0]])  # partners at index >= i
+    n = u.size
+    pos = u > 0
+    i = np.full(n, n, dtype=np.intp)
+    i[pos] = np.searchsorted(u, t / u[pos], side="right")
+    while True:                                             # the quotient is off by an ulp at most
+        dn = pos & (i > 0) & (u * u[np.maximum(i - 1, 0)] > t)
+        up = pos & (i < n) & (u * u[np.minimum(i, n - 1)] <= t)
+        if not (dn.any() or up.any()):
+            break
+        i = i - dn + up
+    return int(np.sum(c * above[i]))
+
+
+def _largest_cell(X: np.ndarray, d) -> float:
+    """The largest ``|x_tj| / d_j`` (``d`` ``None``: unscaled), read without an absolute copy."""
+    a = np.abs(X).max(axis=0) if np.iscomplexobj(X) else np.maximum(X.max(axis=0), -X.min(axis=0))
+    return float((a if d is None else a / d).max())
+
+
+def _cross_above(X: np.ndarray, d, t: float) -> int:
+    """Pairs of cells of ``|X| / d`` (``(T, F)``; ``d`` per column, ``None`` for none) in different
+    channels whose product exceeds ``t``, each pair once.  Only a cell above ``t`` over the largest
+    cell can be in one, so only those are scaled and counted."""
+    T, F = int(X.shape[0]), int(X.shape[1])
+    if t < 0.0:
+        return T * T * F * (F - 1) // 2
+    # first a bound read in two contiguous passes: no cell of column j exceeds A / d_j for A the
+    # largest cell of the whole record, so no cross-channel product exceeds A^2 over the two
+    # smallest scales.  Where that is within t the count is 0 without a column-wise pass.
+    A = float(np.abs(X).max()) if np.iscomplexobj(X) else max(float(X.max()), -float(X.min()))
+    if A == 0.0:
+        return 0
+    dd = np.ones(2) if d is None else np.partition(np.asarray(d, float), 1)[:2]
+    if (A / dd[0]) * (A / dd[1]) <= t:
+        return 0
+    m = _largest_cell(X, d)
+    if m == 0.0 or m * m <= t:                              # no product can exceed t
+        return 0
+    cut = np.nextafter(np.nextafter(t / m, 0.0), 0.0)       # below every partner a product can need
+    lo = (np.full(F, cut) if d is None else cut * d) * (1.0 - 4.0 * np.finfo(float).eps)
+    if np.iscomplexobj(X):
+        rows, cols = np.nonzero(np.abs(X) > lo)
+    else:
+        rows, cols = np.nonzero((X > lo) | (X < -lo))
+    v = np.abs(X[rows, cols]) if d is None else np.abs(X[rows, cols]) / d[cols]
+    within = sum(_pairs_above(v[cols == j], t) for j in np.unique(cols))
+    return (_pairs_above(v, t) - within) // 2
+
+
+def closed_form_margin(ctx: "FloorContext") -> float:
+    """How far the closed-form floor at ``ctx.far`` stands above the null edge's centre, in the
+    eigenvalue units :func:`row_influence` reads: ``q(far) * sigma^2 * sigma_J`` at the projection
+    cut point, ``q(far) * sigma_J / T`` at the correlation ones (``T`` the degrees of freedom plus
+    one, as :func:`mp` reads them).  Negative where the level sits below the null's centre."""
+    cx = ctx.complex_ or _env.is_complex_obj(ctx.data)
+    q = tw_quantile(ctx.far, complex_=cx)
+    if ctx.kind == "projection":
+        N, F = int(ctx.shape[0]), int(ctx.shape[1])
+        xp = _env.ns(ctx.data)
+        s2 = noise_sigma2(xp, ctx.data, N, F, complex_=cx, s=ctx.spectrum)
+        _, sig_J = johnstone(N, F, complex_=cx)
+        return q * s2 * sig_J
+    T = int(ctx.shape[0]) if ctx.dof is None else int(ctx.dof) + 1
+    _, sig_J = johnstone(T, int(ctx.shape[1]), complex_=cx)
+    return q * sig_J / T
+
+
+def closed_form_holds(ctx: "FloorContext") -> bool:
+    """Whether the closed-form floor answers this read at its level.  Two conditions, each read off
+    the data:
+
+    * at the screen's cut points (``"projection"``, ``"spectral"``), the level is finer than the
+      record resolves, ``far * n < 1`` for ``n`` rows read; at the operator's (``"bulk"``: a window,
+      a pool) there is no such condition, below.  At a level
+      the record resolves the exact test is the read: its draws, ``ceil(1/far) - 1``, number fewer
+      than the record's own rows, and it is the more powerful floor -- the closed form is the edge of
+      a sample covariance, and a sample correlation's top eigenvalue fluctuates less at finite size,
+      so on light tails the closed form sits above the exact floor (Gaussian 1024 x 64: 1% false
+      alarms at 5%, a narrowband line found 0.17 against 0.35).  Below ``1/n`` the exact test would
+      draw more surrogates than the record has rows, and the closed form answers where it can:
+    * no row lifts a noise eigenvalue from the null edge's centre over the closed-form floor --
+      neither a row as it stands (:func:`row_influence`) nor a coincidence of two channels' cells
+      that the null makes with probability more than ``far`` (:func:`coincidence_influence`):
+      ``closed_form_margin(ctx) >= max(row_influence, coincidence_influence)``.
+
+    The Tracy-Widom law is the fluctuation of a top eigenvalue that many rows make together; its
+    quantile at ``far`` is how far that collective fluctuation reaches.  A heavy right tail adds what
+    the law does not hold -- single rows where channels' extreme cells meet -- and the closed form
+    over-reads exactly when such a row can carry a noise eigenvalue past the floor at the read's
+    level.  Where none can, the closed form is the floor; where one can, the floor is the exact
+    permutation test, whose level holds whatever the rows are.  The level a record switches at
+    (:func:`closed_form_far`) is its own and never above ``1/n``: on a light tail it is ``1/n`` (the
+    exact test at every level the record resolves, the closed form at no draws below it), on a heavy
+    tail far smaller.
+
+    The operator's window takes the closed form at every level where no row can cross it.  Its read
+    is a long record more often than not -- a stream's window, a block handed in whole -- and there
+    the exact test's draws are each a pass over every row: 19 of them cost an exact read of a million
+    rows thirteen to fifteen times an FFT pipeline's instructions on 16 channels.  The closed form is
+    one pass, its level holds wherever the row bounds do, and the exact test still answers wherever
+    a row could carry a noise eigenvalue over it.  What it gives up is the exact test's extra power
+    on a light tail near the edge, where the closed form sits a little above it.
+
+    The coincidence bound is decided by a count, not a selection: the ``k``-th largest cross-channel
+    product is within the room exactly when fewer than ``k`` products exceed it, and only a cell
+    above the room over the largest cell can be in such a product (:func:`_cross_above`)."""
+    if ctx.data is None:
+        return True
+    X = np.asarray(_env.to_numpy(ctx.data))
+    if ctx.kind != "bulk" and Fraction(ctx.far) * int(X.shape[0]) >= 1:
+        return False                       # a screen that resolves the level: the exact test is the read
+    room = closed_form_margin(ctx)
+    G = ctx.gram if (ctx.gram is not None and X.ndim == 2 and X.shape[0] >= X.shape[1]) else None
+    d = _column_scale(X, ctx.kind, G) if X.ndim == 2 and X.size else None
+    if not room >= _row_influence(X, ctx.kind, d, G):
+        return False
+    if X.ndim != 2 or X.size == 0 or X.shape[1] < 2:
+        return True
+    k = int(math.floor(Fraction(ctx.far) * int(X.shape[0]))) + 1
+    return _cross_above(X, d, room) < k                     # the k-th largest product is within the room
+
+
+def closed_form_far(ctx: "FloorContext") -> float:
+    """``far*``: the supremum of the levels at which :func:`closed_form_holds` takes the closed form
+    for this read (1 without data).  The coincidence bound is constant on each ``[(k-1)/T, k/T)``,
+    and the room grows as the level falls, so on each such interval the closed form holds up to
+    ``P(TW > max(delta, delta_k) / scale)``."""
+    if ctx.data is None:
+        return 1.0
+    cx = ctx.complex_ or _env.is_complex_obj(ctx.data)
+    unit = closed_form_margin(FloorContext(spectrum=ctx.spectrum, data=ctx.data, shape=ctx.shape,
+                                           far=_tw_unit_far(cx), kind=ctx.kind, rng=ctx.rng,
+                                           complex_=ctx.complex_, dof=ctx.dof))
+    if not (unit > 0.0):
+        return 0.0
+    d0 = row_influence(ctx.data, ctx.kind)
+    T = int(np.asarray(_env.to_numpy(ctx.data)).shape[0])
+    best = 0.0
+    for k in range(1, T + 1):
+        lo, hi = (k - 1) / T, k / T
+        sf = float(tw_sf(max(d0, coincidence_influence(ctx.data, ctx.kind, lo)) / unit, complex_=cx))
+        if sf < lo:
+            break                                     # the room cannot clear this interval or any above
+        best = max(best, min(sf, hi))
+    return min(best, 1.0 / max(T, 1))               # and below the record's own resolution
+
+
+def _tw_unit_far(cx: bool) -> float:
+    """The level whose Tracy-Widom quantile is 1, so a margin at it is the margin per unit quantile."""
+    return float(tw_sf(1.0, complex_=cx))
+
+
+def switched(ctx: "FloorContext") -> float:
+    """The library's floor where the read holds its samples: the closed form where it holds at the
+    read's level (:func:`closed_form_holds`), the exact permutation test where it does not."""
+    return float(mp(ctx) if closed_form_holds(ctx) else _EXACT_PERMUTATION(ctx))
+
+
+switched.exact_permutation = (None, None)     # the exact branch's operating point (the read's own)
+switched.closed_form_holds = closed_form_holds
+
+
 def default_provider(kind: str, data=None):
     """The floor used when the caller names none.  Wherever the read holds its samples -- the
-    screen, or the centred samples of a correlation read -- it is the exact :func:`permutation`
-    test, whose level is ``far`` whatever the noise's law; the closed-form edge (:func:`mp`) holds
-    its level only for light tails (on lognormal noise it claimed structure in 36% of records at
-    ``far = 0.05``).  Where only a covariance is held, the default is :func:`mp`: a covariance
-    carries no samples to shuffle."""
-    return _EXACT_PERMUTATION if data is not None else DEFAULT
+    screen, the centred samples of a correlation read, a pool's held rows -- it is :func:`switched`:
+    the exact :func:`permutation` test, whose level is ``far`` whatever the noise's law, unless no
+    single row of the data can carry a noise eigenvalue over the closed-form floor at that level,
+    where the closed form (:func:`mp`) answers at no draws.  The closed form alone over-reads heavy
+    right tails (on lognormal noise it claimed structure in 36% of records at ``far = 0.05``).
+    Without samples the default is :func:`mp`: a covariance carries no rows to shuffle or weigh."""
+    return switched if data is not None else DEFAULT
 
 
 def _held_shuffle(X, miss):
@@ -1002,7 +1301,7 @@ def _select_provider(null, kind: str, data=None):
 
 
 def apply_floor(null=None, *, spectrum, data, shape, far: float, kind: str, seed: int = 0,
-                complex_: bool = False, resample=None) -> float:
+                complex_: bool = False, resample=None, dof: int | None = None) -> float:
     """Evaluate the null provider for cut point ``kind`` on one screen and return its scalar
     floor.  ``null`` is a provider callback (``FloorContext -> float``), a ``{kind: provider}``
     mapping (a different provider per cut point), or ``None`` for the library default
@@ -1010,9 +1309,124 @@ def apply_floor(null=None, *, spectrum, data, shape, far: float, kind: str, seed
     so any resampling provider is deterministic per ``seed`` and per (local) screen.  ``complex_``
     names a complex ensemble when only its covariance is passed (``data=None``); with ``data`` the
     ensemble is read off its dtype.  ``resample`` is the read's own surrogate draw (see
-    :class:`FloorContext`), used by the time shuffle in place of shuffling ``data``."""
+    :class:`FloorContext`), used by the time shuffle in place of shuffling ``data``.  ``dof``: a
+    correlation kind's degrees of freedom when they are not the rows less one."""
     provider = _select_provider(null, kind, data)
     ctx = FloorContext(spectrum=spectrum, data=data, shape=tuple(shape),
                        far=float(far), kind=kind, rng=np.random.default_rng(seed),
-                       complex_=bool(complex_), resample=resample)
+                       complex_=bool(complex_), resample=resample,
+                       dof=None if dof is None else int(dof))
     return float(provider(ctx))
+
+
+def _scored_stack(X: np.ndarray, kind: str) -> np.ndarray:
+    """:func:`_scored` of every surrogate in a stack ``X`` ``(B, T, F)`` of one shape and memory
+    order, bit for bit: the same reductions, products and eigensolves, taken over the stack in one
+    call each."""
+    X = np.asarray(X)
+    B, T, F = (int(v) for v in X.shape)
+    e = np.real(np.sum(X.conj() * X, axis=1))                       # (B, F) column energies
+    m, p = max(T, F), min(T, F)
+    eps = float(np.finfo(X.dtype).eps) if np.issubdtype(X.dtype, np.inexact) else float(np.finfo(float).eps)
+    if kind != "projection":
+        top = e.max(axis=1, keepdims=True)
+        d = np.sqrt(np.clip(e, top * np.finfo(float).eps, None))
+        d = np.where(d == 0, 1.0, d)
+        Y = X / d[:, None, :]
+        Yh = Y.conj().transpose(0, 2, 1)
+        v = np.maximum(np.linalg.eigvalsh(Yh @ Y if T >= F else Y @ Yh)[:, -1], 0.0)
+        return v + (m + p) * eps * np.sum((e > 0).astype(float), axis=1)
+    Xh = X.conj().transpose(0, 2, 1)
+    G = Xh @ X if T >= F else X @ Xh
+    v = np.sqrt(np.maximum(np.linalg.eigvalsh(G)[:, -1], 0.0))
+    out = np.empty(B)
+    cx = bool(np.iscomplexobj(X))
+    for b in range(B):                     # the scale and its round-off: scalars per surrogate
+        Fb = max(int(np.count_nonzero(e[b])), 1)
+        esum = float(np.sum(e[b]))
+        s2 = noise_sigma2_from_spectrum(np.array([esum]), T, Fb)
+        vb = float(v[b])
+        if not (s2 > 0.0):
+            out[b] = -math.inf
+            continue
+        mu, sig_J = johnstone(T, Fb, complex_=cx)
+        dlam = (m + p) * eps * esum
+        ds = min(dlam / vb, math.sqrt(dlam)) if vb > 0 else math.sqrt(dlam)
+        out[b] = (vb * vb / s2 - mu) / sig_J + ((vb + ds) ** 2 - vb * vb) / (s2 * sig_J)
+    return out
+
+
+def _layout(a: np.ndarray) -> str:
+    """The memory order a surrogate was drawn in: ``"C"``, ``"F"``, or ``""`` for neither."""
+    return "C" if a.flags.c_contiguous else ("F" if a.flags.f_contiguous else "")
+
+
+def _stacked(arrays, layout: str):
+    """Stack same-shape surrogates of one memory order in that order, so every reduction and
+    product over the stack runs as it runs on one."""
+    if layout == "F":
+        return np.stack([a.T for a in arrays]).transpose(0, 2, 1)
+    return np.stack(arrays)
+
+
+def _draws_of(ctx: FloorContext):
+    """The exact permutation test's surrogate draw for ``ctx``, as :func:`floor_from_null_sampler`
+    takes it: the read's own resample where it offers one, else each live channel shuffled in time."""
+    if ctx.resample is not None:
+        return ctx.resample
+    X = np.asarray(_env.to_numpy(ctx.data))
+    Xs = X[:, np.any(X != 0, axis=0)]
+    return lambda rng: shuffle_in_time(Xs, rng)
+
+
+def apply_floors(null=None, *, items, far: float, kind: str, seed: int = 0) -> np.ndarray:
+    """:func:`apply_floor` over many screens at one level, cut point and seed, bit for bit: ``items``
+    is a sequence of ``dict`` holding each screen's ``spectrum``, ``data``, ``shape`` and, where it
+    has them, ``complex_``, ``resample`` and ``dof``.  Returns ``(len(items),)``.
+
+    Every screen the exact permutation test answers draws its surrogates exactly as it would alone,
+    from its own generator seeded by ``seed``; the screens' ``j``-th draws are then scored together,
+    one stacked eigensolve per draw for the screens that share a shape and memory order.  The calls
+    around the eigensolves are paid once per draw, not once per screen; the eigensolves and the
+    shuffles themselves are not reduced.  It holds one draw per screen at a time, as much again as
+    the screens it reads.  Any other provider is applied per screen."""
+    out = np.empty(len(items))
+    exact = []
+    for i, it in enumerate(items):
+        data = it.get("data")
+        provider = _select_provider(null, kind, data)
+        ctx = FloorContext(spectrum=it.get("spectrum"), data=data, shape=tuple(it["shape"]),
+                           far=float(far), kind=kind, rng=np.random.default_rng(seed),
+                           complex_=bool(it.get("complex_", False)), resample=it.get("resample"),
+                           dof=None if it.get("dof") is None else int(it["dof"]), gram=it.get("gram"))
+        if data is not None and (provider is _EXACT_PERMUTATION
+                                 or (provider is switched and not closed_form_holds(ctx))):
+            exact.append((i, ctx))
+        elif provider is switched:
+            out[i] = float(mp(ctx))
+        else:
+            out[i] = float(provider(ctx))
+    if len(exact) < 2:                     # nothing to score together: the provider itself
+        for i, ctx in exact:
+            out[i] = float(_EXACT_PERMUTATION(ctx))
+        return out
+    f = float(far)
+    n = fewest_draws(f)
+    k = n + 1 - math.floor(Fraction(f) * (n + 1))
+    scores = np.full((len(exact), n), math.inf)
+    if k <= n:
+        draws = [_draws_of(ctx) for _, ctx in exact]
+        for j in range(n):
+            S = [np.asarray(draw(ctx.rng)) for draw, (_, ctx) in zip(draws, exact)]
+            groups: dict = {}
+            for a, X in enumerate(S):
+                groups.setdefault((X.shape, X.dtype.str, _layout(X)), []).append(a)
+            for (shape, _, layout), idx in groups.items():
+                if layout and len(idx) > 1 and 0 not in shape:
+                    scores[idx, j] = _scored_stack(_stacked([S[a] for a in idx], layout), kind)
+                else:                              # alone, strided or empty: scored as drawn
+                    scores[idx, j] = [_scored(S[a], kind) for a in idx]
+    for a, (i, ctx) in enumerate(exact):
+        score = float("inf") if k > n else float(np.partition(scores[a], k - 1)[k - 1])
+        out[i] = _observed_floor(score, np.asarray(_env.to_numpy(ctx.data)), kind)
+    return out

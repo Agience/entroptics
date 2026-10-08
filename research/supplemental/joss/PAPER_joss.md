@@ -25,10 +25,11 @@ coordinates). It answers three questions that recur across signal-processing pip
 resolution should this record be represented, how many of its degrees of freedom are signal
 rather than noise, and what does the signal look like once the noise is removed.
 
-The library selects a rank against an exact permutation noise floor — each channel shuffled in
-time and the record read again, the floor taken at the exact Monte Carlo rank [@dwass1957; @hope1968],
-so its false-alarm level holds for any law of the noise — with the finite-size Tracy–Widom edge
-[@tracy1996; @johnstone2001] as its closed form where only a covariance is held; reconstructs the
+The library selects a rank against a noise floor whose false-alarm level holds for heavy-tailed
+noise as for Gaussian: an exact permutation test — each channel shuffled in time and the record read
+again, the floor taken at the exact Monte Carlo rank [@dwass1957; @hope1968] — on a screen, and on
+the streaming operator's window wherever a single row could carry a noise eigenvalue over the
+finite-size Tracy–Widom edge [@tracy1996; @johnstone2001], which is the floor everywhere else; reconstructs the
 field as the orthogonal projection onto the surviving modes; reads
 per-mode decay rates from a streaming dynamic mode decomposition operator [@tu2014], and supplies
 closed-form permutation nulls for two association statistics. It is deterministic, has a single
@@ -96,7 +97,7 @@ validation possible.
 
 # Declaration of generative AI use
 
-The author used Anthropic's Claude Opus (versions 4.8 and 5) in the preparation of this work. Its
+The author used Anthropic's Claude Opus (versions 4.8, 5, and 5.5) in the preparation of this work. Its
 contribution was to write code, and to generate and validate content. The ideas, the construction
 and the claims are the author's. No other generative AI tool was used. The author reviewed and
 edited all output and takes full responsibility for the content of this publication.

@@ -198,8 +198,8 @@ def test_resolved_screen_streams_and_resumes():
 
 
 def test_resolved_screen_batch_matches_batch_and_per_screen():
-    """ResolvedScreenBatch (B screens in one (B,F,F) Gram) == the batch resolved_batch of every row
-    under the Gram's closed-form floor; batched energy is well-formed."""
+    """ResolvedScreenBatch is one ResolvedScreen per screen: each reads its window as the batch read
+    does, bit for bit; batched energy is well-formed and resumes from state."""
     from entroptics.batch import ResolvedScreenBatch, ResolvedScreen
     rng = np.random.default_rng(0); B, F, T = 6, 24, 300
     L = rng.standard_normal((2, F))
@@ -207,7 +207,12 @@ def test_resolved_screen_batch_matches_batch_and_per_screen():
     rsb = ResolvedScreenBatch(B, F)
     for i in range(0, T, 16):
         rsb.update(Xs[:, i:i + 16, :])
-    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False, null=mp).K_signal)   # == batch read
+    want = [int(resolved_batch(w[None], fold=False).K_signal[0]) for w in rsb.windows]
+    assert list(rsb.K_signal) == want                                                   # == batch read
+    one = ResolvedScreen(F)
+    for i in range(0, T, 16):
+        one.update(Xs[0, i:i + 16])
+    assert np.array_equal(one.window, rsb.windows[0]) and one.K_signal == rsb.K_signal[0]
     en = rsb.energy(Xs[:, -8:, :])
     assert np.asarray(en).shape == (B, 8) and np.all(np.asarray(en) >= 0)
     assert np.array_equal(ResolvedScreenBatch.from_state(rsb.state()).K_signal, rsb.K_signal)
@@ -237,7 +242,7 @@ def _revisited(B=3, T=256, F=16, seed=0):
 def test_resolved_screen_reads_against_the_callers_floor(null, expect):
     """``null=`` is the caller's floor, and ``K_signal`` is a count against it.
 
-    The floor is the caller's when they supply one, and the derived ``mp`` edge when they do
+    The floor is the caller's when they supply one, and the library default when they do
     not."""
     X = _revisited(B=1)[0]
     s = ResolvedScreen(X.shape[1], null=null)
@@ -245,12 +250,9 @@ def test_resolved_screen_reads_against_the_callers_floor(null, expect):
     assert int(s.K_signal) == expect
 
 
-@pytest.mark.parametrize("null", [lambda ctx: 1e6, lambda ctx: 1e-9])
+@pytest.mark.parametrize("null", [None, lambda ctx: 1e6, lambda ctx: 1e-9])
 def test_resolved_screen_batch_takes_a_provider_and_matches_the_per_screen_read(null):
-    """The batched sibling takes the same provider contract: a floor above every mode resolves
-    none on either, and one below every mode resolves all of them on either.  (Their reads differ
-    in what they read -- the batch every row, the screen its window -- so an unset floor is not
-    compared.)"""
+    """The batched sibling takes the same provider contract, screen for screen."""
     Xs = _revisited()
     B, _, F = Xs.shape
     batch = ResolvedScreenBatch(B, F, null=null)
@@ -264,20 +266,20 @@ def test_resolved_screen_batch_takes_a_provider_and_matches_the_per_screen_read(
 
 
 def test_a_stream_of_noise_reads_as_the_batch_does():
-    """The stream forms, at every refresh, the whitened Gram the batch read forms from the same
-    rows, so noise appended one token at a time reads as the batch reads it -- no warmup, no frozen
-    centre whose offset would grow into a mode.  Negative control: the rows' raw Gram (whiten=False
-    on unwhitened rows) reads structure in nearly every stream."""
+    """The stream reads its window as the batch read does, so noise appended one token at a time
+    reads as the batch reads it -- no warmup, no frozen centre whose offset would grow into a mode.
+    Negative control: the rows unwhitened (whiten=False on raw rows) read against the closed form
+    take their common offset for a mode in nearly every stream."""
     from entroptics.batch import ResolvedScreen, ResolvedScreenBatch
     B, T, F = 40, 16, 64
     rng = np.random.default_rng(11)
     Xs = rng.standard_normal((B, T, F)) * np.exp(rng.uniform(-1, 1, F)) + 3.0
     rsb = ResolvedScreenBatch(B, F)
-    raw = ResolvedScreenBatch(B, F, whiten=False)
+    raw = ResolvedScreenBatch(B, F, whiten=False, null=mp)
     for t in range(T):
         rsb.update(Xs[:, t, :])
         raw.update(Xs[:, t, :])
-    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False, null=mp).K_signal)
+    assert np.array_equal(rsb.K_signal, resolved_batch(Xs, fold=False).K_signal)   # T < F + 1: all held
     assert np.mean(rsb.K_signal > 0) <= 0.1
     assert np.mean(raw.K_signal > 0) >= 0.9
     rs = ResolvedScreen(F)
@@ -319,7 +321,8 @@ def test_a_screen_with_no_live_channel_resolves_nothing():
     Y[1] = 2.0
     b = ResolvedScreenBatch(3, 8)
     b.update(Y)
-    assert np.array_equal(b.K_signal, resolved_batch(Y, fold=False, null=mp).K_signal)
+    assert np.array_equal(b.K_signal, [int(resolved_batch(w[None], fold=False).K_signal[0])
+                                       for w in b.windows])
 
 
 def test_a_provider_sees_the_live_spectrum_descending_on_every_path():
@@ -331,8 +334,9 @@ def test_a_provider_sees_the_live_spectrum_descending_on_every_path():
     rs.update(W)
     rb = ResolvedScreenBatch(1, 8, null=prov)
     rb.update(W[None])
-    want = int(resolved_batch(W[None], fold=False, null=prov).K_signal[0])
-    assert int(rb.K_signal[0]) == want == 7
+    want = int(resolved_batch(rb.windows[0][None], fold=False, null=prov).K_signal[0])
+    assert int(rb.K_signal[0]) == want
+    assert int(resolved_batch(W[None], fold=False, null=prov).K_signal[0]) == 7   # the live width
     assert rs.K_signal == int(resolved_batch(rs.window[None], fold=False, null=prov).K_signal[0])
 
 
@@ -340,7 +344,7 @@ def test_forgetting_does_not_depend_on_how_the_stream_is_blocked():
     from entroptics.batch import ResolvedScreen
     x = np.random.default_rng(2).standard_normal((1000, 8))
     out = []
-    for blk in (1, 10):
+    for blk in (1, 5):                        # blocks no longer than the minimum window
         rs = ResolvedScreen(8, forgetting=0.99)
         for k in range(0, 1000, blk):
             rs.update(x[k:k + blk])
@@ -351,9 +355,9 @@ def test_forgetting_does_not_depend_on_how_the_stream_is_blocked():
 
 @pytest.mark.parametrize("batched", [False, True])
 def test_every_read_is_the_batch_read_of_every_row_so_far(batched):
-    """No cadence: a read after any append is the batch read of what the stream reads -- every row
-    for the Gram batch, the window for the screen -- so a mode that arrives in a handful of rows is
-    seen at the next read, not after the stream's own refresh."""
+    """No cadence: a read after any append is the batch read of what the stream reads -- its
+    window -- so a mode that arrives in a handful of rows is seen at the next read, not after the
+    stream's own refresh."""
     rng = np.random.default_rng(4)
     F = 16
     noise = rng.standard_normal((200, F))
@@ -364,11 +368,57 @@ def test_every_read_is_the_batch_read_of_every_row_so_far(batched):
         return int(np.asarray(rs.K_signal).ravel()[0])
 
     def want(rows):
-        if batched:
-            return int(resolved_batch(rows[None], fold=False, null=mp).K_signal[0])
-        return int(resolved_batch(rs.window[None], fold=False).K_signal[0])
+        w = rs.windows[0] if batched else rs.window
+        return int(resolved_batch(w[None], fold=False).K_signal[0])
 
     rs.update(noise[None] if batched else noise)
     assert k() == want(noise)
     rs.update(burst[None] if batched else burst)
     assert k() == want(np.vstack([noise, burst])) >= 1
+
+
+def test_the_batch_reads_every_screen_as_it_reads_alone():
+    """Every screen of a batch, read after every append, is its own ``ResolvedScreen`` bit for bit:
+    the same window, the same count and the same energy -- noise screens, planted ones and a
+    heavy-tailed one together, whose windows differ in length."""
+    from entroptics.batch import ResolvedScreenBatch, ResolvedScreen
+    rng = np.random.default_rng(3); B, F, T = 5, 12, 160
+    Xs = rng.standard_normal((B, T, F))
+    Xs[1] += 3 * np.outer(np.sin(np.arange(T) / 3), rng.standard_normal(F))
+    Xs[2] = rng.lognormal(0, 1.5, (T, F))
+    Xs[3] += np.outer(rng.standard_normal(T), rng.standard_normal(F))
+    rsb = ResolvedScreenBatch(B, F)
+    one = [ResolvedScreen(F) for _ in range(B)]
+    for i in range(0, T, 7):
+        rsb.update(Xs[:, i:i + 7])
+        for b in range(B):
+            one[b].update(Xs[b, i:i + 7])
+        assert list(rsb.K_signal) == [o.K_signal for o in one]
+        for b in range(B):
+            assert np.array_equal(rsb.windows[b], one[b].window)
+        q = Xs[:, i:i + 3]
+        assert np.array_equal(np.asarray(rsb.energy(q)), np.stack([one[b].energy(q[b]) for b in range(B)]))
+
+
+@pytest.mark.parametrize("kind", ["projection", "bulk"])
+def test_floors_taken_together_are_each_screens_own(kind):
+    """``apply_floors`` is ``apply_floor`` of each screen, bit for bit, whatever mix of shapes,
+    memory orders, laws and providers it is handed in one call -- the read's own resample (which
+    draws channel-major, unfolded, and row-major, folded) beside the shuffle of the screen."""
+    from entroptics.null_providers import apply_floor, apply_floors, permutation
+    from entroptics.projection import _screen_resample
+    rng = np.random.default_rng(5)
+    for far in (0.05, 0.01, 0.2):
+        for null in (None, permutation(), mp):
+            items = []
+            for b in range(12):
+                T, F = [(40, 8), (40, 8), (9, 30)][b % 3]
+                X = [rng.standard_normal((T, F)), rng.lognormal(0, 1.5, (T, F))][b % 2]
+                X = X - X.mean(axis=0)
+                X = np.asfortranarray(X) if b % 4 < 2 else np.ascontiguousarray(X)
+                rs = [None, _screen_resample(X, None, X, None), _screen_resample(X, None, X, far)][b % 3]
+                items.append(dict(spectrum=np.linalg.svd(X, compute_uv=False), data=X, shape=(T, F),
+                                  resample=rs))
+            got = apply_floors(null, items=items, far=far, kind=kind, seed=11)
+            want = [apply_floor(null, far=far, kind=kind, seed=11, **it) for it in items]
+            assert np.array_equal(got, np.array(want))

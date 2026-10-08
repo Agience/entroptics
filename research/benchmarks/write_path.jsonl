@@ -1,4 +1,4 @@
-{"file": "/home/builder/entroptics-work/bench/src/entroptics/__init__.py", "source_sha256": "73e3c12c5cb5a2e9e0f8f996a7ae3cee3c2d05de44331baff6f4aa8eedeb9936"}
+{"file": "/home/builder/entroptics-work/r028y/src/entroptics/__init__.py", "source_sha256": "03557eecbc0c6a373d42bed7cae56fb9f15180f940e27a6e47c318b7c5f7998f"}
 {"drift": "rate at which drift reads structure (K > 0), far = 0.05", "records": 80, "same_unequal": 0.025, "same_equal": 0.05, "own": 0.0, "extra_mode": 1.0, "local_transient": 0.8375, "noise_basis": 0.075, "complex_same": 0.0125}
 {"round_trip": "largest certificate figure over the records", "records": 80, "max": 1.4843648728877011e-15}
 {"verdict": "exact moments", "span": "real span", "records": 1000, "identified": 571, "identified_but_off_by_more_than_0p1pct": 0}

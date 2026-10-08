@@ -5,8 +5,10 @@
 Each file is the output of ``baseline.py`` or ``cost.py``.  Pass the committed baseline files and
 the candidate's, in pairs (baseline, candidate).  The rule is the library's own,
 :func:`entroptics.gate.compare`: a candidate fails when any metric is worse than its baseline by
-more than the two measurements' combined noise can explain, or when a baseline metric is missing;
-``z`` is the normal quantile at ``far / M`` for ``M`` metrics, ``far = 0.05``.  Exit status 0 on pass,
+more than the two measurements' combined noise can explain, when a baseline metric is missing, or
+when the metrics that moved moved the worse way more often than a change that is no worse would
+(an exact sign test).  The two families share ``far = 0.05``: ``z`` is the normal quantile at
+``far / (2 M)`` for ``M`` metrics, and the sign test is taken at ``far / 2``.  Exit status 0 on pass,
 1 on fail; every regression and improvement is listed.
 """
 from __future__ import annotations
@@ -34,13 +36,20 @@ def main(argv):
         base.update(_load(b))
         cand.update(_load(c))
     r = compare(base, cand)
-    print(f"{len(base)} metrics, z = {r.z:.3f} (family-wise far = 0.05)")
+    print(f"{len(base)} metrics, z = {r.z:.3f}, sign test at 0.025 (family-wise far = 0.05)")
     for n, bv, cv, t in r.better:
         print(f"  better   {n}: {bv:.6g} -> {cv:.6g}  (noise {t:.3g})")
     for n, bv, cv, t in r.worse:
         print(f"  WORSE    {n}: {bv:.6g} -> {cv:.6g}  (noise {t:.3g})")
     for n in r.missing:
         print(f"  MISSING  {n}")
+    if r.unreferenced:
+        lv = sorted({l for _, l in r.unreferenced})
+        print(f"  set aside {len(r.unreferenced)} rates: the baseline broke the level they were read at "
+              f"({', '.join(lv)})")
+    w, b, p = r.moved
+    print(f"  moved    {w} worse, {b} better: P(>= {w} worse | no worse) = {p:.3g}"
+          + ("  -> DRIFT" if r.drift else ""))
     print("PASS" if r.passed else "FAIL")
     return 0 if r.passed else 1
 
