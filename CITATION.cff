@@ -18,8 +18,8 @@ identifiers:
     value: "10.5281/zenodo.21273400"
     description: "Concept DOI - resolves to the latest version of Entroptics."
   - type: doi
-    value: "10.5281/zenodo.23241420"
-    description: "Version DOI - Entroptics 0.2.8."
+    value: "10.5281/zenodo.23544569"
+    description: "Version DOI - Entroptics 0.2.9."
 version: 0.2.9
 date-released: "2026-10-21"
 keywords:
