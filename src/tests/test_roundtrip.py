@@ -3,10 +3,9 @@ import numpy as np
 import pytest
 
 from entroptics import aperture as A
-from entroptics.projection import Projection
 from entroptics.entropy import normalize
 from entroptics import tensor as TZ
-from conftest import build_W, build_Wc
+from conftest import build_W
 
 
 def test_tensor_full_rank_roundtrip_is_exact(W):

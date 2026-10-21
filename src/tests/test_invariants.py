@@ -7,7 +7,7 @@ from entroptics import aperture as A
 from entroptics.reads import (decay, concentration, etendue, phi_T, phi_F, strehl,
                               coupling, decay_scatter)
 from entroptics.entropy import geometry
-from conftest import build_W, build_Wc
+from conftest import build_W
 
 
 # ── algebraic identities between reads ────────────────────────────────────────
@@ -224,7 +224,6 @@ def test_a_continuous_axis_folds():
 def test_a_nominal_axis_does_not_fold_however_concentrated():
     """Concentration alone must not license a fold: these two frames have nearly
     the same feature-marginal entropy, yet only the continuous one may be folded."""
-    from entroptics.entropy import feature_adjacency
     line, nominal = _line_frame(), _nominal_frame()
     assert geometry(nominal)["H_F"] < np.log2(nominal.shape[1])      # genuinely concentrated
     assert geometry(nominal)["n_F"] == nominal.shape[1]              # and yet: no fold

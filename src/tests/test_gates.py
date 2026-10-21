@@ -4,7 +4,6 @@
 ``K_signal > 0`` exactly, and so must ``probe_signal``, which stops at the singular values (the
 floor reads them).  Deterministic seeds."""
 import numpy as np
-import pytest
 
 from entroptics import Projection, Aperture
 from entroptics.projection import probe_signal

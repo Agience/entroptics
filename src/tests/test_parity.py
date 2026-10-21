@@ -6,11 +6,10 @@ import pytest
 torch = pytest.importorskip("torch")
 
 from entroptics import aperture as A
-from entroptics.projection import Projection, coherence
+from entroptics.projection import Projection
 from entroptics.reads import decay
 from entroptics.entropy import normalize
 from entroptics import tensor as TZ
-from conftest import build_W, build_Wc
 
 
 def _max_scalar_diff(a: dict, b: dict) -> float:

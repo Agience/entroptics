@@ -1,11 +1,9 @@
 """The reads are deterministic: no RNG anywhere in the optics/screen path, so
 repeated calls are bit-identical (this is what makes the golden a valid contract
 and the coherence a reproducible z-score)."""
-import numpy as np
 
 from entroptics import aperture as A
 from entroptics.projection import Projection, coherence
-from conftest import build_W
 
 
 def test_optics_is_repeatable(W):

@@ -263,6 +263,44 @@ def level_edge(weights) -> LevelEdge:
     return LevelEdge(best + 1, float(between[best] / var_total))
 
 
+def level_shift_scan(profile, *, reach=None):
+    """The contiguous RUN of an ordered profile that reads most firmly as one shifted level:
+    ``(stat, start, stop)`` over the last axis -- the run ``start .. stop-1`` that maximises
+    ``S^2 / n``, ``S`` the run's sum of ``profile`` and ``n`` its length.
+
+    Companion to :func:`occupied_modes` (the step edge) and :func:`level_edge` (the best two-
+    population split).  Those sort a profile by magnitude and ask HOW MANY readings are high; this
+    one keeps the profile in ITS OWN ORDER and asks WHERE a localised shift sits.  Model the profile
+    as a baseline at zero with one contiguous run raised by an unknown amount: the run's likelihood
+    is greatest where ``S^2 / n`` is, the classic scan statistic for a level shift of unknown size
+    AND location -- no threshold, and no level to supply.  Only runs with a positive sum are
+    considered, so the read finds a run ABOVE the baseline (pass ``-profile`` for one below).
+
+    ``profile`` is the per-position deviation from the baseline over an ordered axis, batched over
+    any leading axes (``..., n``).  Positions the caller cannot observe are passed as NaN and
+    contribute nothing; ``stat`` is NaN for a slice with no observed position.  ``reach`` caps the
+    run's start to the first ``reach`` positions (the run may still end anywhere), for when the
+    feature is known to begin early.  ``start``/``stop`` are a half-open interval
+    (``0 <= start < stop <= n``); where no run sums above zero, ``stat`` is 0 and the interval is
+    ``(0, 1)``.  Every candidate run is scored at once, so time and memory grow as ``n`` times the
+    starts considered (``reach``, else ``n``).  Deterministic; numpy-only."""
+    profile = np.asarray(profile, dtype=float)
+    n = profile.shape[-1]
+    e = np.where(np.isfinite(profile), profile, 0.0)     # an unobserved position contributes nothing
+    P = np.concatenate([np.zeros(profile.shape[:-1] + (1,)), np.cumsum(e, axis=-1)], axis=-1)
+    na = n if reach is None else max(1, min(int(reach), n))
+    a = np.arange(na)[:, None]
+    b = np.arange(1, n + 1)[None, :]
+    S = P[..., None, 1:] - P[..., :na, None]             # (..., start, stop)
+    w = b - a
+    v = np.where((w > 0) & (S > 0), S * S / np.maximum(w, 1), 0.0)
+    flat = v.reshape(v.shape[:-2] + (-1,))
+    k = np.argmax(flat, axis=-1)
+    stat = np.take_along_axis(flat, k[..., None], axis=-1)[..., 0]
+    stat = np.where(np.isfinite(profile).any(axis=-1), stat, np.nan)
+    return stat, k // n, k % n + 1
+
+
 def duality_of(p: float) -> dict:
     """Both faces of the scale from an ALREADY-READ ``phi``: ``{phi, magnification,
     at_diffraction_limit}`` -- reciprocal, meeting at ``phi = magnification = 1``.
@@ -1987,7 +2025,6 @@ def optics(W, mask=None) -> dict:
     dl = diffraction_limit(decay(W, mask))
     cn = concentration(W, mask)
     p = phi(W, mask)                                     # one whole-screen SVD
-    mag = 1.0 / p if p > 0 else float("inf")
     return assemble_optics(
         aT, aF, sp, dl, phi_val=p, strehl_val=strehl(W, mask, evals=ev0),
         focus=cn.focus, intensity=cn.intensity,

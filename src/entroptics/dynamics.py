@@ -575,7 +575,7 @@ class Dynamics:
         coherence / optics reads (feature spectrum, forgetting margin, reconstructed decay)
         run on these -- matching the screen's per-channel centring and the connected decay of
         section 4; the exact-recovery ``rates()`` keeps the raw states (Theorem 9.2)."""
-        b, xp = self._b, self._b.xp
+        xp = self._b.xp
         n = max(int(self.n_pairs), 1)
         corr = xp.outer(self.Px, xp.conj(self.Px)) / n
         return self.Pxx - corr, self.Pyx - corr
@@ -671,7 +671,7 @@ class Dynamics:
         has just been formed anyway -- and it is a direct test of the thing that matters, where the
         count is a proxy that can be wrong.  Returns ``r`` unchanged when the fit already decays,
         so a well-determined fit (exact recovery, Theorem 9.2) is never touched."""
-        b, xp = self._b, self._b.xp
+        xp = self._b.xp
         sig = max(1, int(self._signal_rank()))
         if r <= sig:
             return r                                   # already at or below the resolved rank
@@ -737,7 +737,8 @@ class Dynamics:
         b, xp = self._b, self._b.xp
         F = int(Pxx.shape[0])
         try:
-            import numpy as _np, scipy.linalg as _sla
+            import numpy as _np
+            import scipy.linalg as _sla
             if isinstance(Pxx, _np.ndarray):
                 _, V = _sla.eigh(Pxx, subset_by_index=[F - r, F - 1], driver="evr")  # ascending
                 return b.astype(_np.ascontiguousarray(V[:, ::-1]), self._complex)     # -> descending
@@ -941,7 +942,7 @@ class Dynamics:
         disagree about where the unit circle is."""
         if self._b is None:
             return 0.0
-        b, xp = self._b, self._b.xp
+        xp = self._b.xp
         A_c = self._reduced_c()[0]
         if int(A_c.shape[0]) == 0:
             return 0.0

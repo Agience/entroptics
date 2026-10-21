@@ -1,6 +1,5 @@
 """Masked-input handling: drop fully-dead rows/cols (ignore), don't zero-fill."""
 import numpy as np
-import pytest
 
 from entroptics.projection import Projection
 

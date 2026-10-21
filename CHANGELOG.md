@@ -24,6 +24,25 @@ version.
   to the release gate: no accuracy metric may move the worse way, and both reads must come back to
   0.2.7's cost.
 
+## [0.2.9] - 2026-10-21
+
+### Added
+- **`level_shift_scan(profile, *, reach=None)`** (`entroptics.reads`, re-exported at the top
+  level): the contiguous run of an ordered profile that reads most firmly as one shifted level,
+  `(stat, start, stop)` over the last axis. It is the run that maximises `S^2 / n`, for `S` the
+  run's sum of the profile and `n` its length: the scan statistic for a level shift of unknown size
+  and location, with no threshold and no level to supply. Where `occupied_modes` and `level_edge`
+  sort a profile and ask how many readings are high, this keeps the profile in its own order and
+  asks where a localised shift sits.
+  - Only runs with a positive sum count (pass `-profile` for a run below the baseline); where none
+    exists, `stat` is 0 and the run is `(0, 1)`.
+  - Unobserved positions are NaN and contribute nothing; a slice with none observed reads NaN.
+  - Batched over leading axes. `reach` limits the run's start to the first `reach` positions.
+    Time and memory grow as `n` times the starts considered.
+
+### Changed
+- Unused imports and locals removed across the library and the tests. No read changes.
+
 ## [0.2.8] - 2026-10-08
 
 Every read holds the rows it thresholds, and the floor chooses, per read, between the exact

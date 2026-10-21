@@ -20,8 +20,8 @@ identifiers:
   - type: doi
     value: "10.5281/zenodo.23241420"
     description: "Version DOI - Entroptics 0.2.8."
-version: 0.2.8
-date-released: "2026-10-08"
+version: 0.2.9
+date-released: "2026-10-21"
 keywords:
   - entroptics
   - entropy

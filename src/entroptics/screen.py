@@ -771,7 +771,6 @@ class Screen:
         ordered profile and of its direction (``screen._vector_fill``), read on the un-folded
         frame -- the per-mode footprint of ``Aperture.footprints``, without the fold."""
         xp = _ns(X)
-        D = int(X.shape[1])
         out = []
         for k in range(int(V.shape[1])):
             v = np.asarray(V[:, k])

@@ -50,7 +50,7 @@ from .dynamics import Dynamics, DecayRates, ModePowers, DynamicsState, dynamics 
 from . import reads
 from .reads import (
     phi, magnification, scale_duality, duality_of, occupied_modes, OccupiedModes,
-    level_edge, LevelEdge,
+    level_edge, LevelEdge, level_shift_scan,
     phi_T, phi_F, sigma_T, sigma_F, AxisRead, axis_read, axis_spectrum,
     etendue, strehl, space_bandwidth,
     spectral_optics, SpectralOptics, principal_directions, attenuation_interval, CertifiedInterval,
@@ -896,6 +896,8 @@ __all__ = [
     "occupied_modes", "OccupiedModes",
     # the level edge: the best two-population split, and how much of the spread it explains
     "level_edge", "LevelEdge",
+    # the level-shift scan: the contiguous run that reads most firmly as one shifted level
+    "level_shift_scan",
     # spectrum / propagation
     "SpectralOptics",
     "attenuation_interval", "CertifiedInterval", "concentration_band",

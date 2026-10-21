@@ -6,7 +6,7 @@ from entroptics.entropy import shannon_bits
 
 from entroptics import aperture as A
 from entroptics.projection import Projection, coherence
-from entroptics.reads import decay, concentration, spectral_optics
+from entroptics.reads import concentration
 
 
 @pytest.mark.parametrize("shape", [(1, 8), (16, 1), (2, 2), (3, 3), (2, 16), (16, 2)])

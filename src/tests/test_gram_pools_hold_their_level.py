@@ -14,7 +14,7 @@ import numpy as np
 import pytest
 
 from entroptics import Aperture
-from entroptics.batch import ResolvedScreenBatch, resolved_batch
+from entroptics.batch import ResolvedScreenBatch
 from entroptics.dynamics import Dynamics, dynamics
 from entroptics.null_providers import mp
 from entroptics.reads import SpectralAccumulator, spectral_optics

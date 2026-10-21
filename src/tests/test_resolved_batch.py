@@ -12,7 +12,7 @@ import pytest
 
 from entroptics import Projection, resolved_batch, ResolvedBatch
 from entroptics.projection import normalize_batch, project_batch, fold_target_batch
-from entroptics.null_providers import reference_null, top_spectrum_value, mp
+from entroptics.null_providers import reference_null, mp
 
 
 def _frames(shape=(64, 16), n=12, seed=0):

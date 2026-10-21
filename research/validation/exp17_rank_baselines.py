@@ -132,7 +132,7 @@ def run() -> dict:
                f"{winner} is more accurate than K_signal ({w_acc:.3f} vs {ours:.3f})")
 
     headline = (
-        f"On the exp3 planted signals at the same seeds, exact-count accuracy: "
+        "On the exp3 planted signals at the same seeds, exact-count accuracy: "
         + ", ".join(f"{m} {overall[m]:.3f} ({covered[m]}/{len(rows)} cells)" for m, _ in ranked)
         + f".  {verdict}.  AIC/MDL are undefined where the snapshot count does not exceed the "
         f"variable count, and are reported n/a there rather than guessed.")

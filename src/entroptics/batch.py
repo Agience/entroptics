@@ -57,7 +57,6 @@ gate in front of it could only disagree with it, and did.
 """
 from __future__ import annotations
 
-import os
 import threading
 from concurrent.futures import ThreadPoolExecutor
 from dataclasses import dataclass

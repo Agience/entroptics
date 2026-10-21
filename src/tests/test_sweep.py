@@ -56,7 +56,6 @@ def test_the_coherence_gate_is_derived_from_far_and_the_field_width():
     ``norm_isf(0.05/32)`` rounds to 3.0, so a fixed gate is a 32-patch sweep's level held fixed
     across every other width."""
     from entroptics.null_providers import _norm_isf
-    from entroptics import Aperture as sweep_fn
     import inspect
     assert inspect.signature(Aperture.sweep).parameters["coherence"].default is None
 
@@ -81,7 +80,7 @@ def test_the_on_pulse_reads_follow_the_profiles_own_noise():
     """``width`` and ``tau_decay`` are read over the run where the profile is above its own MAD
     noise at the reader's level -- not over a fixed half-window, and not above a fixed fraction of
     the peak.  So scaling the burst's AMPLITUDE must not move the decay timescale."""
-    from entroptics.sweep import _on_pulse_threshold, _on_pulse, _tail_decay
+    from entroptics.sweep import _on_pulse_threshold, _on_pulse
 
     def taus(amp):
         b = Aperture(_field(tau=4.0, amp=amp), window=None).sweep( patch=256, coherence=3.0)

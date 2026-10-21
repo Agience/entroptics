@@ -70,7 +70,7 @@ def test_a_row_measured_only_on_a_flat_channel_is_kept_whole():
 def test_a_small_weighted_ensemble_holds_its_level():
     """Each sample's deviation from the weighted mean it belongs to is short by 1 - 2/M + 1/eff;
     without that factor a small ensemble at unequal channel levels read structure in pure noise."""
-    far, hits, n = 0.05, 0, 60
+    hits, n = 0, 60
     for i in range(n):
         r = np.random.default_rng(500 + i)
         M, T, F = 8, 128, 64
