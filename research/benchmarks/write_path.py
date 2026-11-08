@@ -47,7 +47,7 @@ def source_stamp():
     for p in sorted(Path(E.__file__).parent.glob("*.py")):
         h.update(p.name.encode())
         h.update(p.read_bytes().replace(b"\r\n", b"\n"))   # git's form: a checkout reproduces it
-    return dict(file=E.__file__, source_sha256=h.hexdigest())
+    return dict(file="/".join(Path(E.__file__).resolve().parts[-3:]), source_sha256=h.hexdigest())
 
 
 def drift_rates(n=80):

@@ -39,10 +39,12 @@ PAPER = REPO / "research/PAPER.md"
 ARTIFACTS = [
     REPO / "research/validation/RESULTS.md",              # the experiments
     REPO / "research/figures/calibration.csv",            # the read-side filter (Figure 1)
+    # The four FRB tables are written by entroptics-frb (figures/ and tables/) from the CANFAR
+    # waterfalls and committed here as data.
     REPO / "research/figures/frb_panel.csv",              # the four events (Figure 2)
     REPO / "research/figures/frb_spotcheck.csv",          # the 12-waterfall random draw
     REPO / "research/figures/frb_display.csv",            # the contrast-stretch diagnostics
-    REPO / "research/supplemental/frb/tables/agreement.csv",
+    REPO / "research/figures/frb_agreement.csv",          # the agreement table
     REPO / "research/benchmarks/screen_null.jsonl",       # the screen's null (section 8)
 ]
 

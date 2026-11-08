@@ -37,7 +37,7 @@ def test_the_identities_are_exact_not_approximate():
     """`I = H_X + H_Y - H_XY` and `I = H_X - H_Y(X)` — both to the last bit.
 
     This is the whole reason the three entropies come off one table. Computed separately they would
-    agree to float noise while three normalisations, three clips and three absent-cell rules stayed
+    agree to float noise while three normalizations, three clips and three absent-cell rules stayed
     in step, and stop agreeing the moment one of them drifted."""
     rng = np.random.default_rng(1)
     g = joint_entropies(rng.random((64, 8)), rng.random((64, 5)))
@@ -57,7 +57,7 @@ def test_a_coupled_pair_reaches_the_ceiling():
 
 
 def test_an_independent_pair_reads_near_zero():
-    """The control that keeps the one above honest. Without it, a function returning `H(X)`
+    """The control that keeps the one above falsifiable. Without it, a function returning `H(X)`
     unconditionally would pass every ceiling assertion."""
     rng = np.random.default_rng(2)
     assert joint_entropies(rng.random((4000, 8)), rng.random((4000, 5)))["I_XY"] < 0.01

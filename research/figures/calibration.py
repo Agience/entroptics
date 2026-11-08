@@ -75,7 +75,7 @@ def dropout_recovery(B, frac, snr, seed):
     surviving channels, the recovered image (dropped -> NaN) and the drop mask.
 
     The channels are dropped, not zeroed.  A mask is not a zero: zeroing hands the read a column
-    of zero variance where nothing was observed, and the FRB path (``frb_panel._entroptics``)
+    of zero variance where nothing was observed, and the FRB path (``figures/frb_panel.py`` in entroptics-frb)
     drops the dead channels before the front door.  Figure 1 calibrates the path Figure 2 runs.
 
     Returns NaN for the recovery when the read resolves nothing.  That is a different outcome

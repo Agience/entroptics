@@ -2,7 +2,7 @@
 
 Step 1 of the pipeline is SCALE.  A read of a signal's STRUCTURE -- a z-score, a share, a mode
 count, a correlation, a focus -- is dimensionless, so multiplying the input by a constant must
-not move it.  Volts or millivolts, a correlator normalised or raw: same signal, same read.
+not move it.  Volts or millivolts, a correlator normalized or raw: same signal, same read.
 
 WHY THIS FILE EXISTS.  `projection.coherence` carried an ABSOLUTE guard, `var_A < 1e-24`.  The
 z-score it guards is exactly scale-invariant, but `R` is a squared inner product -- it scales as
@@ -183,7 +183,7 @@ def test_coherence_returns_a_number_at_extreme_scales(signal, exponent):
     above a screen magnitude of ~1e38 -- returned, not raised, with only a RuntimeWarning that a
     caller may never see.
 
-    The z-score is scale-invariant by construction, so normalising the Gram before squaring is
+    The z-score is scale-invariant by construction, so normalizing the Gram before squaring is
     exact in value (measured shift 1.2e-14 to 1.2e-13 relative, against a golden tolerance of
     1e-8) and removes the cliff entirely.
     """

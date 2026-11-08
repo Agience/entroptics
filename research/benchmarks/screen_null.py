@@ -18,7 +18,7 @@
            channel levels -- under both floors.
 
 Seeded and single-threaded.  The first line stamps the SHA-256 of the library source that ran
-(LF-normalised, so a clean checkout reproduces it).  Every line is one JSON record.
+(LF-normalized, so a clean checkout reproduces it).  Every line is one JSON record.
 """
 from __future__ import annotations
 
@@ -70,7 +70,7 @@ def stamp():
     for p in sorted(Path(E.__file__).parent.glob("*.py")):
         h.update(p.name.encode())
         h.update(p.read_bytes().replace(b"\r\n", b"\n"))
-    emit(file=E.__file__, source_sha256=h.hexdigest())
+    emit(file="/".join(Path(E.__file__).resolve().parts[-3:]), source_sha256=h.hexdigest())
 
 
 def levels(F, spread):

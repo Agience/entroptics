@@ -24,6 +24,60 @@ version.
   to the release gate: no accuracy metric may move the worse way, and both reads must come back to
   0.2.7's cost.
 
+## [0.2.10] - 2026-11-08
+
+Reads for records the whitened, connected screen does not describe -- a matrix read as it
+stands, and a record whose zero means something -- and the Rényi count. Every addition is
+opt-in: no existing read returns a different number.
+
+### Changed
+- **The FRB companion paper has its own repository**, [entroptics-frb](https://github.com/Agience/entroptics-frb): the paper,
+  its reproduce and verify scripts, its tables and the two FRB figure routines. The instrument
+  paper keeps its FRB figure and tables as data, and the JOSS paper moves to `paper/`.
+
+### Added
+- **`renyi_count(weights, order=0.5)`** (`entroptics.reads`, re-exported at the top level): the
+  Rényi effective number of modes of a weight vector or a spectrum,
+  `R_a = (Σ p_k^a)^(1/(1−a))` for `p` the normalized weights. Order 1 is the Shannon count
+  `exp H` (`2^shannon_bits`), order 2 the participation ratio that `proximity.effective_width`
+  reads off the per-channel second moments, order 0 the support and order ∞ `1/max p`. The count
+  does not increase with the order, and `n` equal modes read `n` at every order.
+  - Order ½, the default, is the count that turns one variance bound into every even moment: with
+    every mode hypercontractive relative to its own variance, a reading's `2p`-th moment is at most
+    `K (R_½ · variance)^p` (`state_pow_le_renyi`, `MassGap.ApertureCount` in entroptics-mass-gap v0.3.0).
+    The Shannon count cannot stand in for it: a bounded `exp H` leaves `R_½` unbounded
+    (`spRenyi_unbounded_at_bounded_spDim`).
+  - An empty or all-zero vector reads NaN, a non-finite weight NaN; a negative weight or a negative
+    order raises `ValueError`. No existing read changes.
+- **The finite-aperture count, in Lean** (`research/lean/Entroptics/Aperture.lean`, `Plunge.lean`):
+  on `Z_N`, the concentration operator `P_S B_Ω P_S` of a window `S` and a band `Ω` has its spectrum
+  in `[0, 1]` and trace `T·W/N` (`aperture_holds_finite_count`). For consecutive windows of `T`
+  sites and `W` frequencies the plunge mass `Σ λ(1−λ)` is at most `(9 + log min(T, W))/2`
+  (`window_plunge_le_log`) and the number of eigenvalues above ½ is `T·W/N` within
+  `9 + log min(T, W)` (`window_count_half`): the finite, discrete form of Slepian and Landau–Widom.
+  No sorry, no axioms beyond Lean's standard three. No Python read changes.
+- **`null_providers.mp_median`**, the closed-form Johnstone / Tracy-Widom edge of a matrix read as
+  it stands, with its per-cell noise variance from the de-biased median row energy
+  (`null_providers.median_noise_sigma2`). It is for a matrix that has not been whitened -- a
+  transport map, a Jacobian -- where `mp`'s mean cell energy, exact for the whitened screen, is
+  mostly the matrix's own signal. It is the projection floor 0.2.3's `mp` gave, with the
+  Tracy-Widom quantile computed to full precision instead of read from a four-digit table.
+  - `mode_significance(screen, s, *, sigma2=None)` takes the variance to read against, so a caller
+    using `mp_median` gets per-mode evidence with `#(p_k < far) == K` at every `far`. Omitted, the
+    variance is `mp`'s, as before.
+- **`Projection(..., disconnected=None)`** keeps the origin: nothing is subtracted from a channel,
+  so a level the channels share is a mode, and `K_signal` is the dimension of the record's linear
+  span rather than of its spread about its mean -- `R` independent rows read `R`, where the
+  connected read gives `R - 1`. Each channel is scaled by its RMS about 0, and the default floor is
+  the exact test on draws that shuffle each channel in time and flip each cell's sign, exact for
+  channels independent and symmetric about 0.
+  - Measured at `far = 0.05`, 200 records each: 0.025-0.085 false alarms on Gaussian, t3, Laplace,
+    unequal-level and centred exponential noise at 48x576, 200x20, 64x64 and 1000x8. Zero-mean
+    noise with a heavy right tail is not symmetric: centred lognormal reads 0.54 and centred
+    Pareto(3) 0.85 at 48x576, and 0.05 and 0.04 at 200x576.
+  - Only `None` is taken; a level to subtract raises `ValueError`. Omitted, the read is the
+    connected one, unchanged.
+
 ## [0.2.9] - 2026-10-21
 
 ### Added
@@ -584,7 +638,7 @@ operator reads are unchanged.
   version DOI is removed.
 - The paper is published as Markdown, HTML and PDF (`research/PAPER.md`, `.html`, `.pdf`); the README
   links all three and carries a paper badge.
-- Line endings are normalised across the repository, five library files included.
+- Line endings are normalized across the repository, five library files included.
 - **`matrix_pencil` / `hankel_spectrum` cut `C0` where the record's own noise shows,** where they
   used a fixed `rcond = 1e-6`. `C0` is positive semidefinite in the limit, so its most negative eigenvalue is the
   size of the noise the record shows; directions at or below it, or below round-off when `C0` is
@@ -729,7 +783,7 @@ surface is unchanged from 0.2.2.
   no energy.
 - **`projection.coherence`** no longer overflows to NaN above a magnitude of about 1e38. Its
   cancellation guard is relative: a change of units by 10x no longer moves the z-score.
-- **Correlation reads** (`spectral_optics`, `principal_directions`) normalise with a floor relative
+- **Correlation reads** (`spectral_optics`, `principal_directions`) normalize with a floor relative
   to the largest variance. `resolved_modes` used to read 0 on a screen scaled to 1e-30.
 
 ### Changed
@@ -840,7 +894,9 @@ surface is unchanged from 0.2.2.
 - An empty spectrum reads NaN instead of `1/n`.
 - A zero-length axis raises `ValueError` instead of an internal error.
 
-[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.8...HEAD
+[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.10...HEAD
+[0.2.10]: https://github.com/Agience/entroptics/compare/v0.2.9...v0.2.10
+[0.2.9]: https://github.com/Agience/entroptics/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Agience/entroptics/compare/v0.2.7...v0.2.8
 [0.2.7]: https://github.com/Agience/entroptics/compare/v0.2.6...v0.2.7
 [0.2.6]: https://github.com/Agience/entroptics/compare/v0.2.5...v0.2.6

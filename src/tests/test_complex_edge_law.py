@@ -35,7 +35,7 @@ def _far(N, F, complex_, trials=300):
 
 def _binom_two_sided_p(k, n, p):
     """Exact two-sided binomial p-value: the total probability of every outcome no more
-    likely than the observed one.  No normal approximation, so it stays honest in the tail
+    likely than the observed one.  No normal approximation, so it stays exact in the tail
     where a 4-sigma band on a rate reaches below zero and stops discriminating."""
     from math import comb
     pk = comb(n, k) * p ** k * (1 - p) ** (n - k)

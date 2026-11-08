@@ -364,7 +364,7 @@ def recommend_backend(B: int, T: int, F: int, *, data_on_gpu: bool = False,
     if not cuda_available:
         return "cpu", "no CUDA device -> CPU (exact LAPACK SVD)"
     # CPU-resident data: offloading pays only when the batched matmul win beats the H2D transfer.
-    # GPU shines at small folded Fe (cheap cubic) with a large batch B; large Fe makes Fe^3 bite.
+    # GPU shines at small folded Fe (cheap cubic) with a large batch B; large Fe makes Fe^3 dominate.
     if int(F) <= 256 and int(B) >= 64:
         return "gpu", f"small Fe={int(F)} (cheap cubic) x large B={int(B)} (parallel) -> GPU"
     if int(F) >= 1024:
@@ -657,7 +657,7 @@ class ResolvedScreen:
     library's (its level is ``far`` for any law of the noise), as for every read that holds its
     samples; each read is ``resolved_batch`` of the window at native resolution, bit for bit.  An append leaves the read stale and the next read
     refreshes it, so the expensive step runs as often as the caller reads.  ``whiten=False`` reads
-    rows already normalised.  Native feature resolution only (``fold=False``: the revisit case is
+    rows already normalized.  Native feature resolution only (``fold=False``: the revisit case is
     unordered bases -- KV head_dim / embeddings).
 
     Caller-owned: hold one per screen and key/evict them yourself; the library keeps no global state.
@@ -768,7 +768,7 @@ class ResolvedScreenBatch:
     ``resolved_batch(window, fold=False)`` bit for bit, at the library's floor (the exact
     permutation test where a single row could carry a noise eigenvalue over the closed form, the
     closed form where none can).  ``forgetting`` in (0,1] is the operator's; ``whiten=False`` reads
-    rows already normalised.  Caller-owned; thread-safe (one lock)."""
+    rows already normalized.  Caller-owned; thread-safe (one lock)."""
 
     def __init__(self, B, F, *, far: float = 0.05, null=None, seed: int = 0,
                  whiten: bool = True, forgetting: float = 1.0):

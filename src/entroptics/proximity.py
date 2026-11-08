@@ -81,11 +81,11 @@ and `sigma_J / mu` vanishes as `N^{-2/3}`, so the floor converges to the bulk ed
 `null_providers.johnstone` is reused directly below -- one definition of the finite-size
 centring/scaling, not a second copy of it.
 
-## Read on the centred frame, not a normalised one
+## Read on the centred frame, not a normalized one
 
-Per-vector or per-channel normalisation destroys exactly the magnitude this module is built to
+Per-vector or per-channel normalization destroys exactly the magnitude this module is built to
 keep -- see the screen's own mean / RMS whitening (`entropy.whiten_stats`), which this module
-deliberately does not apply. Centring is kept, because it is not a normalisation and not
+deliberately does not apply. Centring is kept, because it is not a normalization and not
 optional: Marchenko-Pastur is the law of a *zero-mean* i.i.d. bulk, and an uncentred frame
 carries a rank-1 mean direction that is not noise and that inflates both the spectrum and the
 variance estimate. Subtracting the per-channel median is scale-covariant (`med(c*A) = c*med(A)`),
@@ -301,7 +301,7 @@ def mp_deviation(M) -> np.ndarray:
     Every mode, none dropped and none clipped -- see :func:`common_prefix` for how two records
     of different length are compared.
 
-    The division by `sqrt(N)` is a frame normalisation, not a per-vector one: `N` is the
+    The division by `sqrt(N)` is a frame normalization, not a per-vector one: `N` is the
     frame's row count, a property of the record as a whole, so dividing by it cannot discard
     anything that distinguishes one record's magnitude from another's. It is forced: a coherent direction of per-cell strength `s` spread over `N` rows has
     `s_k ~ s*sqrt(N*D)`, so `s_k / sqrt(N)` is the one power of `N` that makes a mode's reading
@@ -361,7 +361,7 @@ def common_prefix(x, y) -> tuple[np.ndarray, np.ndarray]:
 def spectral_distance(x, y) -> float:
     """Euclidean distance between two reads on their common prefix.
 
-    Plain L2, and deliberately ABSOLUTE. A relative or normalised distance divides by the
+    Plain L2, and deliberately ABSOLUTE. A relative or normalized distance divides by the
     records' own magnitudes and so throws away exactly the magnitude the whole construction was
     arranged to keep.
 

@@ -16,7 +16,7 @@ before and after:
             ``rcond=1e-6`` (0.2.3's fixed cut) and with the default (where the library derives it).
 
 Seeded and single-threaded.  The first line stamps the SHA-256 of the library source that ran
-(LF-normalised, so a clean checkout reproduces it).
+(LF-normalized, so a clean checkout reproduces it).
 """
 from __future__ import annotations
 
@@ -50,7 +50,7 @@ def stamp():
     for p in sorted(Path(E.__file__).parent.glob("*.py")):
         h.update(p.name.encode())
         h.update(p.read_bytes().replace(b"\r\n", b"\n"))
-    emit(file=E.__file__, source_sha256=h.hexdigest())
+    emit(file="/".join(Path(E.__file__).resolve().parts[-3:]), source_sha256=h.hexdigest())
 
 
 def rate(make, n=200, null=None):

@@ -108,7 +108,7 @@ import numpy as np
 from . import tracy_widom as _tw
 
 from . import environment as _env
-from .entropy import MAD_SCALE
+from .entropy import MAD_SCALE, macheps
 
 # The distinct cut points a provider can be keyed to (``ctx.kind``).  Each is a separate
 # noise-vs-signal decision, so each can take its own provider (see ``by_kind`` / a mapping):
@@ -398,6 +398,48 @@ def robust(ctx: FloorContext) -> float:
     sv = ctx.spectrum if ctx.spectrum is not None else xp.linalg.svd(ctx.data, compute_uv=False)
     q1 = float(xp.quantile(sv, 0.25)); q3 = float(xp.quantile(sv, 0.75))
     return q3 + 1.5 * (q3 - q1)
+
+
+def median_noise_sigma2(xp, matrix, N: int, F: int, *, complex_: bool = False) -> float:
+    """The per-cell noise variance of a matrix that is NOT a whitened screen: its median row energy
+    over :func:`debias_denominator` (the chi^2 median ``c_F`` and the centring dof ``(N-1)/N``).
+
+    :func:`noise_sigma2_from_spectrum` is exact for the screen because the whitening gives every
+    column the same energy, so the screen's Gram is a correlation matrix and its mean cell energy is
+    its null's variance.  A matrix read as it stands -- a transport map, a Jacobian, a stack of
+    association matrices -- has no such normalization: its mean cell energy is dominated by the
+    signal it is supposed to be a null for.  The median row energy is not moved by a few bright
+    rows, which is why this matrix's noise is read from it.  An offset added to every row (an
+    identity component, a shared level) moves every row energy alike and so moves the median: no
+    location statistic rejects a constant added to all of its inputs.
+
+    The relative guard keeps the variance finite on a matrix with no energy and depends only on the
+    matrix's dtype and total energy, so it carries no units."""
+    re = _env.sum_ax(xp, xp.abs(matrix) ** 2, 1)
+    return ((float(_env.median1d(xp, re)) + float(_env.sum_ax(xp, re)) * macheps(xp, matrix))
+            / debias_denominator(N, F, complex_=complex_))
+
+
+def mp_median(ctx: FloorContext) -> float:
+    """The closed-form Johnstone / Tracy-Widom edge of a matrix read as it stands, with its noise
+    variance from the median row energy (:func:`median_noise_sigma2`).
+
+    For a matrix that has not been whitened -- a transport map, a Jacobian, a stack of association
+    matrices -- where :func:`mp`'s mean cell energy would count the signal as noise.  The screen
+    reads (``Projection``, ``Aperture``) whiten first and keep :func:`mp`; this provider is for a
+    caller holding a raw matrix: ``noise_floor(A, null=mp_median)``.  On the projection kind it is
+    ``sqrt(median_noise_sigma2 * (mu + q*sigma_J))``, the floor entroptics 0.2.3's ``mp`` gave,
+    with the Tracy-Widom quantile ``q`` computed to full precision where 0.2.3 read it from a
+    four-digit table (``q`` moves by at most 2e-5 relative); on the correlation kinds it is
+    :func:`mp`, whose edge there takes no variance.
+    Parameter-free; only ``far``."""
+    if ctx.kind != "projection":
+        return mp(ctx)
+    cx = ctx.complex_ or _env.is_complex_obj(ctx.data)
+    N, F = int(ctx.shape[0]), int(ctx.shape[1])
+    xp = _env.ns(ctx.data)
+    s2 = median_noise_sigma2(xp, ctx.data, N, F, complex_=cx)
+    return math.sqrt(screen_floor_sq(s2, N, F, ctx.far, complex_=cx))
 
 
 DEFAULT: Callable[[FloorContext], float] = mp   # the closed-form floor: the default without samples

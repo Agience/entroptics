@@ -20,6 +20,8 @@ Combined screen-area reads:
   magnification(M)   1/phi
   occupied_modes(w)  the RANK EDGE of an ordered spectrum: how many modes carry
                      power, read from the profile's own step and not from a floor
+  renyi_count(w, a)  the Renyi-a effective mode count of a spectrum (a = 1/2 by default,
+                     the count that closes every even moment from one variance bound)
   etendue(W)         phi_F * phi_T           -- the conserved 2-D aperture area
   space_bandwidth(W) n_F * n_T               -- number of resolvable spots
   strehl(W)          lambda1/sum(lambda) of the ordered correlation (coherence)
@@ -301,6 +303,87 @@ def level_shift_scan(profile, *, reach=None):
     return stat, k // n, k % n + 1
 
 
+def renyi_count(weights, order: float = 0.5) -> float:
+    """The Renyi count of order ``order`` of a weight vector or a spectrum: the effective number
+    of modes ``R_a = (sum_k p_k^a)^(1 / (1 - a))``, ``p = w / sum w`` the normalized weights.
+
+    One family, and the counts already in the library are members of it:
+
+        order 0     the number of modes with any weight (the support)
+        order 1/2   ``(sum_k sqrt(p_k))^2``, the default, for moment closure (below)
+        order 1     ``exp(H)``, the Shannon count: ``2^shannon_bits(w)``, the ``2^H`` behind
+                    ``phi`` and ``n_a``
+        order 2     ``1 / sum_k p_k^2 = (sum w)^2 / sum w^2``, the participation ratio:
+                    ``proximity.effective_width`` is this read of the per-channel second moments
+        order inf   ``1 / max_k p_k``
+
+    The count does not increase with the order (Renyi entropies decrease with it), so
+    ``R_0 >= R_1/2 >= exp(H) >= R_2 >= R_inf`` on every vector, with equality throughout exactly
+    when the weight is spread evenly over its support: ``n`` equal modes read ``n`` at every order,
+    and one mode reads 1.
+
+    Why order 1/2 is the default.  The count that turns one variance bound into every even moment
+    is this one.  If every mode of a screen is hypercontractive relative to its own variance,
+    ``E[e_k^{2p}] <= K lambda_k^p``, then a reading built from the modes has
+    ``E[G^{2p}] <= K (R_1/2 * E[G^2])^p``, with ``R_1/2`` read on the normalized Gram spectrum:
+    Minkowski through the modes puts ``(sum_k |c_k| sqrt(lambda_k))^2`` in the bound, and
+    Cauchy-Schwarz on the unit eigenvector columns turns that into ``R_1/2`` times the second
+    moment.  This is ``state_pow_le_renyi`` in ``MassGap.ApertureCount`` (entroptics-mass-gap v0.3.0,
+    ``research/lean/MassGap/ApertureCount.lean``), proved in Lean, with ``R_1/2`` its
+    ``spRenyi``.  The Shannon count cannot stand in for it: ``R_1/2 >= exp(H)`` always, but a
+    bounded ``exp(H)`` does not bound ``R_1/2`` -- for every ``B`` there is a spectrum with
+    ``exp(H) <= e^2`` and ``R_1/2 >= B`` (``spRenyi_unbounded_at_bounded_spDim``, same module;
+    one mode at ``1 - eps`` and ``eps = 1/ln m`` spread over ``m`` others).  The Shannon count
+    is ``spDim`` in ``MassGap.ApertureModes`` (same version).
+
+    Every number here is the weights' own: the order is the reader's choice of question, not a
+    tuned constant, and nothing is thresholded.
+
+    Edge cases:
+
+    * zero weights carry no mode and do not change the count at any order above 0 (at order 0
+      they are exactly what is not counted);
+    * a vector with no weight -- empty, or all zero -- has no modes to count, so the read is NaN,
+      not 1 (the convention of ``phi``; ``proximity.effective_width`` and the Lean ``spDim``
+      return 1 there, ``spRenyi`` returns 0);
+    * a non-finite weight gives NaN;
+    * a negative weight is not a weight, and raises ``ValueError``, as does a negative or NaN
+      ``order``.  A spectrum read off ``eigvalsh`` can carry round-off below zero; clip it at the
+      call site (``axis_spectrum`` already returns non-negative eigenvalues).
+
+    ``weights`` is any array (numpy or torch), flattened: eigenvalues, squared singular values,
+    per-mode energies, or a probability vector.  Returns a Python float.  Deterministic;
+    numpy-only."""
+    a = float(order)
+    if not (a >= 0.0):                   # also rejects NaN
+        raise ValueError(f"the order must be non-negative; got {order!r}")
+    w = np.asarray(_env.to_numpy(weights), dtype=float).ravel()
+    if not np.isfinite(w).all():
+        return float("nan")
+    if (w < 0.0).any():
+        raise ValueError("weights must be non-negative; a negative weight is not a weight")
+    s = float(w.sum())
+    if not (s > 0.0):                    # empty or all zero: no mode carries anything
+        return float("nan")
+    if a == 0.0:
+        return float(np.count_nonzero(w))
+    if a == 0.5:
+        return float(np.sum(np.sqrt(w))) ** 2 / s
+    if a == 1.0:
+        p = w[w > 0.0] / s
+        return float(np.exp(-np.sum(p * np.log(p))))
+    if a == 2.0:
+        return (s * s) / float(np.sum(w * w))
+    wmax = float(w.max())
+    if math.isinf(a):
+        return s / wmax
+    # The general order, scaled by the largest weight so that no power under- or overflows:
+    # sum p^a = (wmax/s)^a * sum (w/wmax)^a, and ln R = ln(sum p^a) / (1 - a).
+    q = w[w > 0.0] / wmax
+    log_sum = a * math.log(wmax / s) + math.log(float(np.sum(q ** a)))
+    return math.exp(log_sum / (1.0 - a))
+
+
 def duality_of(p: float) -> dict:
     """Both faces of the scale from an ALREADY-READ ``phi``: ``{phi, magnification,
     at_diffraction_limit}`` -- reciprocal, meeting at ``phi = magnification = 1``.
@@ -541,7 +624,7 @@ def _spectral_from_cov(xp, Cov, T: int, N: int, *, null=None, far: float = 0.05,
                               noise_floor=float("inf"), attenuation=0.0, phase=0.0,
                               dispersion=0.0, resolved_power=0.0, dominance=0.0,
                               eigenvalues=np.zeros(int(N)))
-    # RELATIVE floor: these are variances used to normalise `Cov` to a unit-diagonal
+    # RELATIVE floor: these are variances used to normalize `Cov` to a unit-diagonal
     # CORRELATION matrix, so they scale as the square of the data.  An absolute `1e-30`
     # replaces the true variance for anything below ~1e-15 in magnitude, the diagonal
     # stops being 1, and every downstream eigenvalue is wrong -- `resolved_modes` read 0
@@ -714,7 +797,7 @@ def principal_directions(data: np.ndarray, mask: np.ndarray | None = None,
     # was taken in is the order the columns are returned in.
     Xc = _centred(xp, data)                                   # the one centring
     Cov = Xc.conj().T @ Xc
-    # RELATIVE floor: these are variances used to normalise `Cov` to a unit-diagonal
+    # RELATIVE floor: these are variances used to normalize `Cov` to a unit-diagonal
     # CORRELATION matrix, so they scale as the square of the data.  An absolute `1e-30`
     # replaces the true variance for anything below ~1e-15 in magnitude, the diagonal
     # stops being 1, and every downstream eigenvalue is wrong -- `resolved_modes` read 0
@@ -1049,7 +1132,7 @@ def concentration(vectors: np.ndarray, mask=None, *, normalize: bool = True) -> 
     Parameters
     ----------
     vectors   : (M, D) array of row-vectors (real or complex).
-    normalize : L2-normalise each row first (default True) so focus/resultant read
+    normalize : L2-normalize each row first (default True) so focus/resultant read
                 on the unit sphere; pass False to weight rows by magnitude.
     """
     vectors = live_view(vectors, mask)    # ignore fully-dead rows/cols; clean scattered gaps
@@ -1131,7 +1214,7 @@ def coupling(a, b, *, far: float = 0.05) -> Coupling:
 
     The Grams are formed on the real embedding iota(x) = (Re x, Im x), never on the Hermitian
     A~^H A~: Re<a,b>_C == <iota a, iota b>_R, while the Hermitian form gives
-    E|S|^2 = Var[Re S] + Var[Im S] -- the wrong normaliser off the real axis. For
+    E|S|^2 = Var[Re S] + Var[Im S] -- the wrong normalizer off the real axis. For
     a~ = (1, -1), b~ = (i, -i) the true Var[Re S] is 0 and the Hermitian form reads 4.
 
     The variance is the Pitman-Hoeffding permutation second moment, closed form -- NO
@@ -1597,7 +1680,7 @@ def cross_covariance(X, Y, lags, *, periodic: bool = False,
 
     for each integer ``tau`` in ``lags`` (negative lags allowed, ``|tau| < T``).  The conventions
     are :func:`decay`'s, so ``cross_covariance(X, X, range(T))`` is ``decay(X)``: the biased ``1/T``
-    normalisation (a late lag sums fewer pairs and is not re-weighted), ``periodic`` taking the lag
+    normalization (a late lag sums fewer pairs and is not re-weighted), ``periodic`` taking the lag
     modulo ``T`` so every lag pairs all ``T`` rows, and ``disconnected`` choosing the level removed,
     exactly as in :func:`decay` -- omitted, each record's own per-channel mean; ``None``, nothing; a
     level (a scalar or one per channel, validated as in :func:`decay`) removed from both records.
@@ -1933,7 +2016,7 @@ def mercer_certificate(W, mask=None) -> MercerCertificate:
         return MercerCertificate(a_delta_temporal, 0.0, float("nan"), 0.0)
     idx = np.abs(np.subtract.outer(np.arange(T), np.arange(T)))
     # The symmetric Toeplitz operator built from C.  LEMMA (Bochner / biased ACF):
-    # because ``decay`` is the BIASED autocovariance (normalised by T, not T-tau) and
+    # because ``decay`` is the BIASED autocovariance (normalized by T, not T-tau) and
     # a sum over feature channels of per-channel biased ACFs, its Toeplitz matrix is
     # positive-SEMIdefinite -- so the clip below only removes float round-off at 0.
     lam = np.clip(np.linalg.eigvalsh(c[idx]), 0.0, None)   # stationary (Toeplitz) eigenspectrum

@@ -119,11 +119,11 @@ def test_dmd_wellposed_when_undersampled():
     assert dynamics(X).resolved() >= 1                    # a real coherent mode still resolves
 
 
-def test_reconstruct_decay_shape_and_normalisation():
+def test_reconstruct_decay_shape_and_normalization():
     W = build_W(7)
     c = np.asarray(dynamics(W).reconstruct_decay(20))
     assert c.shape == (20,)
-    assert c[0] == pytest.approx(1.0, abs=1e-9)     # normalised so C(0) = 1
+    assert c[0] == pytest.approx(1.0, abs=1e-9)     # normalized so C(0) = 1
 
 
 def test_modes_are_the_powers_of_the_reconstructed_decay():
@@ -308,7 +308,7 @@ def test_dropout_does_not_bias_the_decay_rates():
 
 
 def test_carrying_the_gaps_invents_no_operator():
-    """The control that keeps it honest: a record with no dynamics must not acquire any.  White
+    """The control that keeps it falsifiable: a record with no dynamics must not acquire any.  White
     noise has no persistent mode, and must still have none after half of it is dropped."""
     rng = np.random.default_rng(3)
     N = rng.standard_normal((1500, 12))

@@ -7,3 +7,5 @@ import Entroptics.Concentration  -- Sec 7: axial (focus) vs directional (resulta
 import Entroptics.Dynamics       -- Sec 9: exact recovery of the propagator; additive splicing
 import Entroptics.Screen       -- Sec 5.5 + the crossing: conservation, brightness bound
 import Entroptics.Coupling     -- Sec 5.5: the coupling null's algebra (Thm 5.6)
+import Entroptics.Aperture     -- Sec 3 + 10: tr(P B P) = TW/N, spectrum in [0,1], the plunge count
+import Entroptics.Plunge       -- Sec 3 + 10: the plunge is logarithmic; #{λ > 1/2} = TW/N ± (9 + log min(T,W))

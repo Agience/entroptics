@@ -1,4 +1,4 @@
-{"file": "/home/builder/entroptics-work/r028y/research/benchmarks/../../src/entroptics/__init__.py", "source_sha256": "03557eecbc0c6a373d42bed7cae56fb9f15180f940e27a6e47c318b7c5f7998f"}
+{"file": "src/entroptics/__init__.py", "source_sha256": "03557eecbc0c6a373d42bed7cae56fb9f15180f940e27a6e47c318b7c5f7998f"}
 {"method": "fft", "F": 16, "T": 1048576, "instructions": 1165705945.0, "se": 5343411.666666746}
 {"method": "pipeline", "F": 16, "T": 1048576, "instructions": 2663921576.333333, "se": 163423.33333325386}
 {"method": "fft", "F": 16, "T": 262144, "instructions": 269973725.5, "se": 36222.166666686535}

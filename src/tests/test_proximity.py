@@ -70,7 +70,7 @@ def test_effective_width_is_continuous_not_discrete():
     assert abs(w1 - w0) < 1e-3, "an eight-order-of-magnitude nudge moved the width too much"
 
 
-# ── determinism, scale-covariance, and what the normalisation is stated over ──────────────────
+# ── determinism, scale-covariance, and what the normalization is stated over ──────────────────
 
 def test_the_read_is_bit_identical_on_repeat():
     M = _frame(seed=11, n=40, d=24)
@@ -218,7 +218,7 @@ def test_no_constant_can_be_reintroduced():
     typed in. Measured directly from the source: `{0, 1e-30, 1.0, 2, 3,
     9.0}` are the admissible literals (loop/index bookkeeping, the `+1e-30` divide-by-zero
     guards, and the fixed low-order TW1/MP algebra), and nothing else. A new tunable —
-    a size floor, a length normalisation, a significance level — would show up here as a new
+    a size floor, a length normalization, a significance level — would show up here as a new
     numeric literal before it showed up in any behavioural test."""
     import ast
     import inspect
@@ -234,7 +234,7 @@ def test_no_constant_can_be_reintroduced():
 
 
 def test_the_distance_itself_was_not_touched():
-    """`spectral_distance` is used exactly as specified: no floor, no normalisation, no
+    """`spectral_distance` is used exactly as specified: no floor, no normalization, no
     weight — the three compensations that would each be a chosen constant.
 
     Checked on the AST of the function BODY, docstring excluded, so the statement is about

@@ -333,7 +333,7 @@ if __name__ == "__main__":
     for p in sorted(Path(E.__file__).parent.glob("*.py")):
         h.update(p.name.encode())
         h.update(p.read_bytes().replace(b"\r\n", b"\n"))   # git's form: a checkout reproduces it
-    emit(file=E.__file__, source_sha256=h.hexdigest())    # installed metadata can be stale
+    emit(file="/".join(Path(E.__file__).resolve().parts[-3:]), source_sha256=h.hexdigest())    # installed metadata can be stale
     run_cases()
     run_views()
     run_round_trip()

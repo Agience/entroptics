@@ -75,7 +75,7 @@ def _environment() -> str:
         import hashlib as _hl
         from pathlib import Path as _P
         _h = _hl.sha256()
-        for _p in sorted(_P(_e.__file__).parent.glob("*.py")):   # the source that ran, LF-normalised
+        for _p in sorted(_P(_e.__file__).parent.glob("*.py")):   # the source that ran, LF-normalized
             _h.update(_p.name.encode())
             _h.update(_p.read_bytes().replace(bytes([13, 10]), bytes([10])))
         ver = f"source sha256 {_h.hexdigest()}"

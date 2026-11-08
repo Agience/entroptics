@@ -166,6 +166,21 @@ What a correlation read can resolve follows from its construction:
   found in 90–100% of records. Its rank is counted exactly in 72–100% of them, against 21–100% on
   0.2.3.
 
+**A read that keeps the origin**, `Projection(W, disconnected=None)`, subtracts nothing from a
+channel: a level the channels share is a mode like any other, and the count is the dimension of the
+record's linear span rather than of its spread about its mean. It is for a record whose zero means
+something, such as a stack of association matrices, where the zero relation is no relation.
+- Each channel is scaled by its RMS about 0, and the floor is the exact test on draws that shuffle
+  each channel in time and flip each cell's sign. It is exact for channels whose values are
+  independent, exchangeable and symmetric about 0.
+- Measured at `far = 0.05`, 200 records each: 0.025–0.085 false alarms on Gaussian, t3, Laplace,
+  unequal channel levels and centred exponential noise, at 48 × 576, 200 × 20, 64 × 64 and
+  1000 × 8.
+- Zero-mean noise with a heavy right tail is not symmetric about 0, and where the rows are few its
+  bulk sits off the origin as a level the draws do not carry: centred lognormal reads 0.54 and
+  centred Pareto (3) 0.85 at 48 × 576, against 0.05 and 0.04 at 200 × 576.
+- Omitted, the read is the connected one: each channel's own mean removed.
+
 ### The mode spectrum
 
 `ap.spectral` reads the correlation spectrum against a derived noise floor:
@@ -174,9 +189,16 @@ What a correlation read can resolve follows from its construction:
 - the propagation constant `γ = α + iβ`, and `dispersion`;
 - `ap.attenuation_interval(band)`, a Weyl-certified interval for `α`.
 
-The floor comes from a `null=` provider (`entroptics.null_providers`). Unset, it is the derived
-Marchenko–Pastur / Johnstone default `mp`. `null=null_providers.robust` gives the deterministic
-data-derived Tukey fence.
+The floor comes from a `null=` provider in `entroptics.null_providers`:
+- `mp`, the default: the closed-form Marchenko–Pastur / Johnstone edge with a Tracy–Widom margin,
+  its per-cell variance the screen's mean cell energy.
+- `robust`: the deterministic data-derived Tukey fence.
+- `mp_median`: the same closed-form edge for a matrix read as it stands rather than whitened (a
+  transport map, a Jacobian, a stack of association matrices), with its noise variance from the
+  median row energy (`null_providers.median_noise_sigma2`), so a few bright rows are not counted as
+  noise: `entroptics.projection.noise_floor(A, null=null_providers.mp_median)`. The screen reads
+  whiten first and keep `mp`.
+- `permutation(draws=, far=)`: the exact test on shuffled draws.
 
 ### The diffraction limit
 
@@ -226,6 +248,11 @@ data-derived Tukey fence.
   `ResolvedScreenBatch` (thousands at once, a cumulative Gram at the closed-form floor) are its
   stateful siblings, and `ResourceLimits`
   bounds threads, memory and GPU.
+- **Counting the modes of any spectrum**, `renyi_count(weights, order=0.5)`: the Rényi effective
+  count `(Σ p_k^a)^(1/(1−a))` of a weight vector or spectrum. Order 0 is the support, 1 the Shannon
+  count `2^H` behind `phi`, 2 the participation ratio, ∞ `1/max p`; the count never rises with the
+  order, and `n` equal modes read `n` at every order. Order 1/2, the default, is the count that
+  turns a per-mode variance bound into every even moment of a reading built from the modes.
 - **Records that are not a 2-D field:**
   - `entroptics.proximity` gives a magnitude-carrying spectral digest and a probe over a set of them.
   - `entroptics.sequence` gives the ordered-axis reads on a symbol stream.
@@ -236,7 +263,7 @@ data-derived Tukey fence.
 
 ## Real data: fast radio bursts
 
-`research/figures/frb_panel.py` applies the plain library to the public CHIME/FRB Catalog 1
+[entroptics-frb](https://github.com/Agience/entroptics-frb) applies the plain library to the public CHIME/FRB Catalog 1
 waterfalls at native 16384-channel resolution, untuned. It supplies only observer facts: dead
 channels are dropped.
 
@@ -246,7 +273,7 @@ clean, info = Aperture(W[:, live], window=None).extract()        # everything do
 ```
 
 The per-burst reads are in [`research/figures/frb_panel.csv`](../research/figures/frb_panel.csv), and the
-method is §12.1 of the paper.
+method is §12.1 of the paper; the companion paper is in entroptics-frb.
 
 ## Glossary
 
@@ -355,8 +382,10 @@ Four files pin how the reads behave, each with a control that lets it fail:
 ## Formal certification
 
 The governing lemmas are **machine-checked in Lean 4 / Mathlib**
-([`research/lean/`](https://github.com/Agience/entroptics/tree/main/research/lean), 44 theorems):
+([`research/lean/`](https://github.com/Agience/entroptics/tree/main/research/lean), 90 theorems):
 - the fill-fraction and Strehl bounds;
+- the finite count of a finite aperture: `tr(P B P) = TW/N`, and the number of eigenvalues above
+  1/2 within `9 + log min(T, W)` of it (the discrete Slepian / Landau–Widom count);
 - positive semidefiniteness of the biased autocovariance;
 - the exact permutation-null mean of the coherence;
 - the Weyl-certified attenuation interval;

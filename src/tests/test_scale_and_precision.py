@@ -43,7 +43,7 @@ def test_every_read_is_invariant_to_the_recording_scale(signal):
 
 
 def test_the_resolved_read_is_invariant_to_the_recording_scale(signal):
-    """K_signal and the coherence go through the whitening, which is where a fixed cut would bite."""
+    """K_signal and the coherence go through the whitening, which is where a fixed cut would take effect."""
     ref = Projection(signal)
     for s in SCALES:
         p = Projection(signal * s)
@@ -97,7 +97,7 @@ def test_a_channel_has_no_scale_exactly_when_it_never_moved():
 
 
 def test_shannon_bits_is_scale_free():
-    """H(w) normalises internally, so a weight vector in any units carries the same entropy."""
+    """H(w) normalizes internally, so a weight vector in any units carries the same entropy."""
     w = np.array([4.0, 3.0, 2.0, 1.0])
     ref = shannon_bits(w)
     for s in (1e30, 1e-30, 1e-300):

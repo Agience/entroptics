@@ -58,7 +58,25 @@ from .null_providers import (                          # noqa: F401 (re-exported
     debias_denominator as _debias_denominator, screen_floor_sq as _screen_floor_sq, mp as _mp,
     _select_provider, fewest_draws as _fewest_draws,
     top_spectrum_value as _top_spectrum_value, _scored, _screen_scale, _deviate, _roundoff_deviate,
+    permutation as _permutation,
 )
+
+class _Connected:
+    """The value of ``Projection.disconnected`` for the connected read: each channel's own mean
+    removed.  It reads as ``CONNECTED`` and unpickles to the same object, so ``is`` tests hold."""
+    __slots__ = ()
+
+    def __repr__(self) -> str:
+        return "CONNECTED"
+
+    def __reduce__(self) -> str:
+        return "_CONNECTED"
+
+
+#: ``Projection``'s ``disconnected`` was not given: the connected read, each channel's own mean
+#: removed.  A sentinel, as in :func:`reads.decay`, so that ``None`` (keep the origin) is a
+#: statement the caller makes and never a default.
+_CONNECTED = _Connected()
 
 
 # ══════════════════════════════════════════════════════════════════════════════
@@ -153,7 +171,34 @@ def _fold_ortho(xp, A, F_eff: int, axis: int):
     return out / np.sqrt(size).astype(np.asarray(out).real.dtype, copy=False)
 
 
-def _screen_resample(W, mask, data, fold_far: float | None = 0.05):
+def _whiten_at_origin(W, mask):
+    """The whitening of a read that keeps the origin (``Projection(..., disconnected=None)``):
+    ``(data, centre, scale)`` as :func:`entropy.normalize` returns them, with every centre 0 and
+    each channel's scale its RMS about 0 over its measured cells.  Nothing is subtracted, so a level
+    the channels share stays in the record as a mode.  A channel whose measured cells are all exactly
+    0 has no scale and comes back as zeros, as a channel that never moved does under ``normalize``.
+    Masked / non-finite cells are NaN.  Numpy."""
+    X = np.asarray(_env.to_numpy(W))
+    X = X.astype(np.complex128 if np.iscomplexobj(X) else np.float64)
+    bad = ~np.isfinite(np.abs(X))
+    if mask is not None:
+        bad = bad | np.asarray(_env.to_numpy(mask), bool)
+    X0 = np.where(bad, 0.0, X)
+    # each channel carried by the power of two of its own peak, so the squares neither overflow
+    # nor underflow at any level the dtype holds, and the carry is exact
+    e = np.frexp(np.max(np.abs(X0), axis=0, keepdims=True))[1]
+    xs = np.ldexp(1.0, -e) * X0
+    n = np.maximum((~bad).sum(axis=0, keepdims=True), 1)
+    ss = np.sqrt((np.abs(xs) ** 2).sum(axis=0, keepdims=True) / n)
+    moved = ss > 0
+    with np.errstate(invalid="ignore", divide="ignore"):
+        out = np.where(moved, xs / np.where(moved, ss, 1.0), 0.0)
+    out = np.where(bad, np.nan, out)
+    scale = np.where(moved, np.ldexp(ss, e), 0.0)[0]
+    return out, np.zeros(X.shape[1]), scale
+
+
+def _screen_resample(W, mask, data, fold_far: float | None = 0.05, *, signs: bool = False):
     """The null draw of a read's screen (``FloorContext.resample``).  One permutation per channel
     moves its measured values among its own measured cells -- the missing ones stay where they
     are -- and is applied alike to the live record ``W`` and to its whitening ``data``; the draw's
@@ -169,7 +214,13 @@ def _screen_resample(W, mask, data, fold_far: float | None = 0.05):
     carried from the observed record into the draws conditions the test on structure the draws
     do not share (it ran at 0.085 given a fold, on lognormal noise).  And the draw is taken on the
     channels, before the fold, because a shuffle of the finished screen keeps the energy a fold
-    cell gathers from channels that move together and is blind to them."""
+    cell gathers from channels that move together and is blind to them.
+
+    ``signs`` is the null of a read that keeps the origin: each shuffled cell is also multiplied by
+    an independent random sign, applied alike to the record and its whitening.  A shuffle keeps
+    every channel's mean, so a level the channels share would ride along into every draw and could
+    never be resolved; under the null of channels that are independent sequences of values
+    exchangeable and symmetric about 0, the signed draw is exact."""
     Wr = np.asarray(_env.to_numpy(W))
     Z = np.asarray(_env.to_numpy(data))
     M = None if mask is None else np.asarray(_env.to_numpy(mask), bool)
@@ -211,21 +262,31 @@ def _screen_resample(W, mask, data, fold_far: float | None = 0.05):
         def index(rng):
             return rng.permuted(cols, axis=1)
 
+    def flip(rng):
+        return rng.integers(0, 2, size=(T, F)) * 2 - 1
+
     if fold_to is None and not miss.any():
         # nothing to fold and nothing missing: the screen is the whitened record itself (``project``
         # at unit deltas only pins the precision), so the channels are permuted directly -- one
         # pass, no index to build and gather through
         def draw(rng):
             Zs = rng.permuted(ZT, axis=1).T
+            if signs:
+                Zs = Zs * flip(rng)
             return Zs if fold_far is None else _env.as_compute(np, Zs)
         return draw
 
     def draw(rng):
         g = index(rng)
         Zs = np.take_along_axis(ZT, g, axis=1).T
+        sg = flip(rng) if signs else None
+        if sg is not None:
+            Zs = Zs * sg
         if fold_to is None:
             return Zs if fold_far is None else project(Zs, 1.0, 1.0)
         Ws = np.take_along_axis(WT, g, axis=1).T
+        if sg is not None:
+            Ws = Ws * sg
         d = fold_to if feature_axis_is_continuous(Ws, M, far=fold_far) else 1.0
         return project(Zs, 1.0, d)
     return draw
@@ -293,7 +354,8 @@ class ModeSignificance:
     pvalue:  np.ndarray   # the tail probability of s_k under the floor's null
 
 
-def mode_significance(screen: np.ndarray, s: np.ndarray | None = None) -> ModeSignificance:
+def mode_significance(screen: np.ndarray, s: np.ndarray | None = None, *,
+                      sigma2: float | None = None) -> ModeSignificance:
     """Per-mode significance of the screen's singular spectrum against the derived noise
     null, free of any threshold: for each singular value ``s_k`` the standardized
     Tracy-Widom deviate ``g_k = (s_k^2/sigma^2 - mu)/sigma_J`` and its tail probability
@@ -301,7 +363,12 @@ def mode_significance(screen: np.ndarray, s: np.ndarray | None = None) -> ModeSi
     complex one, both exact to float precision.  This is the evidence the noise floor thresholds:
     the resolved count ``K_signal`` equals ``#(p_k < far)``, so the false-alarm level ``far`` is
     applied by the reader, not baked into the read; the floor's quantile and these p-values come
-    from the same law, so the identity holds at every ``far``.  Deterministic; numpy-only."""
+    from the same law, so the identity holds at every ``far``.  Deterministic; numpy-only.
+
+    ``sigma2`` is the per-cell noise variance to read against.  Omitted, it is the ``mp`` floor's
+    (:func:`null_providers.noise_sigma2`), exact for a whitened screen.  A caller reading a matrix
+    as it stands passes :func:`null_providers.median_noise_sigma2` of it, and the identity then
+    holds with the ``mp_median`` floor."""
     xp = _env.ns(screen)
     # Same width the floor is sized by (`live_columns`) -- the documented identity
     # `K_signal == #(p_k < far)` is between these two reads, so they must agree on F or the
@@ -314,7 +381,7 @@ def mode_significance(screen: np.ndarray, s: np.ndarray | None = None) -> ModeSi
         return ModeSignificance(deviate=empty, pvalue=empty)
     cx = _env.is_complex_obj(screen)
     mu, sig_J = _johnstone(N, F, complex_=cx)
-    sigma2 = _noise_sigma2(xp, screen, N, F, s=sv)
+    sigma2 = _noise_sigma2(xp, screen, N, F, s=sv) if sigma2 is None else float(sigma2)
     if not (sigma2 > 0.0):
         # A screen with no energy has no noise ensemble to stand above, so no mode is evidence.
         # This is the ONE consumer that divides by sigma^2, and handling the degenerate case HERE
@@ -540,9 +607,32 @@ class Projection:
     H_screen                  : Shannon entropy (bits) of the signal-mode weights
     coherence                 : ordered-axis coherence z-score (closed-form permutation null)
     beam                      : the projection AS a Beam (its footprints are its modes)
+
+    ``disconnected=None`` keeps the origin: nothing is subtracted from a channel before the read,
+    so a level the channels share is a mode like any other and the count is the dimension of the
+    record's LINEAR span rather than of its spread about its mean.  It is for a record whose zero
+    means something -- a stack of association matrices, where the zero relation is no relation.
+    Each channel is scaled by its RMS about 0 (:func:`_whiten_at_origin`), and the default floor is
+    the exact test on draws that shuffle each channel in time and flip each cell's sign, exact under
+    channels whose values are independent, exchangeable and symmetric about 0.  Measured at
+    ``far = 0.05``, 200 records each: 0.025-0.085 false alarms on Gaussian, t3, Laplace, unequal
+    channel levels and centred exponential noise at 48x576, 200x20, 64x64 and 1000x8.  Zero-mean
+    noise with a heavy right tail is not symmetric, and where the rows are few its bulk sits off the
+    origin as a level the draws do not carry: centred lognormal reads 0.54 and centred Pareto(3)
+    0.85 at 48x576, against 0.05 and 0.04 at 200x576.  Omitted, the read is the connected one: each
+    channel's own mean removed.  Numpy.
     """
 
-    def __init__(self, W, mask=None, *, far: float = 0.05, null=None, seed: int = 0):
+    def __init__(self, W, mask=None, *, far: float = 0.05, null=None, seed: int = 0,
+                 disconnected=_CONNECTED):
+        origin = disconnected is not _CONNECTED
+        if origin and disconnected is not None:
+            raise ValueError(
+                "Projection's `disconnected` takes None (keep the origin: subtract nothing); a level "
+                f"to subtract is not read here. Got {type(disconnected).__name__}.")
+        if origin:
+            W = _env.to_numpy(W)
+        whiten = _whiten_at_origin if origin else (lambda X, m: normalize(X, m, return_stats=True))
         xp = _env.ns(W)
         if len(getattr(W, "shape", ())) != 2:
             raise ValueError(f"Projection expects a 2-D array (T, F); got {getattr(W, 'shape', None)}")
@@ -589,7 +679,7 @@ class Projection:
         # is then dead, and dropping it changes the measured cells the other channels' statistics
         # are read over.  The set is taken to its closure (it only shrinks, so at most F passes).
         self._flat_cols = None
-        stats = normalize(W, mask, return_stats=True)
+        stats = whiten(W, mask)
         flat = np.asarray(_env.to_numpy(stats[2])) == 0
         while flat.any() and not flat.all():
             W, xp = _env.to_numpy(W), np
@@ -609,7 +699,7 @@ class Projection:
                 if not mask.any():
                     mask = None
             self._live_rows, self._live_cols = lr_full, lc_full
-            stats = normalize(W, mask, return_stats=True)          # whiten what remains
+            stats = whiten(W, mask)                                # whiten what remains
             flat = np.asarray(_env.to_numpy(stats[2])) == 0
 
         geom = geometry(W, mask, far=far)             # the fold gate at the read's own level
@@ -621,13 +711,16 @@ class Projection:
         self.delta_F = geom["delta_F"]
         self._geom = geom
 
-        data, centre, scale = normalize(W, mask, return_stats=True) if stats is None else stats
+        data, centre, scale = whiten(W, mask) if stats is None else stats
         # Every whitened column has sum |z|^2 = T, so |z| <= sqrt(T) and the screen's squares stay
         # far inside the float range at any record's level and in any working precision.
         self.screen = project(data, self.delta_T, self.delta_F)
         self.centre, self.scale = self._screen_units(centre, scale)
 
+        if origin and null is None:
+            null = _permutation()               # the signed draws below are its null
         self.null = null
+        self.disconnected = None if origin else _CONNECTED
         self._xp = xp; self._far = float(far); self._seed = int(seed)
         self._U = self._Vt = None      # full SVD basis -- lazy (heavy; only beam / footprints)
         self._coh = None               # coherence -- lazy (a separate lag-1 pass)
@@ -636,7 +729,7 @@ class Projection:
         # the coherence are heavy and deferred to first access -- a streaming monitor that
         # reads K_signal / has_signal never pays for them (the high-speed capture path).
         S = _env.svdvals(xp, self.screen)
-        self._draw = _screen_resample(W, mask, data, far)
+        self._draw = _screen_resample(W, mask, data, far, signs=origin)
         self._perm_sig = None
         floor = noise_floor(self.screen, far=far, null=null, s=S, seed=seed,
                             resample=self._draw)

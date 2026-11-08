@@ -884,7 +884,7 @@ class Dynamics:
     # ── decay reconstruction (exact, extrapolatable to any lag) ───────────────
     def reconstruct_decay(self, max_lag: int):
         """Rebuild C(tau) = sum_k P_k mu_k^tau from the operator spectrum for
-        tau = 0..max_lag-1 -- extrapolates beyond the observed window.  Normalised
+        tau = 0..max_lag-1 -- extrapolates beyond the observed window.  Normalized
         so C(0) = 1.  Returned in the operator's backend.  The P_k are ``modes().power``."""
         b = self._b
         if b is None:
@@ -1307,7 +1307,7 @@ def hankel_spectrum(c, n: int, *, rcond: float | None = None) -> HankelSpectrum:
     if c.size < 2 * n + 2:
         raise ValueError(f"need >= {2 * n + 2} correlation lags for moment order n={n}, got {c.size}")
     if c[0] != 0:
-        c = c / c[0]                                   # normalise C(0)=1 (the pencil is ratio-invariant)
+        c = c / c[0]                                   # normalize C(0)=1 (the pencil is ratio-invariant)
     idx = np.add.outer(np.arange(n + 1), np.arange(n + 1))
     mp = matrix_pencil(c[idx], c[idx + 1], rcond=rcond)
     if mp.evals.size == 0:

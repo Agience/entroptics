@@ -58,7 +58,7 @@ MAD_SCALE_C: float = 1.0 / _math.sqrt(_math.log(2.0))   # 1/sqrt(ln 2), derived 
 def shannon_bits(weights, axis=None):
     """Shannon entropy (bits) of a non-negative weight array -- the ONE definition
     used across Entroptics (geometry marginals, screen mode weights, decay/axis
-    spectra).  Normalises internally.  Backend-agnostic (numpy or torch).
+    spectra).  Normalizes internally.  Backend-agnostic (numpy or torch).
     H(w) = -sum p log2 p, p = w / sum w.
 
     ``axis=None`` (the default) reduces the whole array and returns a Python float: the
@@ -81,7 +81,7 @@ def shannon_bits(weights, axis=None):
             # keeps log2 finite there without altering any p the sum actually uses.  A floor on
             # p would change H for a frame whose weights run below it.
             xp, xp.where(p > 0, p * xp.log2(xp.where(p > 0, p, xp.ones_like(p))), xp.zeros_like(p))))
-    # Axis form: the same two branches, kept elementwise.  The normaliser is guarded rather
+    # Axis form: the same two branches, kept elementwise.  The normalizer is guarded rather
     # than tested, because one empty slice must not decide the result for the others.
     tot = _env.sum_ax(xp, weights, axis, keep=True)
     p = weights / xp.where(tot > 0, tot, xp.ones_like(tot))
@@ -121,7 +121,7 @@ def surprisal_bits(observed, total):
     if tot <= 0.0 or obs <= 0.0 or obs > tot:
         return None
     p = obs / tot                           # in (0, 1] already: obs > 0, tot > 0, obs <= tot
-    return float(-np.log2(p)) + 0.0         # + 0.0 normalises the -0.0 that p == 1 produces
+    return float(-np.log2(p)) + 0.0         # + 0.0 normalizes the -0.0 that p == 1 produces
 
 
 def joint_power(W_x, W_y, mask_x=None, mask_y=None):
@@ -183,7 +183,7 @@ def joint_entropies(W_x, W_y, mask_x=None, mask_y=None) -> dict:
     The shared computation is the point.  Every quantity below is a difference of these three,
     and computing them separately -- one marginal here, another there, the joint somewhere else --
     makes the identities that define them hold only to float noise, and only while three code paths
-    agree about normalisation, about the clip, and about which cells were absent.  Taking all three
+    agree about normalization, about the clip, and about which cells were absent.  Taking all three
     from a single `J` makes them hold exactly and makes disagreement impossible:
 
         I_XY   = H(X) + H(Y) - H(X,Y)        the mutual information
@@ -221,7 +221,7 @@ def _carried(xp, W, mask=None):
 
     The geometry squares the frame, so a frame at 1e155 (1e19 in float32) would overflow and one
     at 1e-300 underflow; every quantity it reads is a ratio of those squares (an entropy of a
-    normalised marginal, a correlation), so carrying the frame by ``2^-e`` changes none of them --
+    normalized marginal, a correlation), so carrying the frame by ``2^-e`` changes none of them --
     a product by a power of two is exact in binary floating point.  The layout is fixed too: a sum
     runs in a different order over a column-major array, and a read must not depend on how its
     input was sliced."""
@@ -337,7 +337,7 @@ def geometry(W: np.ndarray, mask: np.ndarray | None = None, *, far: float = 0.05
     # clear, without adding any signal.  The extent used below is instead the number of cells
     # carrying a measurement.  A row or column with no finite, unmasked cell is absent, not
     # empty -- and absence is not an observation of zero.  Both extents floor at 1: an entirely
-    # unmeasured frame has one degenerate cell per axis, log2(1) = 0 bits, the honest reading
+    # unmeasured frame has one degenerate cell per axis, log2(1) = 0 bits, the correct reading
     # (no channels resolved).  log2(F) would assert spread that was never observed.
     #
     # Absent means nonfinite or masked.  An all-zero-but-finite column is not absent: zero is a

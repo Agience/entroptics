@@ -126,7 +126,7 @@ This is a restriction on applicability and it should be read as one. Where the t
 
 **Closed-form permutation moments are an established technique, on a different statistic.** The first three exact moments of $\operatorname{tr}(W_xW_y)$ under a uniform row permutation are given by Kazi-Aoual et al. [1995], and Josse et al. [2008] build a test on them, matching a Pearson type III distribution to the mean, variance and skewness rather than resampling. That work is the direct methodological precedent for what is done here, and the technique — exact combinatorial moments in place of a permutation sample — is theirs.
 
-The statistic is not the same one. $\operatorname{tr}(W_xW_y)$ is the RV coefficient's numerator: it is **quadratic** in each side, it is normalised by $\|\tilde A^{\mathsf H}\tilde A\|_F\|\tilde B^{\mathsf H}\tilde B\|_F$ to a similarity in $[0,1]$, it is invariant to a rotation of either configuration, and it is non-negative. It is the same object as linear CKA [Kornblith et al. 2019], the linear case of the Hilbert–Schmidt independence criterion.
+The statistic is not the same one. $\operatorname{tr}(W_xW_y)$ is the RV coefficient's numerator: it is **quadratic** in each side, it is normalized by $\|\tilde A^{\mathsf H}\tilde A\|_F\|\tilde B^{\mathsf H}\tilde B\|_F$ to a similarity in $[0,1]$, it is invariant to a rotation of either configuration, and it is non-negative. It is the same object as linear CKA [Kornblith et al. 2019], the linear case of the Hilbert–Schmidt independence criterion.
 
 Theorem 2.2's statistic is the **signed bilinear** form $\langle\tilde A,\tilde B\rangle_F$ on a shared basis: linear in each side, and defined only where the two sides share coordinates. The sign is precisely what the rotation-invariant family cannot report, and it is the reason for a separate result rather than an application of an existing one.
 
@@ -200,7 +200,7 @@ Two sides share a planted carrier at signed strength $\rho$ in one shared basis,
 
 The sign is recovered in every draw at $|\rho|\in\{0.5,1\}$. At $\rho=0$ the statistic resolves nothing in $96.7\%$ of draws, which is the nominal level of the test and not a failure: at a two-sided $\alpha=0.05$ a firing rate near $0.033$–$0.05$ on independent sides is what a calibrated test does.
 
-The recovered strength is not the planted $\rho$ and is not intended to be — the planted quantity is a carrier amplitude ratio and $\rho_{AB}$ is a normalised frame alignment, so the two agree in sign and ordering, not in value. What is claimed is that the sign is a measurement, and that it returns nothing rather than a fitted value when nothing resolves.
+The recovered strength is not the planted $\rho$ and is not intended to be — the planted quantity is a carrier amplitude ratio and $\rho_{AB}$ is a normalized frame alignment, so the two agree in sign and ordering, not in value. What is claimed is that the sign is a measurement, and that it returns nothing rather than a fitted value when nothing resolves.
 
 ### 5.3 Null calibration
 

@@ -146,8 +146,12 @@ decomposition as such, [PyDMD](https://github.com/PyDMD/PyDMD) and
 - **A component has to span channels.** A component confined to about `(1 + √(F/T))²` channels or
   fewer is not counted, however strong: two channels when records are long, nine for 64 samples
   across 256 channels.
-- **Very heavy right tails** (lognormal, Pareto noise) exceed the false-alarm rate you set, most on
-  long records.
+- **Covariance-only reads** use the closed-form floor, which over-reads very heavy right tails
+  (lognormal, Pareto noise). Reads that hold the samples use the exact floor and stay within the
+  false-alarm rate you set.
+- **A read that keeps the origin** (`Projection(disconnected=None)`) takes noise to be symmetric
+  about 0. Zero-mean noise with a heavy right tail is not, and on short records it exceeds the
+  false-alarm rate: 0.54 at 0.05 for centred lognormal noise over 48 samples.
 - **A weak component beside a dominant one** is counted against the whole record's energy, and can
   fall under the line.
 
@@ -166,8 +170,8 @@ and the governing lemmas are machine-checked in Lean 4.
 
 The tests, the validation suite and every benchmark generate their inputs from a fixed seed, with no
 download: `pytest`, `python research/validation/run_all.py`, and the scripts in
-[`research/benchmarks/`](research/benchmarks/README.md). The two FRB figure routines read the public
-CHIME/FRB Catalog 1 waterfalls ([how to fetch them](research/supplemental/frb/README.md)).
+[`research/benchmarks/`](research/benchmarks/README.md). The real-data figure, read from the public
+CHIME/FRB Catalog 1 waterfalls, is regenerated in [entroptics-frb](https://github.com/Agience/entroptics-frb).
 
 ## Documentation
 
@@ -200,7 +204,7 @@ CHIME/FRB Catalog 1 waterfalls ([how to fetch them](research/supplemental/frb/RE
  </picture>
 </a>
 
-Licensed under Apache-2.0 — see [`LICENSE.md`](https://github.com/Agience/entroptics/blob/main/LICENSE.md),
+Licensed under Apache-2.0; the read path is patent pending — see [`LICENSE.md`](https://github.com/Agience/entroptics/blob/main/LICENSE.md),
 [`NOTICE`](https://github.com/Agience/entroptics/blob/main/NOTICE), [`PATENTS.md`](https://github.com/Agience/entroptics/blob/main/PATENTS.md)
 and [`PLEDGE.md`](https://github.com/Agience/entroptics/blob/main/PLEDGE.md).
 

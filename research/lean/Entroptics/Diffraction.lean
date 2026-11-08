@@ -40,7 +40,7 @@ theorem peak_at_zero_lag {C0 Ctau : ℝ} (h0 : 0 ≤ C0) (hpsd : Ctau ^ 2 ≤ C0
 /-- **Lemma 4.2 (OTF positive semidefiniteness), sum-of-squares core.**
 The Toeplitz quadratic form of the (biased) autocovariance is a sum of squares, hence `≥ 0`. Here
 `a : ℤ → ℝ` is the zero-extended signal, `S` the summation window, and `shift j` the lag of index
-`j`; the inner sum `∑_{s∈S} a(s+shift j) a(s+shift k)` is the un-normalised Toeplitz entry
+`j`; the inner sum `∑_{s∈S} a(s+shift j) a(s+shift k)` is the un-normalized Toeplitz entry
 `T·C(shift j − shift k)`, so this is
 `∑_{j,k} v_j v_k · T·C(j−k) = ∑_s (∑_j v_j a(s+shift j))² ≥ 0`. The finite, index-correct form of the
 periodogram (Wiener–Khinchin) argument. -/

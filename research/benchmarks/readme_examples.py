@@ -25,7 +25,7 @@ def _stamp():
     for p in sorted(Path(entroptics.__file__).parent.glob("*.py")):
         h.update(p.name.encode())
         h.update(p.read_bytes().replace(b"\r\n", b"\n"))   # git's form: a checkout reproduces it
-    print(f"source: {entroptics.__file__} sha256 {h.hexdigest()}", flush=True)
+    print(f"source: {'/'.join(Path(entroptics.__file__).resolve().parts[-3:])} sha256 {h.hexdigest()}", flush=True)
 
 
 _stamp()

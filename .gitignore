@@ -126,5 +126,4 @@ dmypy.json
 .claude/
 .ruff_cache/
 .coverage
-research.local.env
 .playwright-mcp/

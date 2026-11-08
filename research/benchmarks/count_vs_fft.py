@@ -107,7 +107,7 @@ def main():
     for p in sorted(Path(E.__file__).parent.glob("*.py")):
         h.update(p.name.encode())
         h.update(p.read_bytes().replace(b"\r\n", b"\n"))
-    print(json.dumps(dict(file=E.__file__, source_sha256=h.hexdigest())), flush=True)
+    print(json.dumps(dict(file="/".join(Path(E.__file__).resolve().parts[-3:]), source_sha256=h.hexdigest())), flush=True)
     jobs = [(m, F, T) for (F, T) in CELLS for m in METHODS]
     jobs.sort(key=lambda j: -j[1] * j[2])                    # the longest first
     with Pool(int(os.environ.get("COUNT_PROCS", "4"))) as pool:

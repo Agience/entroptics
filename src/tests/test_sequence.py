@@ -33,7 +33,7 @@ def _sticky(n=N, k=4, p=0.85, seed=0):
 
 def test_an_iid_sequence_shows_no_structure():
     """The negative control, and the one that matters most. An i.i.d. source provably has no
-    temporal organisation, so a test that finds some here finds it anywhere."""
+    temporal organization, so a test that finds some here finds it anywhere."""
     seq = np.random.default_rng(0).integers(0, 4, N)
     r = surrogate_test(seq, draws=100, n_max=5, seed=1)
     assert r["onset"] is None

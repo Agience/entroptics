@@ -20,7 +20,7 @@ from entroptics.null_providers import reference_null, robust
 
 
 def _screen(seed: int = 0, T: int = 96, F: int = 192) -> np.ndarray:
-    """A screen with resolved structure, so `K_signal > 0` and the floor actually bites."""
+    """A screen with resolved structure, so `K_signal > 0` and the floor actually decides something."""
     rng = np.random.default_rng(seed)
     W = rng.normal(size=(T, F))
     t = np.exp(-((np.arange(T) - T / 3) ** 2) / (2 * (T / 12) ** 2))

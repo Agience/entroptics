@@ -11,7 +11,7 @@ would raise the bar the signal has to clear while adding no signal.
 The failure mode these tests watch for, stated first so they can fail:
   - a frame padded with absent channels reads differently from the same frame without them;
   - an entirely unmeasured frame reports log2(F) bits of spread it never observed;
-  - and, the control that keeps the rule honest, a frame padded with finite zeros reads
+  - and, the control that keeps the rule testable, a frame padded with finite zeros reads
     differently from the same frame without them -- it must not, because zero is a real
     observation of no power and belongs in the extent.
 """
@@ -82,7 +82,7 @@ def test_finite_zero_channels_DO_enter_the_extent():
 
 
 def test_an_entirely_unmeasured_frame_claims_no_spread():
-    """All-NaN: 0 bits on both axes -- one degenerate cell per axis, honestly reported: no channels resolved.  log2(F) would assert spread from no measurement at all."""
+    """All-NaN: 0 bits on both axes -- one degenerate cell per axis, reported as such: no channels resolved.  log2(F) would assert spread from no measurement at all."""
     g = geometry(np.full((16, 64), np.nan))
     assert g["H_F"] == pytest.approx(0.0)
     assert g["H_T"] == pytest.approx(0.0)
