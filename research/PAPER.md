@@ -548,7 +548,7 @@ The construction is parameter-free in a precise, verifiable sense, tabulated her
 | $z_F>z_{1-\alpha}$ (feature adjacency) | fold licence | derived + stated | merging adjacent channels is faithful only on a continuous axis; null from §5 (Def 2.2) |
 | mean centre, RMS scale | whitening | forced | the exact column centring, and the one scale that gives every column the same energy without reading the order, so the Gram is a sample correlation matrix with a universal edge law (Definition 8.1) |
 | partition fold, $1/\sqrt{n_j}$ | feature fold | forced | a channel is a discrete unit, so a cell takes whole ones; disjoint runs are orthonormal, so independent channels of one variance fold to independent cells of one variance (Definition 8.1) |
-| $|W|^2$ power marginal | matched-scale marginal | definitional | the intensity (the incoherent read of §4) |
+| $\lvert W\rvert^2$ power marginal | matched-scale marginal | definitional | the intensity (the incoherent read of §4) |
 | $2^{\mathrm H}$ effective count | fill fraction | definitional | minimum coefficient rate of a normalized spectrum [Campbell 1960]; exponential entropy as extent [Campbell 1966] |
 | sweep gate $z_{1-\alpha/n}$ | per-patch level over $n$ patches | derived | multiplicity correction of $\alpha$ (Definition 3.7) |
 | on-pulse cut | extent of a swept band | derived | the profile's own MAD scale at $\alpha$ (Definition 3.7) |

@@ -24,6 +24,18 @@ version.
   to the release gate: no accuracy metric may move the worse way, and both reads must come back to
   0.2.7's cost.
 
+## [0.2.11] - 2026-11-09
+
+The paper as a two-column PDF with its LaTeX source. No code changes: every read returns the same
+number as in 0.2.10.
+
+### Changed
+- **The instrument paper is typeset in two columns**, arXiv style: `research/PAPER.pdf` and
+  `research/PAPER.tex` are built from `research/PAPER.md` by the shared typesetting pipeline. Its
+  canonical copy is `tools/typeset/`, and the copy the paper builds from is `research/typeset/`.
+  The HTML rendering is removed.
+- **The JOSS submission is in `joss/`**, so `research/` holds the only paper called PAPER.
+
 ## [0.2.10] - 2026-11-08
 
 Reads for records the whitened, connected screen does not describe -- a matrix read as it
@@ -894,7 +906,8 @@ surface is unchanged from 0.2.2.
 - An empty spectrum reads NaN instead of `1/n`.
 - A zero-length axis raises `ValueError` instead of an internal error.
 
-[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.10...HEAD
+[Unreleased]: https://github.com/Agience/entroptics/compare/v0.2.11...HEAD
+[0.2.11]: https://github.com/Agience/entroptics/compare/v0.2.10...v0.2.11
 [0.2.10]: https://github.com/Agience/entroptics/compare/v0.2.9...v0.2.10
 [0.2.9]: https://github.com/Agience/entroptics/compare/v0.2.8...v0.2.9
 [0.2.8]: https://github.com/Agience/entroptics/compare/v0.2.7...v0.2.8

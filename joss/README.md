@@ -1,4 +1,4 @@
-# paper/ — Journal of Open Source Software submission
+# joss/ — Journal of Open Source Software submission
 
 JOSS reviews software, not results. This paper describes what the library does, who would use it
 and how it relates to existing tools. It does not argue for the optical framing, which is the

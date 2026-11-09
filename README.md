@@ -179,9 +179,9 @@ CHIME/FRB Catalog 1 waterfalls, is regenerated in [entroptics-frb](https://githu
   missing data, and what the library guarantees.
 - **[Benchmarks](research/benchmarks/README.md):** counting against the standard rank selectors,
   cost and accuracy against the FFT, and false-alarm rates, each from a committed script.
-- **The paper** — [Markdown](research/PAPER.md) · [HTML](research/PAPER.html) ·
-  [PDF](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf): the derivations, and
-  where every constant comes from.
+- **The paper** — [PDF](https://github.com/Agience/entroptics/blob/main/research/PAPER.pdf) ·
+  [LaTeX](research/PAPER.tex) · [Markdown](research/PAPER.md): the derivations, and where every
+  constant comes from.
 - **[API reference](docs/API.md)** and the **[CHANGELOG](CHANGELOG.md)**.
 - **[Validation](research/validation/RESULTS.md):** what each read recovers against a planted truth.
 

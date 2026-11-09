@@ -1,7 +1,7 @@
 # Entroptics — the guide
 
 The reference behind the [README](../README.md): what each read is, the conventions every input
-follows, and what the library guarantees. The derivations are in the paper ([Markdown](../research/PAPER.md), [HTML](../research/PAPER.html), [PDF](../research/PAPER.pdf));
+follows, and what the library guarantees. The derivations are in the paper ([PDF](../research/PAPER.pdf), [LaTeX](../research/PAPER.tex), [Markdown](../research/PAPER.md));
 every public name is in the [API reference](API.md); the measurements are in
 [`research/benchmarks/`](../research/benchmarks/README.md).
 
