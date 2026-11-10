@@ -24,6 +24,19 @@ version.
   to the release gate: no accuracy metric may move the worse way, and both reads must come back to
   0.2.7's cost.
 
+## [0.2.12] - 2026-11-10
+
+`level_edge` resolves a profile's spread before splitting it. Every other read returns the same
+number as in 0.2.11.
+
+### Fixed
+- **`level_edge` reports `separability` in [0, 1] on every profile.** A profile whose spread lies
+  within the round-off of the read's own `n`-term sums (`max - min <= n * eps * max`), such as
+  the per-item power of duplicate candidates, is one population: `k = n` and
+  `separability = 0.0`. The split is computed on centred values. A profile with a resolved spread
+  returns the same `separability` to round-off and the same `k`, except where two splits explain
+  exactly the same variance, as in `[3, 2, 2, 1]`: `k` is then the first of them.
+
 ## [0.2.11] - 2026-11-09
 
 The paper as a two-column PDF with its LaTeX source. No code changes: every read returns the same

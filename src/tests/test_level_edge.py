@@ -92,3 +92,22 @@ def test_deterministic():
     first = level_edge(w)
     for _ in range(3):
         assert level_edge(w) == first
+
+
+def test_readings_equal_to_round_off_are_one_population():
+    # Ten duplicate candidates give a profile that differs only in its last bits. Its
+    # spread is round-off, so it is one population.
+    base = 0.00100235
+    eps = np.finfo(float).eps
+    w = base * (1.0 + eps * np.array([0, 1, 0, 2, 1, 0, 3, 1, 0, 2], dtype=float))
+    r = level_edge(w)
+    assert r.k == len(w) and r.separability == 0.0
+
+
+def test_separability_never_leaves_the_unit_interval():
+    rng = np.random.default_rng(7)
+    for _ in range(200):
+        n = int(rng.integers(2, 80))
+        w = np.abs(rng.standard_normal(n)) * 10.0 ** rng.uniform(-12, 12)
+        s = level_edge(w).separability
+        assert 0.0 <= s <= 1.0

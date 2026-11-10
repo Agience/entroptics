@@ -245,24 +245,27 @@ def level_edge(weights) -> LevelEdge:
 
     ``weights`` are non-negative and finite: eigenvalues, squared singular values, per-mode
     energies, or any salience.  A profile with nothing to separate reports ``k = n`` and
-    ``separability = 0.0`` rather than being cut anyway.  Deterministic; numpy-only."""
+    ``separability = 0.0`` rather than being cut anyway; that includes a profile whose
+    readings differ by less than the round-off of the read's own ``n``-term sums.
+    Deterministic; numpy-only."""
     w = np.sort(np.abs(np.asarray(_env.to_numpy(weights), dtype=float).ravel()))[::-1]
     n = int(w.size)
     if n == 0:
         return LevelEdge(0, 0.0)
     if n == 1 or not np.isfinite(w).all():
         return LevelEdge(n, 0.0)
-    mean = float(w.mean())
-    var_total = float(((w - mean) ** 2).sum())
-    if var_total <= 0.0:                 # every reading identical: nothing to separate
+    # A spread inside the round-off of the n-term sums below is no spread: readings that
+    # differ only in their last bits are one population, and the ratio of two round-off
+    # residues would otherwise read as anything, above 1 included.
+    if w[0] - w[-1] <= n * float(np.finfo(w.dtype).eps) * w[0]:
         return LevelEdge(n, 0.0)
+    c = w - w.mean()                                     # centred, so no sum cancels
+    var_total = float((c * c).sum())
     i = np.arange(1, n, dtype=float)                     # split after i readings
-    run = np.cumsum(w)[:-1]                              # sum of the leading group
-    m1 = run / i
-    m2 = (w.sum() - run) / (n - i)
-    between = i * (m1 - mean) ** 2 + (n - i) * (m2 - mean) ** 2
+    s = np.cumsum(c)[:-1]                                # leading group's centred sum
+    between = s * s * n / (i * (n - i))                  # i(m1-m)^2 + (n-i)(m2-m)^2
     best = int(np.argmax(between))
-    return LevelEdge(best + 1, float(between[best] / var_total))
+    return LevelEdge(best + 1, min(1.0, float(between[best] / var_total)))
 
 
 def level_shift_scan(profile, *, reach=None):
